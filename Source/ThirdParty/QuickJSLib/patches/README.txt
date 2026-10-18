@@ -12,10 +12,12 @@ lists all of them.
 Never change upstream/ without adding or updating a patch here.
 
 To re-vendor: copy the new upstream tag over upstream/ (see ../VERSION), then
-replay each patch in order from the repository root:
+replay each patch in order from the mantle repository root. This folder is the home;
+the MantleCore plugin's Source/ThirdParty/QuickJSLib is a copy, brought up to date
+afterwards with python tools/copies/check_copies.py --sync:
 
-    git apply --directory=client/Plugins/MantleCore/Source/ThirdParty/QuickJSLib/upstream \
-        client/Plugins/MantleCore/Source/ThirdParty/QuickJSLib/patches/<name>.patch
+    git apply --directory=client/Source/ThirdParty/MantleGameQuickJSLib/upstream \
+        client/Source/ThirdParty/MantleGameQuickJSLib/patches/<name>.patch
 
 If a hunk no longer applies, re-read what it guards (below) against the new
 upstream code rather than forcing it.
