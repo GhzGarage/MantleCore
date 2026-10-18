@@ -1,0 +1,223 @@
+// Copyright Joshua Eger. All Rights Reserved.
+#include "MantleEditorActions.h"
+
+#include "MantleAvatarContract.h"
+#include "MantleCosmeticExport.h"
+#include "MantleCosmeticPackage.h"
+#include "MantleCosmeticValidation.h"
+#include "MantleCreatorSignIn.h"
+#include "MantleParametricOutfit.h"
+#include "MantlePublishPanel.h"
+
+#include "Engine/SkeletalMesh.h"
+#include "MetaHumanCharacter.h"
+#include "Misc/PackageName.h"
+
+bool FMantleEditorActions::IsSignedIn()
+{
+	return FMantleCreatorSignIn::IsSignedIn();
+}
+
+void FMantleEditorActions::StartPublish(UWorld* World, const bool bGoLive, const FString& Notes)
+{
+	SMantlePublishPanel::Start(World, bGoLive, Notes);
+}
+
+TSharedPtr<FMantlePlacePublishSession> FMantleEditorActions::GetPublishSession()
+{
+	return SMantlePublishPanel::GetSession();
+}
+
+bool FMantleEditorActions::IsPublishRunning()
+{
+	return SMantlePublishPanel::IsRunning();
+}
+
+FMantleCosmeticDraft FMantleEditorActions::MakeCosmeticDraft(const EMantleCosmeticClass Class, UObject* Source, const FString& Slot,
+	const FString& Name, const FMantleAvatarContract& Contract)
+{
+	// SetClass and a slot pick leave a fresh draft; SetSource then applies these in this order.
+	FMantleCosmeticDraft Draft;
+	Draft.Class = Class;
+	Draft.Slot = Slot;
+	Draft.Name = Name;
+	Draft.Source = Source;
+	ApplyCosmeticSourceDefaults(Draft, &Contract);
+	ApplyCosmeticSectionDefaults(Draft);
+	ApplyCosmeticSocketDefaults(Draft, &Contract);
+	TArray<FName> JawCandidates;
+	ApplyCosmeticJawDefaults(Draft, &Contract, JawCandidates);
+	TArray<FName> SecondaryCandidates;
+	ApplyCosmeticSecondaryDefaults(Draft, &Contract, SecondaryCandidates);
+	ApplyCosmeticOutfitDefaults(Draft);
+	ApplyCosmeticFitTargetDefaults(Draft);
+	ApplyCosmeticRoleDefaults(Draft, &Contract);
+	return Draft;
+}
+
+void FMantleEditorActions::ApplyCosmeticSourceDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract)
+{
+	UObject* Source = Draft.Source.Get();
+	if (Contract && Source && (Draft.Class == EMantleCosmeticClass::Garment || Draft.Class == EMantleCosmeticClass::Hair)
+		&& !Draft.AuthoringBody.IsValid())
+	{
+		Draft.AuthoringBody = FMantleCosmeticExport::FindAuthoringBody(Source, *Contract, Draft.Class != EMantleCosmeticClass::Hair);
+	}
+	if (Source && Draft.Name.IsEmpty())
+	{
+		Draft.Name = Source->GetName();
+	}
+}
+
+void FMantleEditorActions::ApplyCosmeticSectionDefaults(FMantleCosmeticDraft& Draft)
+{
+	if (Draft.Class != EMantleCosmeticClass::Hair)
+	{
+		return;
+	}
+	UObject* Source = Draft.Source.Get();
+	// A groom keeps CardsEntry unset: the export then picks the finest cards LOD that fits the budget. An explicit choice wins.
+	if (const USkeletalMesh* Mesh = Cast<USkeletalMesh>(Source))
+	{
+		// Render sections of LOD 0, named by their material slot.
+		const TArray<FString> Names = FMantleCosmeticExport::RenderSectionNames(Mesh, 0);
+		for (int32 Section = 0; Section < Names.Num() && Draft.SourceSection == INDEX_NONE; ++Section)
+		{
+			if (Names[Section].Contains(TEXT("lash"), ESearchCase::IgnoreCase))
+			{
+				Draft.SourceSection = Section;
+			}
+		}
+	}
+}
+
+void FMantleEditorActions::ApplyCosmeticSocketDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract)
+{
+	Draft.SocketOverrides.Reset();
+	if (Draft.Class == EMantleCosmeticClass::Avatar && Contract)
+	{
+		Draft.SocketOverrides = FMantleCosmeticExport::DefaultSocketOverrides(Cast<USkeletalMesh>(Draft.Source.Get()), *Contract);
+	}
+}
+
+FMantleCosmeticOutfitRows FMantleEditorActions::ApplyCosmeticOutfitDefaults(FMantleCosmeticDraft& Draft)
+{
+	FMantleCosmeticOutfitRows Rows;
+	Draft.KeepSlots.Reset();
+	if (USkeletalMesh* Mesh = Draft.Class == EMantleCosmeticClass::Garment ? Cast<USkeletalMesh>(Draft.Source.Get()) : nullptr)
+	{
+		Rows.Sections = FMantleCosmeticExport::ReadOutfitSections(Mesh, 0, Rows.Slots);
+		Rows.Keep = FMantleOutfitSections::InitialKeep(Rows.Sections, Draft.Slot);
+		Draft.KeepSlots = CosmeticKeepSlots(Rows.Keep, Rows.Slots);
+	}
+	return Rows;
+}
+
+void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& Draft)
+{
+	if (Draft.Class != EMantleCosmeticClass::Garment || !Draft.OutfitTargets.IsEmpty() || !FMantleParametricOutfit::IsSource(Draft.Source.Get()))
+	{
+		return;
+	}
+	const auto Load = [](const FString& Package) -> UObject*
+	{
+		return FPackageName::DoesPackageExist(Package) ? LoadObject<UObject>(nullptr, *(Package + TEXT(".") + FPackageName::GetShortName(Package))) : nullptr;
+	};
+	for (const TCHAR* Name : { TEXT("Aera"), TEXT("Bo") })
+	{
+		// The converter builds a copy of the preset (Converted/<Name>/<Name>); its build sits under that copy's Unpacked folder.
+		const FString Copy = FString::Printf(TEXT("/Game/MetaHumans/%s/Converted/%s"), Name, Name);
+		const FString Built = FString::Printf(TEXT("%s/Unpacked/%s"), *Copy, Name);
+		UMetaHumanCharacter* Character = Cast<UMetaHumanCharacter>(Load(FString::Printf(TEXT("%s/%s"), *Copy, Name)));
+		USkeletalMesh* Body = Cast<USkeletalMesh>(Load(FString::Printf(TEXT("%s/Body/SKM_%s_BodyMesh"), *Built, Name)));
+		USkeletalMesh* Face = Cast<USkeletalMesh>(Load(FString::Printf(TEXT("%s/Face/SKM_%s_FaceMesh"), *Built, Name)));
+		if (!Character || !Body || !Face)
+		{
+			continue;
+		}
+		Draft.OutfitTargets.Add({ FString(Name).ToLower(), Character, Body, Face });
+	}
+}
+
+bool FMantleEditorActions::ApplyCosmeticJawDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract, TArray<FName>& OutCandidates)
+{
+	OutCandidates.Reset();
+	Draft.JawBone = NAME_None;
+	const USkeletalMesh* Body = Cast<USkeletalMesh>(Draft.Source.Get());
+	if (Draft.Class != EMantleCosmeticClass::Avatar || !Body || !Contract)
+	{
+		return false;
+	}
+	// The skeleton the upload will get (the jaw pick never changes it): the picker only where it has the slot.
+	FString SkeletonId;
+	FString Error;
+	const FMantleContractSkeleton* Skeleton = FMantleCosmeticExport::AvatarSkeletonId(Body, *Contract, SkeletonId, Error)
+		? Contract->FindSkeleton(SkeletonId) : nullptr;
+	if (!Skeleton || !FMantleCosmeticChecks::HasJawSlot(*Skeleton))
+	{
+		return false;
+	}
+	// The export's joints are the mesh's whole raw reference skeleton, parent-first.
+	const TArray<FMantleSkinJointName> Joints = FMantleCosmeticChecks::JointsOf(Body->GetRefSkeleton());
+	OutCandidates = FMantleCosmeticChecks::JawCandidates(Joints);
+	Draft.JawBone = FMantleCosmeticChecks::PreselectJawBone(OutCandidates);
+	return true;
+}
+
+bool FMantleEditorActions::ApplyCosmeticSecondaryDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract, TArray<FName>& OutCandidates)
+{
+	OutCandidates.Reset();
+	Draft.SecondaryMotion.Reset();
+	const USkeletalMesh* Body = Cast<USkeletalMesh>(Draft.Source.Get());
+	if (Draft.Class != EMantleCosmeticClass::Avatar || !Body || !Contract)
+	{
+		return false;
+	}
+	// The skeleton the upload will get (a mapping never changes it): the section only where it has the slots.
+	FString SkeletonId;
+	FString Error;
+	const FMantleContractSkeleton* Skeleton = FMantleCosmeticExport::AvatarSkeletonId(Body, *Contract, SkeletonId, Error)
+		? Contract->FindSkeleton(SkeletonId) : nullptr;
+	if (!Skeleton || !FMantleCosmeticChecks::HasSecondarySlots(*Skeleton))
+	{
+		return false;
+	}
+	const TArray<FMantleSkinJointName> Joints = FMantleCosmeticChecks::JointsOf(Body->GetRefSkeleton());
+	OutCandidates = FMantleCosmeticChecks::SecondaryCandidates(Joints, *Skeleton);
+	// The jaw picker's bone is the jaw, never a chain (ApplyCosmeticJawDefaults runs first).
+	OutCandidates.Remove(Draft.JawBone);
+	Draft.SecondaryMotion = FMantleCosmeticChecks::SuggestSecondaryMappings(Joints, *Skeleton);
+	Draft.SecondaryMotion.RemoveAll([&Draft](const FMantleSecondaryMapping& Mapping) { return !Draft.JawBone.IsNone() && Mapping.StartBone == Draft.JawBone; });
+	return true;
+}
+
+void FMantleEditorActions::ApplyCosmeticRoleDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract)
+{
+	USkeletalMesh* Body = Cast<USkeletalMesh>(Draft.Source.Get());
+	if (Draft.Class == EMantleCosmeticClass::Avatar && Body && Contract)
+	{
+		Draft.SectionRoles = FMantleCosmeticExport::DefaultSectionRoles(Body, FMantleCosmeticExport::AvatarBodyLOD(Body, *Contract));
+	}
+}
+
+TOptional<TArray<int32>> FMantleEditorActions::CosmeticKeepSlots(TConstArrayView<bool> Keep, TConstArrayView<int32> Slots)
+{
+	TArray<int32> Kept;
+	bool bAll = true;
+	for (int32 Index = 0; Index < Keep.Num() && Index < Slots.Num(); ++Index)
+	{
+		if (Keep[Index])
+		{
+			Kept.Add(Slots[Index]);
+		}
+		else
+		{
+			bAll = false;
+		}
+	}
+	if (bAll)
+	{
+		return TOptional<TArray<int32>>();
+	}
+	return TOptional<TArray<int32>>(MoveTemp(Kept));
+}
