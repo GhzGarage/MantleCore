@@ -11,8 +11,11 @@ struct MANTLERUNTIME_API FMantleSkinTransferStats
 {
 	bool bRan = false;
 
-	/** Vertices weighted from the wearer's body at their authored closest triangle ... */
+	/** Vertices weighted from the wearer's skin at their closest point (the body's, the face's or both) ... */
 	int32 FromBody = 0;
+
+	/** ... of those, ones that took some of the face's weights (the collar and the neck opening) ... */
+	int32 FromFace = 0;
 
 	/** ... untracked ones that copied their nearest tracked vertex's new weights ... */
 	int32 FromNearest = 0;
@@ -20,10 +23,11 @@ struct MANTLERUNTIME_API FMantleSkinTransferStats
 	/** ... and ones that kept the garment's own weights (no tracked vertex at all). */
 	int32 Kept = 0;
 
-	/** Influences kept per vertex (the garment's slot count, at most MaxInfluences). */
+	/** Influence slots per vertex before and after (grown to the skin's slot count, at most MaxInfluences, then cut to the most any vertex uses). */
+	int32 SlotsBefore = 0;
 	int32 Influences = 0;
 
-	/** Body influences dropped because the garment's bone table has no bone of that name. */
+	/** Skin influences dropped because the garment's bone table has no bone of that name (nor, for the face, an ancestor of it). */
 	int32 DroppedInfluences = 0;
 
 	/** Per changed vertex, the largest per-bone |new - old| weight (0..1): mean and max; changed vertices whose dominant bone moved. */
@@ -31,6 +35,21 @@ struct MANTLERUNTIME_API FMantleSkinTransferStats
 	double MaxChange = 0.0;
 	int32 DominantChanged = 0;
 	double Ms = 0.0;
+};
+
+/**
+ * The wearer's face for the skin transfer: the collar and the neck opening lie over the face mesh (the neck is the
+ * face's), not the body, so they take the face's weights there. Surface is the face LOD Clearance was measured
+ * over (the fitted garment's clearance within FMantleGarmentClearance::FaceSearchCm, its open boundary
+ * untracked) and Bones the face's bone table.
+ */
+struct MANTLERUNTIME_API FMantleSkinTransferFace
+{
+	const FMantleSkinnedMeshLOD* Surface = nullptr;
+	TConstArrayView<FMantleSkinnedMeshBone> Bones;
+	const FMantleGarmentClearance* Clearance = nullptr;
+
+	bool IsSet() const { return Surface && Clearance && Bones.Num() > 0; }
 };
 
 /** What SmoothSkinWeights did. */
@@ -61,11 +80,18 @@ struct MANTLERUNTIME_API FMantleSkinSmoothStats
 struct MANTLERUNTIME_API FMantleGarmentSkinTransfer
 {
 	/**
-	 * Influences kept per vertex, at most (fewer when the garment has fewer slots). 12, the MetaHuman
-	 * body's slot count (the blend of three corners' influences has more bones; cut to 8 it dropped weight
-	 * the skin still has).
+	 * Influences kept per vertex, at most. 12, the MetaHuman body's slot count (the blend of three
+	 * corners' influences has more bones; cut to 8 it dropped weight the skin still has).
 	 */
 	static constexpr int32 MaxInfluences = 12;
+
+	/**
+	 * The face's share of a vertex's weights: dB / (dB + dF) over the distances to the body and to the
+	 * face (each floored at MinShareDistanceCm), faded to 0 over the last FaceFadeCm of the face's reach,
+	 * so the share falls smoothly to the body's weights where the face stops tracking.
+	 */
+	static constexpr float MinShareDistanceCm = 0.1f;
+	static constexpr float FaceFadeCm = 2.0f;
 
 	/** Smoothing passes, and the authored clearances the smoothing fades between (none at or below Tight, full at or above Loose). */
 	static constexpr int32 DefaultSmoothIters = 3;
@@ -78,15 +104,22 @@ struct MANTLERUNTIME_API FMantleGarmentSkinTransfer
 	 * correspondence (Authored: the garment's clearance over its source body, whose vertex order Wearer's
 	 * LOD0 shares):
 	 *   - tracked vertex: the (bone, weight) lists of the three wearer vertices of its authored closest
-	 *     triangle blended with its barycentrics; the top N kept (N = the garment's slot count, at most
-	 *     MaxInfluences), renormalised and quantised to sum exactly 255;
+	 *     triangle blended with its barycentrics; with Face set and the vertex within its reach, blended
+	 *     with the face's three corners at its closest face point by the face's share (FaceFadeCm; only
+	 *     the face's when the body does not track it); the top N kept, renormalised and quantised to sum
+	 *     exactly 255;
 	 *   - untracked vertex: its nearest tracked vertex's new weights (fitted positions); none at all: kept.
-	 * Wearer bones map to GarmentBones by name (identity when the tables match); influences on bones the
-	 * garment lacks are dropped and counted. False (Garment unchanged), with the reason in OutError, on
-	 * mismatched inputs.
+	 * N is the skin's slot count (the body's, or the face's when larger), at most MaxInfluences, and never
+	 * below the garment's own: an unrigged garment (one slot) takes the skin's blend whole. The garment's
+	 * slots grow to N and are then cut to the most any vertex uses.
+	 * Wearer bones map to GarmentBones by name (identity when the tables match); face bones by name, or a
+	 * face bone the garment lacks (the face's FACIAL_ neck joints) to its nearest face ancestor the garment
+	 * has (neck_01, neck_02, head); influences with no such bone are dropped and counted. False (Garment
+	 * unchanged), with the reason in OutError, on mismatched inputs.
 	 */
 	static bool Transfer(FMantleSkinnedMeshLOD& Garment, TConstArrayView<FMantleSkinnedMeshBone> GarmentBones, const FMantleGarmentClearance& Authored,
-		const FMantleSkinnedMesh& Wearer, FMantleSkinTransferStats* OutStats = nullptr, FString* OutError = nullptr);
+		const FMantleSkinnedMesh& Wearer, const FMantleSkinTransferFace& Face = FMantleSkinTransferFace(), FMantleSkinTransferStats* OutStats = nullptr,
+		FString* OutError = nullptr);
 
 	/**
 	 * The per-vertex smoothing factor from the authored clearance: 0 at or below TightCm (fabric lying
