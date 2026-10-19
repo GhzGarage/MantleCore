@@ -5132,6 +5132,10 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			Result.Notes.Add(FString::Printf(TEXT("Clothing source %s: native auto-selected %s; one catalog item, runtime policy body-rms-v1."), *Target.Id, *Prepared.OutfitSourceSize));
 		}
 		if (!Draft.FitBodiesStatus.IsEmpty()) { Result.Notes.Insert(Draft.FitBodyNotes, 0); Result.Notes.Insert(Draft.FitBodiesStatus, 0); }
+		if (!Draft.FitFaceWarning.IsEmpty())
+		{
+			Result.Issues.Add(FMantleCosmeticChecks::Warning(Draft.FitFaceWarning, TEXT("Without a face the collar is fitted from the body alone; it may sit off the neck of much thinner or heavier wearers.")));
+		}
 		return Result;
 	}
 	if (Draft.Class == EMantleCosmeticClass::Accessory && FMantleParametricOutfit::IsSource(Draft.Source.Get()))

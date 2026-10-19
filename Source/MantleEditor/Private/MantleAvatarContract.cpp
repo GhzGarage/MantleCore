@@ -235,6 +235,11 @@ bool FMantleAvatarContract::LoadFromDirectory(const FString& Directory, FMantleA
 				Out.GarmentFitBodyTypes = MoveTemp(Types);
 			}
 		}
+		FString NumberingHash;
+		if (Fit->TryGetStringField(TEXT("builtFaceNumberingHash"), NumberingHash) && !NumberingHash.IsEmpty() && NumberingHash.Len() <= 8)
+		{
+			Out.GarmentFitBuiltFaceNumberingHash = static_cast<uint32>(FCString::Strtoui64(*NumberingHash, nullptr, 16));
+		}
 		double Margin = 0.0;
 		if (Fit->TryGetNumberField(TEXT("sexMarginCm"), Margin) && Margin >= 0.0)
 		{

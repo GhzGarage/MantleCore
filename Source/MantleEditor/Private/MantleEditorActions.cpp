@@ -123,6 +123,7 @@ void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& 
 	Draft.FitBodies.Reset();
 	Draft.FitBodiesStatus.Reset();
 	Draft.FitBodyNotes.Reset();
+	Draft.FitFaceWarning.Reset();
 	if (!Contract)
 	{
 		Contract = FMantleAvatarContract::Get();
@@ -156,7 +157,17 @@ void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& 
 			return;
 		}
 		Notes.Add(Ordering);
-		Targets.Add({ Body.Id, Body.Character.Get(), Shape, Body.FaceMesh.Get(), true });
+		// The collar is fitted from the face by triangle number, so a face that does not number its triangles like Epic's built faces would tear it.
+		FString FaceWhy;
+		USkeletalMesh* Face = Body.FaceMesh.Get();
+		if (!FMantleFitBodies::FaceNumberingIsBuilt(Body.FaceNumberingHash, *Contract, FaceWhy))
+		{
+			Face = nullptr;
+			Draft.FitFaceWarning += (Draft.FitFaceWarning.IsEmpty() ? TEXT("") : TEXT(" ")) + FString::Printf(TEXT("%s uploads without a face (%s)."), *Body.Id, *FaceWhy);
+			Notes.Add(FString::Printf(TEXT("%s: no face uploaded, collars fit from the body alone (%s)"), *Body.Id, *FaceWhy));
+		}
+		else { Notes.Add(FString::Printf(TEXT("%s: face uploaded (%s)"), *Body.Id, *FaceWhy)); }
+		Targets.Add({ Body.Id, Body.Character.Get(), Shape, Face, true });
 	}
 	Draft.OutfitTargets = MoveTemp(Targets);
 	Draft.FitBodyNotes = MoveTemp(Notes);

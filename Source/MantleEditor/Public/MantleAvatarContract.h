@@ -157,6 +157,8 @@ public:
 	TArray<FString> GarmentFitBodyTypes = { TEXT("med_unw"), TEXT("med_nrw"), TEXT("med_ovw") };
 	/** garment-fit.json sexMarginCm: how much closer to the male body than the female one an Outfit's sizes must be to be fitted to male bodies. */
 	float GarmentFitSexMarginCm = 0.25f;
+	/** garment-fit.json builtFaceNumberingHash (hex): FMantleFitBodies::FaceNumberingHash of Epic's built faces; 0 when not recorded. */
+	uint32 GarmentFitBuiltFaceNumberingHash = 0;
 
 	float BindToleranceCm = 0.5f;
 	float BindToleranceDegrees = 1.0f;

@@ -96,6 +96,8 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	FString FitBodiesStatus;
 	/** One line per fit body: how its body was put in Mantle's reference vertex order (a note on the check). */
 	TArray<FString> FitBodyNotes;
+	/** Fit bodies whose face numbering is not shown to match Epic's built faces upload without a face; this says which and why (a Warning on the check). */
+	FString FitFaceWarning;
 
 	/** Native Outfit: representative converted source shapes packaged together in one catalog item. */
 	TArray<FMantleOutfitAuthoringTarget> OutfitTargets;

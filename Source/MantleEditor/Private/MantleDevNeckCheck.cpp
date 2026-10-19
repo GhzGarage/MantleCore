@@ -48,6 +48,8 @@ namespace MantleDevNeckCheckPrivate
 		float BaseZ = -MAX_flt;
 		/** The face's triangle centroids, by triangle index. */
 		TArray<FVector3f> Centroids;
+		/** FMantleFitBodies::FaceNumberingHash of the face: equal on faces that number their triangles alike. */
+		uint32 FaceNumbering = 0;
 	};
 
 	/** The first LOD of a body with the reference vertex count, its vertices; false when none. */
@@ -93,6 +95,7 @@ namespace MantleDevNeckCheckPrivate
 		for (uint32 Vertex = 0; Vertex < Positions.GetNumVertices(); ++Vertex) { Out.FacePositions.Add(Positions.VertexPosition(Vertex)); }
 		LOD.MultiSizeIndexContainer.GetIndexBuffer(Out.FaceIndices);
 		Out.FaceLOD = Chosen;
+		Out.FaceNumbering = FMantleFitBodies::FaceNumberingHash(Mesh);
 		for (int32 First = 0; First + 2 < Out.FaceIndices.Num(); First += 3)
 		{
 			Out.Centroids.Add((Out.FacePositions[Out.FaceIndices[First]] + Out.FacePositions[Out.FaceIndices[First + 1]] + Out.FacePositions[Out.FaceIndices[First + 2]]) / 3.0f);
@@ -135,8 +138,8 @@ namespace MantleDevNeckCheckPrivate
 		int32 Region = 0;
 		for (const FVector3f& Centroid : Case.Centroids) { Region += InRegion(Centroid, BaseZ) ? 1 : 0; }
 		UE_LOG(LogMantleNeckCheck, Display,
-			TEXT("MANTLE_NECK_CHECK case=%s bodyLOD=%d bodyVerts=%d faceLOD=%d faceTris=%d baseZ=%.2f bodyZ=[%.2f, %.2f] faceZ=[%.2f, %.2f] faceColumnVerts=%d faceColumnCentre=(%.2f, %.2f) ringVerts=%d ringToFaceAvgCm=%.3f ringToFaceMaxCm=%.3f regionTris=%d"),
-			*Case.Name, Case.BodyLOD, Case.Body.Num(), Case.FaceLOD, Case.Centroids.Num(), BaseZ, BodyBox.Min.Z, BodyBox.Max.Z, FaceBox.Min.Z, FaceBox.Max.Z, Column,
+			TEXT("MANTLE_NECK_CHECK case=%s faceNumbering=%08x bodyLOD=%d bodyVerts=%d faceLOD=%d faceTris=%d baseZ=%.2f bodyZ=[%.2f, %.2f] faceZ=[%.2f, %.2f] faceColumnVerts=%d faceColumnCentre=(%.2f, %.2f) ringVerts=%d ringToFaceAvgCm=%.3f ringToFaceMaxCm=%.3f regionTris=%d"),
+			*Case.Name, Case.FaceNumbering, Case.BodyLOD, Case.Body.Num(), Case.FaceLOD, Case.Centroids.Num(), BaseZ, BodyBox.Min.Z, BodyBox.Max.Z, FaceBox.Min.Z, FaceBox.Max.Z, Column,
 			Column ? Sum.X / Column : 0.0f, Column ? Sum.Y / Column : 0.0f, Ring.Num(), RingAverage, RingMax, Region);
 	}
 
@@ -167,12 +170,12 @@ namespace MantleDevNeckCheckPrivate
 	}
 
 	/** A standard body type made in memory (nothing saved): the body and face the upload would use. */
-	FNeckCase InMemory(const TCHAR* Id, const EMetaHumanBodyType Type, const int32 ReferenceVertices)
+	FNeckCase InMemory(const TCHAR* Id, const EMetaHumanBodyType Type, const int32 ReferenceVertices, const bool bFromPreset)
 	{
 		FNeckCase Case;
-		Case.Name = FString(Id) + TEXT("(in memory)");
+		Case.Name = FString(Id) + (bFromPreset ? (Id[0] == TEXT('m') ? TEXT("(from Bo)") : TEXT("(from Aera)")) : TEXT("(fresh)"));
 		FMantleFitBody Body;
-		if (FMantleFitBodies::Make(Id, Type, Body, Case.Error))
+		if (FMantleFitBodies::Make(Id, Type, Body, Case.Error, bFromPreset))
 		{
 			Case.bOk = ReadBody(Body.BodyMesh.Get(), ReferenceVertices, Case) && ReadFace(Body.FaceMesh.Get(), Case);
 		}
@@ -181,23 +184,23 @@ namespace MantleDevNeckCheckPrivate
 	}
 
 	/** The converted Aera: its built body and face (what fitted correctly), or its preview body and face from Creator. */
-	FNeckCase Aera(const bool bPreview, const int32 ReferenceVertices)
+	FNeckCase Converted(const TCHAR* Name, const bool bPreview, const int32 ReferenceVertices)
 	{
 		FNeckCase Case;
-		Case.Name = bPreview ? TEXT("Aera(preview)") : TEXT("Aera(built)");
-		const FString CharacterPackage = TEXT("/Game/MetaHumans/Aera/Converted/Aera/Aera");
-		const FString Unpacked = TEXT("/Game/MetaHumans/Aera/Converted/Aera/Unpacked/Aera");
+		Case.Name = FString(Name) + (bPreview ? TEXT("(preview)") : TEXT("(built)"));
+		const FString CharacterPackage = FString::Printf(TEXT("/Game/MetaHumans/%s/Converted/%s/%s"), Name, Name, Name);
+		const FString Unpacked = FString::Printf(TEXT("/Game/MetaHumans/%s/Converted/%s/Unpacked/%s"), Name, Name, Name);
 		if (!bPreview)
 		{
-			const USkeletalMesh* Body = LoadObject<USkeletalMesh>(nullptr, *(Unpacked + TEXT("/Body/SKM_Aera_BodyMesh.SKM_Aera_BodyMesh")));
-			const USkeletalMesh* Face = LoadObject<USkeletalMesh>(nullptr, *(Unpacked + TEXT("/Face/SKM_Aera_FaceMesh.SKM_Aera_FaceMesh")));
-			if (!Body || !Face) { Case.Error = TEXT("the converted Aera body or face is not in the project"); return Case; }
+			const USkeletalMesh* Body = LoadObject<USkeletalMesh>(nullptr, *FString::Printf(TEXT("%s/Body/SKM_%s_BodyMesh.SKM_%s_BodyMesh"), *Unpacked, Name, Name));
+			const USkeletalMesh* Face = LoadObject<USkeletalMesh>(nullptr, *FString::Printf(TEXT("%s/Face/SKM_%s_FaceMesh.SKM_%s_FaceMesh"), *Unpacked, Name, Name));
+			if (!Body || !Face) { Case.Error = TEXT("the converted body or face is not in the project"); return Case; }
 			Case.bOk = ReadBody(Body, ReferenceVertices, Case) && ReadFace(Face, Case);
 			return Case;
 		}
-		UMetaHumanCharacter* Character = LoadObject<UMetaHumanCharacter>(nullptr, *(CharacterPackage + TEXT(".Aera")));
+		UMetaHumanCharacter* Character = LoadObject<UMetaHumanCharacter>(nullptr, *FString::Printf(TEXT("%s.%s"), *CharacterPackage, Name));
 		UMetaHumanCharacterEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
-		if (!Character || !Subsystem) { Case.Error = TEXT("the converted Aera character or MetaHuman Creator is unavailable"); return Case; }
+		if (!Character || !Subsystem) { Case.Error = TEXT("the converted character or MetaHuman Creator is unavailable"); return Case; }
 		const bool bAdded = !Subsystem->IsObjectAddedForEditing(Character) && Subsystem->TryAddObjectToEdit(Character);
 		FMetaHumanCharacterPreviewAssetOptions Options;
 		FMetaHumanCharacterPreviewAssets Preview;
@@ -205,7 +208,7 @@ namespace MantleDevNeckCheckPrivate
 		{
 			Case.bOk = ReadBody(Preview.BodyMesh.Get(), ReferenceVertices, Case) && ReadFace(Preview.FaceMesh.Get(), Case);
 		}
-		else { Case.Error = TEXT("Creator did not provide the Aera preview body and face"); }
+		else { Case.Error = TEXT("Creator did not provide the preview body and face"); }
 		if (bAdded) { Subsystem->RemoveObjectToEdit(Character); }
 		return Case;
 	}
@@ -219,10 +222,13 @@ namespace MantleDevNeckCheckPrivate
 			return;
 		}
 		TArray<FNeckCase> Cases;
-		Cases.Add(InMemory(TEXT("m_med_nrw"), EMetaHumanBodyType::m_med_nrw, Contract->TopologyVertexCount));
-		Cases.Add(InMemory(TEXT("f_med_nrw"), EMetaHumanBodyType::f_med_nrw, Contract->TopologyVertexCount));
-		Cases.Add(Aera(false, Contract->TopologyVertexCount));
-		Cases.Add(Aera(true, Contract->TopologyVertexCount));
+		Cases.Add(InMemory(TEXT("m_med_nrw"), EMetaHumanBodyType::m_med_nrw, Contract->TopologyVertexCount, false));
+		Cases.Add(InMemory(TEXT("f_med_nrw"), EMetaHumanBodyType::f_med_nrw, Contract->TopologyVertexCount, false));
+		Cases.Add(InMemory(TEXT("m_med_nrw"), EMetaHumanBodyType::m_med_nrw, Contract->TopologyVertexCount, true));
+		Cases.Add(InMemory(TEXT("f_med_nrw"), EMetaHumanBodyType::f_med_nrw, Contract->TopologyVertexCount, true));
+		Cases.Add(Converted(TEXT("Aera"), false, Contract->TopologyVertexCount));
+		Cases.Add(Converted(TEXT("Aera"), true, Contract->TopologyVertexCount));
+		Cases.Add(Converted(TEXT("Bo"), false, Contract->TopologyVertexCount));
 		for (FNeckCase& Case : Cases)
 		{
 			if (!Case.bOk)
@@ -237,12 +243,20 @@ namespace MantleDevNeckCheckPrivate
 		const auto Find = [&Cases](const TCHAR* Name) -> const FNeckCase* { return Cases.FindByPredicate([Name](const FNeckCase& Case) { return Case.bOk && Case.Name == Name; }); };
 		const FNeckCase* AeraBuilt = Find(TEXT("Aera(built)"));
 		const FNeckCase* AeraPreview = Find(TEXT("Aera(preview)"));
-		const FNeckCase* Male = Find(TEXT("m_med_nrw(in memory)"));
-		const FNeckCase* Female = Find(TEXT("f_med_nrw(in memory)"));
+		const FNeckCase* BoBuilt = Find(TEXT("Bo(built)"));
+		const FNeckCase* Male = Find(TEXT("m_med_nrw(fresh)"));
+		const FNeckCase* Female = Find(TEXT("f_med_nrw(fresh)"));
+		const FNeckCase* MaleFromBo = Find(TEXT("m_med_nrw(from Bo)"));
+		const FNeckCase* FemaleFromAera = Find(TEXT("f_med_nrw(from Aera)"));
 		if (AeraPreview && AeraBuilt) { ComparePair(*AeraPreview, *AeraBuilt); }
 		if (Female && AeraBuilt) { ComparePair(*Female, *AeraBuilt); }
 		if (Male && AeraBuilt) { ComparePair(*Male, *AeraBuilt); }
 		if (Male && Female) { ComparePair(*Male, *Female); }
+		// Started from Epic's presets: the same-index distance should be at the nearest-centroid level (shape differences only).
+		if (FemaleFromAera && AeraBuilt) { ComparePair(*FemaleFromAera, *AeraBuilt); }
+		if (MaleFromBo && BoBuilt) { ComparePair(*MaleFromBo, *BoBuilt); }
+		if (MaleFromBo && AeraBuilt) { ComparePair(*MaleFromBo, *AeraBuilt); }
+		if (MaleFromBo && FemaleFromAera) { ComparePair(*MaleFromBo, *FemaleFromAera); }
 		UE_LOG(LogMantleNeckCheck, Display, TEXT("MANTLE_NECK_CHECK done"));
 	}
 
