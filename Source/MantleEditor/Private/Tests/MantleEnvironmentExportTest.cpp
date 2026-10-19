@@ -4,6 +4,7 @@
 #include "MantleEnvironmentDefaults.h"
 #include "MantleEnvironmentExport.h"
 #include "MantlePlaceExporter.h"
+#include "MantlePlaceSettingsActor.h"
 #include "MantleSkyClock.h"
 #include "MantleTargetFeatures.h"
 
@@ -734,6 +735,32 @@ bool FMantleEnvironmentApplyFogTest::RunTest(const FString& Parameters)
 	TestNearlyEqual(TEXT("the earlier density stays"), Fog->FogDensity, 0.005f, 1.0e-6f);
 
 	FMantleEnvironment::ApplyFogSettings(nullptr, Settings);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantlePlaceWeatherChoiceTest,
+	"Mantle.Editor.EnvironmentExport.PlaceSettingsWeatherChoice",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantlePlaceWeatherChoiceTest::RunTest(const FString& Parameters)
+{
+	AMantlePlaceSettingsActor* Settings = NewObject<AMantlePlaceSettingsActor>(GetTransientPackage());
+	if (!TestNotNull(TEXT("a settings actor"), Settings))
+	{
+		return false;
+	}
+	TestTrue(TEXT("an untouched actor matches the level's sky"), Settings->Weather == EMantlePlaceWeather::LevelSky);
+	TestFalse(TEXT("which leaves the weather unset"), Settings->MakeEnvironmentSettings().Weather.IsSet());
+	Settings->Weather = EMantlePlaceWeather::Natural;
+	TestFalse(TEXT("Natural leaves it unset too"), Settings->MakeEnvironmentSettings().Weather.IsSet());
+	Settings->Weather = EMantlePlaceWeather::Clear;
+	const FMantleEnvironmentSettings Chosen = Settings->MakeEnvironmentSettings();
+	TestTrue(TEXT("Clear maps to the Clear weather state"), Chosen.Weather.IsSet() && *Chosen.Weather == EMantleWeatherState::Clear);
+	Settings->SetEnvironmentFrom(FMantleEnvironmentSettings());
+	TestTrue(TEXT("a place file with no weather imports as Natural"), Settings->Weather == EMantlePlaceWeather::Natural);
+	Settings->SetEnvironmentFrom(Chosen);
+	TestTrue(TEXT("and one with a weather imports as that weather"), Settings->Weather == EMantlePlaceWeather::Clear);
 	return true;
 }
 

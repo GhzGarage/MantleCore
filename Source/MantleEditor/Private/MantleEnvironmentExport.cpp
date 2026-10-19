@@ -1,12 +1,12 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleEnvironmentExport.h"
-#include "MantlePlaceSettingsActor.h"
 
 #include "MantleClientFeatures.h"
 #include "MantleCoverage.h"
 #include "MantleEnvironment.h"
 #include "MantleEnvironmentDefaults.h"
 #include "MantleEnvironmentSubsystem.h"
+#include "MantlePlaceSettingsActor.h"
 #include "MantleSkyClock.h"
 #include "MantleTargetFeatures.h"
 #include "MantleWeather.h"
@@ -861,12 +861,13 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 	// The weather. A level with a sky of its own (an atmosphere, clouds, a sky light or a sun) has one look, so the place's
 	// weather is held at what its clouds show (Clear, PartlyCloudy or Overcast), or Clear when it has none, never left to
 	// change on its own: the natural weather would rain on a level that never did. The creator chooses another in Mantle Place Settings.
-	// A level with Mantle Place Settings is the exception: its Weather is the creator's choice, so Natural there lets the weather change.
+	// Level's Sky (the default there) holds as above; choosing Natural in Mantle Place Settings lets the weather change on its own.
 	const bool bOwnSky = Clouds.Num() > 0 || Atmospheres.Num() > 0 || SkyLights.Num() > 0 || bHasSun;
 	TOptional<EMantleWeatherState> Held;
 	FString HeldReason;
 	const bool bWeatherSetByPlace = Environment.Weather.IsSet();
-	const bool bNaturalChosen = !bWeatherSetByPlace && World && AMantlePlaceSettingsActor::Find(World) != nullptr;
+	const AMantlePlaceSettingsActor* PlaceSettings = World ? AMantlePlaceSettingsActor::Find(World) : nullptr;
+	const bool bNaturalChosen = PlaceSettings && PlaceSettings->Weather == EMantlePlaceWeather::Natural;
 	double CloudCoverage = DefaultCloudCoverage;
 	if (Clouds.Num() > 0)
 	{
@@ -881,7 +882,7 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 		}
 		const EMantleWeatherState State = FMantleEnvironmentExport::WeatherForCloudCoverage(CloudCoverage);
 		Held = State;
-		HeldReason = FString::Printf(TEXT("cloud coverage (%.2f) as the place's weather, held at %s (choose another Weather in Mantle Place Settings for a different one)"),
+		HeldReason = FString::Printf(TEXT("cloud coverage (%.2f) as the place's weather, held at %s (choose Natural or another Weather in Mantle Place Settings for a different one)"),
 			CloudCoverage, MantleWeatherStateName(State));
 	}
 	else if (bOwnSky)
@@ -904,7 +905,7 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 	{
 		const TCHAR* Detail = bWeatherSetByPlace ? TEXT("the level has no volumetric cloud, but Mantle Place Settings holds the weather, which wins.")
 			: !bReadsEnvironment ? TEXT("the level has no volumetric cloud, so the weather would be held at Clear: needs a newer Mantle client.")
-			: TEXT("the level has no volumetric cloud, so the place's weather is held at Clear instead of changing on its own; choose another Weather in Mantle Place Settings for a different one.");
+			: TEXT("the level has no volumetric cloud, so the place's weather is held at Clear instead of changing on its own; choose Natural or another Weather in Mantle Place Settings for a different one.");
 		Coverage.Add(Cat::Sky, bWeatherWritten ? EOutcome::Approximated : EOutcome::Dropped, TEXT("Weather"), Detail);
 	}
 
@@ -926,6 +927,10 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 		{
 			NotCarried.Insert(bWeatherSetByPlace ? FString(TEXT("Cloud Coverage (Mantle Place Settings holds the weather, which wins)"))
 				: FString::Printf(TEXT("Cloud Coverage (%s)"), FMantleTargetFeatures::NeedsNewerClient), 0);
+		}
+		if (bNaturalChosen && !bWeatherSetByPlace && Cloud == Clouds[0])
+		{
+			NotCarried.Insert(FString(TEXT("Cloud Coverage (Mantle Place Settings chooses Natural weather, which changes on its own)")), 0);
 		}
 		ReportLook(Coverage, Cat::Sky, LabelOf(Cloud), bThisCarries, HeldReason, NotCarried,
 			TEXT("Mantle supplies its own clouds (the place carries only their coverage, as the weather)"));

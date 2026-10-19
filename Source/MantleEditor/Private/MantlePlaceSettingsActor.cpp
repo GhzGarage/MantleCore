@@ -114,9 +114,9 @@ FMantleEnvironmentSettings AMantlePlaceSettingsActor::MakeEnvironmentSettings() 
 	{
 		Out.TimeScale = Scale;
 	}
-	if (Weather != EMantlePlaceWeather::Natural)
+	if (Weather != EMantlePlaceWeather::LevelSky && Weather != EMantlePlaceWeather::Natural)
 	{
-		Out.Weather = static_cast<EMantleWeatherState>(static_cast<uint8>(Weather) - 1);
+		Out.Weather = static_cast<EMantleWeatherState>(static_cast<uint8>(Weather) - 2);
 	}
 	const uint32 Tint = (static_cast<uint32>(ColorTint.R) << 16) | (static_cast<uint32>(ColorTint.G) << 8) | ColorTint.B;
 	if (Tint != 0xFFFFFF)
@@ -150,7 +150,7 @@ void AMantlePlaceSettingsActor::SetEnvironmentFrom(const FMantleEnvironmentSetti
 	ClockTime = Environment.ClockTime.Get(12.0);
 	TimeScale = Environment.TimeScale.Get(1.0);
 	Weather = Environment.Weather.IsSet()
-		? static_cast<EMantlePlaceWeather>(static_cast<uint8>(*Environment.Weather) + 1)
+		? static_cast<EMantlePlaceWeather>(static_cast<uint8>(*Environment.Weather) + 2)
 		: EMantlePlaceWeather::Natural;
 	const uint32 Tint = Environment.ColorTint.Get(0xFFFFFF);
 	ColorTint = FColor(static_cast<uint8>((Tint >> 16) & 0xFF), static_cast<uint8>((Tint >> 8) & 0xFF), static_cast<uint8>(Tint & 0xFF), 255);
@@ -164,11 +164,11 @@ void AMantlePlaceSettingsActor::SetEnvironmentFrom(const FMantleEnvironmentSetti
 	ColorGradingIntensity = Environment.ColorGradingIntensity.Get(1.0);
 }
 
-// EMantlePlaceWeather is EMantleWeatherState one step up, Natural first.
-static_assert(static_cast<int32>(EMantlePlaceWeather::DustStorm) == static_cast<int32>(MantleLastWeatherState) + 1,
-	"EMantlePlaceWeather must list EMantleWeatherState's members in the same order, after Natural");
-static_assert(static_cast<int32>(EMantlePlaceWeather::Clear) == static_cast<int32>(EMantleWeatherState::Clear) + 1,
-	"EMantlePlaceWeather must list EMantleWeatherState's members in the same order, after Natural");
+// EMantlePlaceWeather is EMantleWeatherState two steps up, LevelSky and Natural first.
+static_assert(static_cast<int32>(EMantlePlaceWeather::DustStorm) == static_cast<int32>(MantleLastWeatherState) + 2,
+	"EMantlePlaceWeather must list EMantleWeatherState's members in the same order, after LevelSky and Natural");
+static_assert(static_cast<int32>(EMantlePlaceWeather::Clear) == static_cast<int32>(EMantleWeatherState::Clear) + 2,
+	"EMantlePlaceWeather must list EMantleWeatherState's members in the same order, after LevelSky and Natural");
 
 // EMantlePlaceColorGrading is numbered as the override's presets, None first.
 static_assert(static_cast<uint8>(EMantlePlaceColorGrading::None) == MantleEnvironmentOverrideValues::ColorGradingNone,
