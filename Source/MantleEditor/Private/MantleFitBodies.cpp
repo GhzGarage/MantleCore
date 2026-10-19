@@ -353,7 +353,7 @@ bool FMantleFitBodies::MakeSet(UObject* Outfit, const EMantleFitSex Requested, c
 	const TArray<FString> Suffixes = SanitizeBodyTypes(Contract.GarmentFitBodyTypes);
 	if (Suffixes.IsEmpty())
 	{
-		OutError = TEXT("limits.json garmentFit.bodyTypes names no standard body type");
+		OutError = TEXT("garment-fit.json bodyTypes names no standard body type");
 		return false;
 	}
 	TSharedRef<FMantleFitBodySet> Set = MakeShared<FMantleFitBodySet>();

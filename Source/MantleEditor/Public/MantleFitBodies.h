@@ -44,7 +44,7 @@ struct MANTLEEDITOR_API FMantleFitBodySet
 /**
  * Garment variants fitted to Epic's standard MetaHuman body types, made IN MEMORY: no converted Aera/Bo assets in the
  * project and no Epic sign-in or cloud build. Epic ships 18 fixed compatibility bodies (f|m x srt|med|tal x unw|nrw|ovw);
- * limits.json garmentFit.bodyTypes names the ones to use (the medium-height builds by default), for the Outfit's sex.
+ * garment-fit.json bodyTypes names the ones to use (the medium-height builds by default), for the Outfit's sex.
  */
 struct MANTLEEDITOR_API FMantleFitBodies
 {

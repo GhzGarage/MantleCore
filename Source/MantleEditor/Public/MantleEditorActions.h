@@ -79,7 +79,7 @@ struct MANTLEEDITOR_API FMantleEditorActions
 
 	/**
 	 * Clothing from a MetaHuman Outfit with no fit sources yet: Mantle's standard fit bodies, made automatically in memory
-	 * from Epic's standard body types (limits.json garmentFit.bodyTypes, by default the medium-height underweight, normal and
+	 * from Epic's standard body types (Resources/GarmentFit/garment-fit.json, by default the medium-height underweight, normal and
 	 * overweight bodies of one sex; Draft.FitSex overrides the sex chosen from the Outfit's own sizes), as OutfitTargets named
 	 * for the type (f_med_nrw ...), so every upload carries a size for slim and broad wearers. Nothing is converted or saved and
 	 * no Epic sign-in is needed. The bodies are held by Draft.FitBodies (they live as long as any copy of the draft); when they

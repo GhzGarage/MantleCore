@@ -212,7 +212,10 @@ bool FMantleAvatarContract::LoadFromDirectory(const FString& Directory, FMantleA
 	}
 
 	// The standard body types garment variants are fitted to. Absent or unusable: the defaults in the header.
-	if (const TSharedPtr<FJsonObject> Fit = ObjectField(Limits, TEXT("garmentFit")))
+	// Plugin-only (Resources/GarmentFit): limits.json is a copy of the mantle repo's, so this list is not in it.
+	TSharedPtr<FJsonObject> Fit;
+	FString FitError;
+	if (const FString FitPath = FPaths::Combine(Directory, TEXT(".."), TEXT("GarmentFit"), TEXT("garment-fit.json")); FPaths::FileExists(FitPath) && ReadJsonFile(FitPath, Fit, FitError) && Fit.IsValid())
 	{
 		const TArray<TSharedPtr<FJsonValue>>* TypeValues = nullptr;
 		if (Fit->TryGetArrayField(TEXT("bodyTypes"), TypeValues))

@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAvatarContract.h"
+#include "MantleCreatorBodyMap.h"
 #include "MantleFitBodies.h"
 
 #include "Misc/AutomationTest.h"
@@ -37,11 +38,11 @@ bool FMantleFitBodiesTest::RunTest(const FString& Parameters)
 	const TArray<FString> Capped = FMantleFitBodies::SanitizeBodyTypes({ TEXT("med_unw"), TEXT("med_nrw"), TEXT("med_ovw"), TEXT("srt_nrw") }, 2);
 	TestEqual(TEXT("the list is capped"), Capped.Num(), 2);
 
-	// The shipped limits.json lists the three medium-height builds, within the backend's 1 to 8 variants.
+	// The shipped garment-fit.json lists the three medium-height builds, within the backend's 1 to 8 variants.
 	FString ContractError;
 	if (const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError))
 	{
-		TestEqual(TEXT("limits.json garmentFit.bodyTypes"), FString::Join(Contract->GarmentFitBodyTypes, TEXT(",")), FString(TEXT("med_unw,med_nrw,med_ovw")));
+		TestEqual(TEXT("garment-fit.json bodyTypes"), FString::Join(Contract->GarmentFitBodyTypes, TEXT(",")), FString(TEXT("med_unw,med_nrw,med_ovw")));
 		TestTrue(TEXT("one to eight variants"), Contract->GarmentFitBodyTypes.Num() >= 1 && Contract->GarmentFitBodyTypes.Num() <= 8);
 		TestTrue(TEXT("every listed type is a standard body"), FMantleFitBodies::SanitizeBodyTypes(Contract->GarmentFitBodyTypes).Num() == Contract->GarmentFitBodyTypes.Num());
 		TestTrue(TEXT("the sex margin is not negative"), Contract->GarmentFitSexMarginCm >= 0.0f);
@@ -74,6 +75,40 @@ bool FMantleFitBodiesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("no sizes is female"), FMantleFitBodies::ChooseSex({}, {}, 0.25f, Why) == EMantleFitSex::Female);
 	TestTrue(TEXT("one side unreadable is female"), FMantleFitBodies::ChooseSex({ -1.0f }, { 1.0f }, 0.25f, Why) == EMantleFitSex::Female);
 	TestFalse(TEXT("the choice comes with a reason"), Why.IsEmpty());
+	return true;
+}
+
+// The learned point map from Creator's in-memory body to the reference body: written, read back, and refused when it is not one-to-one.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleCreatorBodyMapTest,
+	"Mantle.Editor.FitBodies.CreatorBodyMap",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleCreatorBodyMapTest::RunTest(const FString& Parameters)
+{
+	FMantleCreatorBodyMap Map;
+	Map.SourceUVHash = 0x49f70128;
+	Map.ReferenceUVHash = 0x4514a950;
+	Map.PreviewOfReference = { 2, 0, 3, 1 };
+	Map.MaxErrorCmAera = 0.01;
+	Map.MaxErrorCmBo = 0.02;
+	Map.Generated = TEXT("2026-10-19T00:00:00Z");
+
+	FMantleCreatorBodyMap Read;
+	FString Error;
+	TestTrue(TEXT("a written map reads back"), FMantleCreatorBodyMap::Parse(Map.ToJson(), Read, Error));
+	TestEqual(TEXT("source hash"), Read.SourceUVHash, Map.SourceUVHash);
+	TestEqual(TEXT("reference hash"), Read.ReferenceUVHash, Map.ReferenceUVHash);
+	TestEqual(TEXT("map"), FString::JoinBy(Read.PreviewOfReference, TEXT(","), [](const int32 Index) { return FString::FromInt(Index); }), FString(TEXT("2,0,3,1")));
+	TestTrue(TEXT("applies to the layout it was learned on"), Read.Applies(0x49f70128, 4));
+	TestFalse(TEXT("not to another UV hash"), Read.Applies(0x4514a950, 4));
+	TestFalse(TEXT("not to another vertex count"), Read.Applies(0x49f70128, 5));
+
+	Map.PreviewOfReference = { 2, 2, 3, 1 };
+	TestFalse(TEXT("a map that is not one-to-one is refused"), FMantleCreatorBodyMap::Parse(Map.ToJson(), Read, Error));
+	Map.PreviewOfReference = { 2, 0, 4, 1 };
+	TestFalse(TEXT("an index past the vertex count is refused"), FMantleCreatorBodyMap::Parse(Map.ToJson(), Read, Error));
+	TestFalse(TEXT("text that is not JSON is refused"), FMantleCreatorBodyMap::Parse(TEXT("nope"), Read, Error));
 	return true;
 }
 
