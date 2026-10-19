@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleBodyCorrespondence.h"
 #include "Animation/MorphTarget.h"
+#include <algorithm>
 #include "DNAReader.h"
 #include "SkelMeshDNAUtils.h"
 #include "Rendering/SkeletalMeshModel.h"
@@ -493,6 +494,178 @@ bool FMantleBodyCorrespondence::MatchDNABodyPolygons(TConstArrayView<FVector2f> 
 	}
 	if (!Match(UVs, Triangles, OutLayoutOfReference, OutError)) return false;
 	OutError.Reset(); return true;
+}
+
+bool FMantleBodyCorrespondence::MatchFlippedDiagonals(TConstArrayView<FVector2f> UVs, TConstArrayView<uint32> InputIndices,
+	TArray<int32>& OutInputOfReference, FString& OutNote, FString& OutError) const
+{
+	using namespace MantleBodyCorrespondencePrivate;
+	OutInputOfReference.Reset();
+	OutNote.Reset();
+	const int32 Count = QuantizedUVs.Num();
+	if (Count == 0 || UVs.Num() != Count || InputIndices.Num() != Indices.Num() || Indices.Num() % 3 != 0)
+	{
+		return Fail(OutError, TEXT("the body has a different vertex or triangle count from the reference layout"));
+	}
+	TArray<FIntPoint> InputUVs;
+	InputUVs.Reserve(Count);
+	for (const FVector2f& UV : UVs)
+	{
+		if (UV.ContainsNaN() || FMath::Abs(UV.X) > 16.0f || FMath::Abs(UV.Y) > 16.0f)
+		{
+			return Fail(OutError, TEXT("the body has invalid or out-of-range UVs"));
+		}
+		InputUVs.Add(FIntPoint(FMath::RoundToInt32(UV.X * 2048.0f), FMath::RoundToInt32(UV.Y * 2048.0f)));
+	}
+	// The UVs of each vertex's neighbours, which tell apart vertices that share a UV.
+	const auto Neighbours = [](TConstArrayView<FIntPoint> Points, TConstArrayView<uint32> Triangles, TArray<TSet<FIntPoint>>& Out) -> bool
+	{
+		Out.Reset();
+		Out.SetNum(Points.Num());
+		for (int32 First = 0; First + 2 < Triangles.Num(); First += 3)
+		{
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				const uint32 Vertex = Triangles[First + Corner];
+				const uint32 Next = Triangles[First + (Corner + 1) % 3];
+				if (Vertex >= static_cast<uint32>(Points.Num()) || Next >= static_cast<uint32>(Points.Num())) { return false; }
+				Out[Vertex].Add(Points[Next]);
+				Out[Next].Add(Points[Vertex]);
+			}
+		}
+		return true;
+	};
+	TArray<TSet<FIntPoint>> ReferenceNeighbours, InputNeighbours;
+	if (!Neighbours(QuantizedUVs, Indices, ReferenceNeighbours) || !Neighbours(InputUVs, InputIndices, InputNeighbours))
+	{
+		return Fail(OutError, TEXT("the body has an out-of-range triangle"));
+	}
+	TMap<FIntPoint, TArray<int32>> ReferenceByUV, InputByUV;
+	for (int32 Vertex = 0; Vertex < Count; ++Vertex)
+	{
+		ReferenceByUV.FindOrAdd(QuantizedUVs[Vertex]).Add(Vertex);
+		InputByUV.FindOrAdd(InputUVs[Vertex]).Add(Vertex);
+	}
+	TArray<int32> InputOfReference;
+	InputOfReference.Init(INDEX_NONE, Count);
+	int32 Repeated = 0;
+	for (const TPair<FIntPoint, TArray<int32>>& Group : ReferenceByUV)
+	{
+		const TArray<int32>* Input = InputByUV.Find(Group.Key);
+		if (!Input || Input->Num() != Group.Value.Num())
+		{
+			return Fail(OutError, TEXT("the body does not have the reference UV layout"));
+		}
+		const int32 N = Group.Value.Num();
+		if (N == 1)
+		{
+			InputOfReference[Group.Value[0]] = (*Input)[0];
+			continue;
+		}
+		if (N > 4)
+		{
+			return Fail(OutError, TEXT("the reference repeats a UV too often to tell the vertices apart"));
+		}
+		Repeated += N;
+		TArray<int32> Order;
+		for (int32 Index = 0; Index < N; ++Index) { Order.Add(Index); }
+		int32 Best = -1, BestCount = 0;
+		TArray<int32> BestOrder;
+		do
+		{
+			int32 Sum = 0;
+			for (int32 A = 0; A < N; ++A) { Sum += ReferenceNeighbours[Group.Value[A]].Intersect(InputNeighbours[(*Input)[Order[A]]]).Num(); }
+			if (Sum > Best) { Best = Sum; BestCount = 1; BestOrder = Order; }
+			else if (Sum == Best) { ++BestCount; }
+		}
+		while (std::next_permutation(Order.GetData(), Order.GetData() + N));
+		if (BestCount != 1)
+		{
+			return Fail(OutError, TEXT("vertices that share a UV cannot be told apart by their neighbours"));
+		}
+		for (int32 A = 0; A < N; ++A) { InputOfReference[Group.Value[A]] = (*Input)[BestOrder[A]]; }
+	}
+	TArray<int32> ReferenceOfInput;
+	ReferenceOfInput.Init(INDEX_NONE, Count);
+	for (int32 Reference = 0; Reference < Count; ++Reference)
+	{
+		if (InputOfReference[Reference] == INDEX_NONE || ReferenceOfInput[InputOfReference[Reference]] != INDEX_NONE)
+		{
+			return Fail(OutError, TEXT("the body's vertices are not one-to-one with the reference's"));
+		}
+		ReferenceOfInput[InputOfReference[Reference]] = Reference;
+	}
+	// Triangles: each reference triangle must be an input triangle, but for flipped-diagonal pairs.
+	TMap<FString, int32> ReferenceCount, InputCount;
+	for (int32 First = 0; First < Indices.Num(); First += 3)
+	{
+		++ReferenceCount.FindOrAdd(TriangleKey(Indices[First], Indices[First + 1], Indices[First + 2]));
+		++InputCount.FindOrAdd(TriangleKey(ReferenceOfInput[InputIndices[First]], ReferenceOfInput[InputIndices[First + 1]], ReferenceOfInput[InputIndices[First + 2]]));
+	}
+	const auto Sorted = [](uint32 A, uint32 B, uint32 C)
+	{
+		TArray<uint32> Out = { A, B, C };
+		Out.Sort();
+		return Out;
+	};
+	TArray<TArray<uint32>> OnlyReference, OnlyInput;
+	{
+		TMap<FString, int32> Budget = InputCount;
+		for (int32 First = 0; First < Indices.Num(); First += 3)
+		{
+			int32* Left = Budget.Find(TriangleKey(Indices[First], Indices[First + 1], Indices[First + 2]));
+			if (Left && *Left > 0) { --*Left; }
+			else { OnlyReference.Add(Sorted(Indices[First], Indices[First + 1], Indices[First + 2])); }
+		}
+		Budget = ReferenceCount;
+		for (int32 First = 0; First < Indices.Num(); First += 3)
+		{
+			const uint32 A = ReferenceOfInput[InputIndices[First]], B = ReferenceOfInput[InputIndices[First + 1]], C = ReferenceOfInput[InputIndices[First + 2]];
+			int32* Left = Budget.Find(TriangleKey(A, B, C));
+			if (Left && *Left > 0) { --*Left; }
+			else { OnlyInput.Add(Sorted(A, B, C)); }
+		}
+	}
+	constexpr int32 MaxFlipped = 8;
+	if (OnlyReference.Num() != OnlyInput.Num() || OnlyReference.Num() > 2 * MaxFlipped || OnlyReference.Num() % 2 != 0)
+	{
+		return Fail(OutError, TEXT("the body's triangles differ from the reference layout by more than flipped quad diagonals"));
+	}
+	int32 Flipped = 0;
+	TBitArray<> InputUsed(false, OnlyInput.Num()), ReferenceUsed(false, OnlyReference.Num());
+	for (int32 I = 0; I < OnlyReference.Num(); ++I)
+	{
+		if (ReferenceUsed[I]) { continue; }
+		for (int32 J = I + 1; J < OnlyReference.Num() && !ReferenceUsed[I]; ++J)
+		{
+			if (ReferenceUsed[J]) { continue; }
+			TArray<uint32> Shared, OnlyI, OnlyJ;
+			for (const uint32 Vertex : OnlyReference[I]) { (OnlyReference[J].Contains(Vertex) ? Shared : OnlyI).Add(Vertex); }
+			for (const uint32 Vertex : OnlyReference[J]) { if (!Shared.Contains(Vertex)) { OnlyJ.Add(Vertex); } }
+			if (Shared.Num() != 2 || OnlyI.Num() != 1 || OnlyJ.Num() != 1) { continue; }
+			// The input has the two triangles on the other diagonal of the same quad.
+			const TArray<uint32> First = Sorted(OnlyI[0], OnlyJ[0], Shared[0]);
+			const TArray<uint32> Second = Sorted(OnlyI[0], OnlyJ[0], Shared[1]);
+			int32 FoundFirst = INDEX_NONE, FoundSecond = INDEX_NONE;
+			for (int32 K = 0; K < OnlyInput.Num(); ++K)
+			{
+				if (InputUsed[K]) { continue; }
+				if (FoundFirst == INDEX_NONE && OnlyInput[K] == First) { FoundFirst = K; }
+				else if (FoundSecond == INDEX_NONE && OnlyInput[K] == Second) { FoundSecond = K; }
+			}
+			if (FoundFirst == INDEX_NONE || FoundSecond == INDEX_NONE) { continue; }
+			ReferenceUsed[I] = ReferenceUsed[J] = InputUsed[FoundFirst] = InputUsed[FoundSecond] = true;
+			++Flipped;
+		}
+	}
+	if (ReferenceUsed.CountSetBits() != OnlyReference.Num())
+	{
+		return Fail(OutError, TEXT("some of the body's triangles differ from the reference layout in more than a flipped quad diagonal"));
+	}
+	OutInputOfReference = MoveTemp(InputOfReference);
+	OutNote = FString::Printf(TEXT("UV match, %d repeated-UV vertices told apart by their neighbours, %d diagonal%s flipped"), Repeated, Flipped, Flipped == 1 ? TEXT("") : TEXT("s"));
+	OutError.Reset();
+	return true;
 }
 
 bool FMantleBodyCorrespondence::MatchMergedBodyExport(const USkeletalMesh* Body,

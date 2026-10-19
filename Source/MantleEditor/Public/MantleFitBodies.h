@@ -91,7 +91,14 @@ struct MANTLEEDITOR_API FMantleFitBodies
 	/** Per LOD of Mesh, why it is or is not the reference topology: what reading it gave, counts, UV hash and the layout match's error. */
 	static FString DescribeReferenceTopology(const USkeletalMesh* Mesh, const FMantleAvatarContract& Contract);
 
-	static USkeletalMesh* PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog);
+	static USkeletalMesh* PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog, FString* OutOrdering = nullptr);
+
+	/**
+	 * True for the body meshes Make fetched from MetaHuman Creator (bodies made in memory, before Epic's Optimized build). Their LOD with the
+	 * reference vertex count may differ from the reference only in a few flipped quad diagonals (FMantleBodyCorrespondence::MatchFlippedDiagonals),
+	 * which FMantleCosmeticExport::HasReferenceTopology accepts for these meshes and no others.
+	 */
+	static bool IsCreatorPreview(const USkeletalMesh* Mesh);
 
 	/** LOD's vertex positions (component space, cm) from the render data, or the mesh description when there is no CPU copy. */
 	static bool ReadVertices(const USkeletalMesh* Mesh, int32 LODIndex, TArray<FVector3f>& OutPositions);

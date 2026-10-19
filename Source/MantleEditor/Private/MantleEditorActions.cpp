@@ -122,6 +122,7 @@ void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& 
 	}
 	Draft.FitBodies.Reset();
 	Draft.FitBodiesStatus.Reset();
+	Draft.FitBodyNotes.Reset();
 	if (!Contract)
 	{
 		Contract = FMantleAvatarContract::Get();
@@ -142,19 +143,23 @@ void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& 
 		return;
 	}
 	TArray<FMantleOutfitAuthoringTarget> Targets;
+	TArray<FString> Notes;
 	for (const FMantleFitBody& Body : Set->Bodies)
 	{
 		// The source body shape must have Mantle's reference body topology, which only some of Creator's meshes/LODs carry.
 		FString Lods;
-		USkeletalMesh* Shape = FMantleFitBodies::PickShapeBody(Body, *Contract, Lods);
+		FString Ordering;
+		USkeletalMesh* Shape = FMantleFitBodies::PickShapeBody(Body, *Contract, Lods, &Ordering);
 		if (!Shape)
 		{
 			Draft.FitBodiesStatus = FString::Printf(TEXT("Garment variants were not made: %s has no body with Mantle's reference topology (%s)."), *Body.Id, *Lods);
 			return;
 		}
+		Notes.Add(Ordering);
 		Targets.Add({ Body.Id, Body.Character.Get(), Shape, Body.FaceMesh.Get(), true });
 	}
 	Draft.OutfitTargets = MoveTemp(Targets);
+	Draft.FitBodyNotes = MoveTemp(Notes);
 	Draft.FitBodies = Set;
 	Draft.FitBodiesStatus = Set->Status;
 }

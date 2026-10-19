@@ -1,6 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAvatarContract.h"
-#include "MantleCreatorBodyMap.h"
+#include "MantleBodyCorrespondence.h"
 #include "MantleFitBodies.h"
 
 #include "Misc/AutomationTest.h"
@@ -78,43 +78,58 @@ bool FMantleFitBodiesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-// The learned point map from Creator's in-memory body to the reference body: written, read back, and refused when it is not one-to-one.
+// Creator's in-memory body has the reference UV layout but Epic's build flipped a few quad diagonals: a tiny layout of two quads.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FMantleCreatorBodyMapTest,
-	"Mantle.Editor.FitBodies.CreatorBodyMap",
+	FMantleFlippedDiagonalsTest,
+	"Mantle.Editor.FitBodies.FlippedDiagonals",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FMantleCreatorBodyMapTest::RunTest(const FString& Parameters)
+bool FMantleFlippedDiagonalsTest::RunTest(const FString& Parameters)
 {
-	FMantleCreatorBodyMap First;
-	First.SourceUVHash = 0x231721b0;
-	First.ReferenceUVHash = 0x4514a950;
-	First.PreviewOfReference = { 2, 0, 3, 1 };
-	First.Source = TEXT("Aera");
-	First.MaxErrorCm = 0.01;
-	FMantleCreatorBodyMap Second = First;
-	Second.SourceUVHash = 0x49f70128;
-	Second.PreviewOfReference = { 1, 0, 2, 3 };
-
-	TArray<FMantleCreatorBodyMap> Read;
-	FString Error;
-	TestTrue(TEXT("written maps read back"), FMantleCreatorBodyMap::ParseFile(FMantleCreatorBodyMap::ToJson({ First, Second }), Read, Error));
-	TestEqual(TEXT("both layouts are kept"), Read.Num(), 2);
-	if (Read.Num() == 2)
+	// Reference: a 3 x 2 grid of vertices (id = y * 3 + x), two quads, each cut one way.
+	FMantleBodyCorrespondence Layout;
+	for (int32 Y = 0; Y < 2; ++Y)
 	{
-		TestEqual(TEXT("source hash"), Read[1].SourceUVHash, Second.SourceUVHash);
-		TestEqual(TEXT("reference hash"), Read[1].ReferenceUVHash, Second.ReferenceUVHash);
-		TestEqual(TEXT("map"), FString::JoinBy(Read[0].PreviewOfReference, TEXT(","), [](const int32 Index) { return FString::FromInt(Index); }), FString(TEXT("2,0,3,1")));
-		TestTrue(TEXT("a map applies to the layout it was learned on"), Read[0].Applies(0x231721b0, 4));
-		TestFalse(TEXT("not to the other layout"), Read[0].Applies(0x49f70128, 4));
-		TestFalse(TEXT("not to another vertex count"), Read[0].Applies(0x231721b0, 5));
+		for (int32 X = 0; X < 3; ++X) { Layout.QuantizedUVs.Add(FIntPoint(X * 2048 + 100, Y * 2048 + 100)); }
 	}
+	Layout.Indices = { 0, 1, 4,  0, 4, 3,  1, 2, 5,  1, 5, 4 };
 
-	First.PreviewOfReference = { 2, 2, 3, 1 };
-	TestFalse(TEXT("a map that is not one-to-one is refused"), FMantleCreatorBodyMap::ParseFile(FMantleCreatorBodyMap::ToJson({ First }), Read, Error));
-	First.PreviewOfReference = { 2, 0, 4, 1 };
-	TestFalse(TEXT("an index past the vertex count is refused"), FMantleCreatorBodyMap::ParseFile(FMantleCreatorBodyMap::ToJson({ First }), Read, Error));
-	TestFalse(TEXT("text that is not JSON is refused"), FMantleCreatorBodyMap::ParseFile(TEXT("nope"), Read, Error));
+	// The input numbers the vertices differently: input vertex Permutation[r] is reference vertex r.
+	const TArray<int32> Permutation = { 3, 5, 0, 1, 4, 2 };
+	const auto MakeInput = [&Layout, &Permutation](const TArray<uint32>& ReferenceTriangles, TArray<FVector2f>& OutUVs, TArray<uint32>& OutIndices)
+	{
+		OutUVs.SetNum(Layout.QuantizedUVs.Num());
+		for (int32 Reference = 0; Reference < Layout.QuantizedUVs.Num(); ++Reference)
+		{
+			OutUVs[Permutation[Reference]] = FVector2f(Layout.QuantizedUVs[Reference].X / 2048.0f, Layout.QuantizedUVs[Reference].Y / 2048.0f);
+		}
+		OutIndices.Reset();
+		for (const uint32 Reference : ReferenceTriangles) { OutIndices.Add(Permutation[Reference]); }
+	};
+
+	TArray<FVector2f> UVs;
+	TArray<uint32> Indices;
+	TArray<int32> InputOfReference;
+	FString Note, Error;
+
+	MakeInput(Layout.Indices, UVs, Indices);
+	TestTrue(TEXT("the same triangles, renumbered, match"), Layout.MatchFlippedDiagonals(UVs, Indices, InputOfReference, Note, Error));
+	TestEqual(TEXT("each reference vertex finds its input vertex"), FString::JoinBy(InputOfReference, TEXT(","), [](const int32 Index) { return FString::FromInt(Index); }), FString(TEXT("3,5,0,1,4,2")));
+
+	MakeInput({ 0, 1, 3,  1, 4, 3,  1, 2, 5,  1, 5, 4 }, UVs, Indices);
+	TestTrue(TEXT("one quad cut the other way matches"), Layout.MatchFlippedDiagonals(UVs, Indices, InputOfReference, Note, Error));
+	TestTrue(TEXT("the note says a diagonal was flipped"), Note.Contains(TEXT("1 diagonal")));
+
+	MakeInput({ 0, 1, 3,  1, 4, 3,  1, 2, 4,  2, 5, 4 }, UVs, Indices);
+	TestTrue(TEXT("both quads cut the other way match"), Layout.MatchFlippedDiagonals(UVs, Indices, InputOfReference, Note, Error));
+	TestTrue(TEXT("the note counts both"), Note.Contains(TEXT("2 diagonal")));
+
+	MakeInput({ 0, 1, 4,  0, 4, 3,  1, 2, 5,  1, 5, 3 }, UVs, Indices);
+	TestFalse(TEXT("a changed triangle that is not a flipped diagonal is refused"), Layout.MatchFlippedDiagonals(UVs, Indices, InputOfReference, Note, Error));
+
+	MakeInput(Layout.Indices, UVs, Indices);
+	UVs[0].X += 0.5f;
+	TestFalse(TEXT("a different UV layout is refused"), Layout.MatchFlippedDiagonals(UVs, Indices, InputOfReference, Note, Error));
 	return true;
 }
 

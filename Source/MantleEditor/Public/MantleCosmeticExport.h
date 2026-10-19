@@ -94,6 +94,8 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	TSharedPtr<FMantleFitBodySet> FitBodies;
 	/** What ApplyCosmeticFitTargetDefaults chose and why, or why it made no fit bodies; shown in the check's notes. */
 	FString FitBodiesStatus;
+	/** One line per fit body: how its body was put in Mantle's reference vertex order (a note on the check). */
+	TArray<FString> FitBodyNotes;
 
 	/** Native Outfit: representative converted source shapes packaged together in one catalog item. */
 	TArray<FMantleOutfitAuthoringTarget> OutfitTargets;

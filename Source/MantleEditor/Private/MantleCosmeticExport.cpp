@@ -7,7 +7,7 @@
 #include "MantleBodyCoverage.h"
 #include "MantleBodyCorrespondence.h"
 #include "MantleBodyShape.h"
-#include "MantleCreatorBodyMap.h"
+#include "MantleFitBodies.h"
 #include "MantleBodyTopologyData.h"
 #include "MantleCatalogGarmentFit.h"
 #include "MantleClothingColorMeasure.h"
@@ -585,7 +585,7 @@ namespace MantleCosmeticExportPrivate
 		{
 			if (const FMantleBodyCorrespondence* Layout = FMantleBodyCorrespondence::Get();
 				Layout && Glb.UVs.Num() == Layout->QuantizedUVs.Num()
-				&& UMantleBodyTopologyData::ComputeUVHash(Glb.UVs) == Layout->UVHash)
+				&& UMantleBodyTopologyData::ComputeUVHash(Glb.UVs) == Layout->UVHash && !FMantleFitBodies::IsCreatorPreview(Mesh))
 			{
 				TArray<int32> Identity;
 				if (!Layout->Match(Glb.UVs, Glb.Primitives[0].Indices, Identity, OutError))
@@ -602,14 +602,10 @@ namespace MantleCosmeticExportPrivate
 				}
 				Glb.Primitives[0].Indices = Layout->Indices;
 			}
-			else if (bReferenceOrder && Layout && Glb.UVs.Num() == Layout->QuantizedUVs.Num())
+			else if (Layout && Glb.UVs.Num() == Layout->QuantizedUVs.Num() && FMantleFitBodies::IsCreatorPreview(Mesh))
 			{
-				// Creator's in-memory body, put into the reference order by the learned map: its positions, normals and skin are
+				// Creator's in-memory body, put into the reference order by the UV match: its positions, normals and skin are
 				// the reference vertices', and the layout (UVs, triangles) is the reference's own, which is what the backend checks.
-				FMantleBodyLODTopology Source;
-				const FMantleCreatorBodyMap* CreatorMap = UMantleBodyTopologyData::ReadLOD(Mesh, LODIndex, Source)
-					? FMantleCreatorBodyMap::Find(Source.UVHash, Source.VertexCount) : nullptr;
-				if (CreatorMap && CreatorMap->ReferenceUVHash == Layout->UVHash)
 				{
 					for (int32 Vertex = 0; Vertex < Glb.UVs.Num(); ++Vertex)
 					{
@@ -3859,13 +3855,11 @@ bool FMantleCosmeticExport::HasReferenceTopology(const USkeletalMesh* Mesh, cons
 		FString Error;
 		if (!Layout->Match(RenderUVs, Indices, RenderOfReference, Error))
 		{
-			// MetaHuman Creator's in-memory body (the standard body types): the same body as the reference before Epic's
-			// Optimized build renumbered it, mapped by the learned point map (FMantleCreatorBodyMap).
-			const FMantleCreatorBodyMap* CreatorMap = FMantleCreatorBodyMap::Find(Topology.UVHash, Topology.VertexCount);
-			if (CreatorMap && CreatorMap->ReferenceUVHash == Contract.TopologyUVHash
-				&& Indices.Num() == Layout->Indices.Num())
+			// MetaHuman Creator's in-memory body (the standard body types): the reference layout before Epic's Optimized build cut a
+			// few quads the other way (FMantleBodyCorrespondence::MatchFlippedDiagonals). Only for the meshes Make fetched.
+			FString FlipNote;
+			if (FMantleFitBodies::IsCreatorPreview(Mesh) && Layout->MatchFlippedDiagonals(RenderUVs, Indices, RenderOfReference, FlipNote, Error))
 			{
-				RenderOfReference = CreatorMap->PreviewOfReference;
 			}
 			else
 			{
@@ -5137,7 +5131,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			Result.GarmentVariants.Add(MoveTemp(Variant));
 			Result.Notes.Add(FString::Printf(TEXT("Clothing source %s: native auto-selected %s; one catalog item, runtime policy body-rms-v1."), *Target.Id, *Prepared.OutfitSourceSize));
 		}
-		if (!Draft.FitBodiesStatus.IsEmpty()) { Result.Notes.Insert(Draft.FitBodiesStatus, 0); }
+		if (!Draft.FitBodiesStatus.IsEmpty()) { Result.Notes.Insert(Draft.FitBodyNotes, 0); Result.Notes.Insert(Draft.FitBodiesStatus, 0); }
 		return Result;
 	}
 	if (Draft.Class == EMantleCosmeticClass::Accessory && FMantleParametricOutfit::IsSource(Draft.Source.Get()))

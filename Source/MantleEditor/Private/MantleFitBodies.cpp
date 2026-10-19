@@ -4,6 +4,7 @@
 #include "MantleAvatarContract.h"
 #include "MantleBodyCorrespondence.h"
 #include "MantleBodyTopologyData.h"
+#include "MantleCosmeticExport.h"
 #include "MantleParametricOutfit.h"
 
 #include "Async/Async.h"
@@ -26,6 +27,13 @@ static_assert(static_cast<int32>(EMetaHumanBodyType::f_med_nrw) == 0 && static_c
 // Named, not anonymous: MantleEditor builds as a unity build.
 namespace MantleFitBodiesPrivate
 {
+	FCriticalSection CreatorPreviewLock;
+	TSet<TWeakObjectPtr<const USkeletalMesh>>& CreatorPreviews()
+	{
+		static TSet<TWeakObjectPtr<const USkeletalMesh>> Meshes;
+		return Meshes;
+	}
+
 	UMetaHumanCharacterEditorSubsystem* GetSubsystem()
 	{
 		return GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
@@ -246,6 +254,12 @@ bool FMantleFitBodies::Make(const FString& Id, const EMetaHumanBodyType Type, FM
 		return false;
 	}
 	Out.BodyMesh.Reset(Preview.BodyMesh.Get());
+	{
+		FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
+		TSet<TWeakObjectPtr<const USkeletalMesh>>& Meshes = MantleFitBodiesPrivate::CreatorPreviews();
+		for (auto It = Meshes.CreateIterator(); It; ++It) { if (!It->IsValid()) { It.RemoveCurrent(); } }
+		Meshes.Add(Preview.BodyMesh.Get());
+	}
 	Out.FaceMesh.Reset(Preview.FaceMesh.Get());
 	Out.MergedHeadAndBodyMesh.Reset(Preview.MergedHeadAndBodyMesh.Get());
 	UE_LOG(LogMantleFitBodies, Display, TEXT("fit body %s made in memory"), *Out.Id);
@@ -262,6 +276,11 @@ void FMantleFitBodies::Release(FMantleFitBody& Body)
 		}
 	}
 	Body.bEditing = false;
+	if (Body.BodyMesh.IsValid())
+	{
+		FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
+		MantleFitBodiesPrivate::CreatorPreviews().Remove(Body.BodyMesh.Get());
+	}
 	Body.BodyMesh.Reset();
 	Body.FaceMesh.Reset();
 	Body.MergedHeadAndBodyMesh.Reset();
@@ -311,7 +330,13 @@ FString FMantleFitBodies::DescribeReferenceTopology(const USkeletalMesh* Mesh, c
 	return Out.IsEmpty() ? FString(TEXT("no LODs")) : Out;
 }
 
-USkeletalMesh* FMantleFitBodies::PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog)
+bool FMantleFitBodies::IsCreatorPreview(const USkeletalMesh* Mesh)
+{
+	FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
+	return Mesh && MantleFitBodiesPrivate::CreatorPreviews().Contains(Mesh);
+}
+
+USkeletalMesh* FMantleFitBodies::PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog, FString* OutOrdering)
 {
 	const auto Counts = [](const USkeletalMesh* Mesh)
 	{
@@ -336,6 +361,26 @@ USkeletalMesh* FMantleFitBodies::PickShapeBody(const FMantleFitBody& Body, const
 		if (LOD != INDEX_NONE)
 		{
 			OutLog += FString::Printf(TEXT(" (LOD %d has the reference topology)"), LOD);
+			if (OutOrdering)
+			{
+				// How this body was put in the reference order: as built, or by the UV match with flipped diagonals.
+				FMantleBodyLODTopology Topology;
+				TArray<FVector2f> UVs;
+				TArray<uint32> Indices;
+				const FMantleBodyCorrespondence* Layout = FMantleBodyCorrespondence::Get();
+				const FSkeletalMeshRenderData* RenderData = Candidates[Index]->GetResourceForRendering();
+				FString How = TEXT("reference order");
+				if (Layout && RenderData && UMantleBodyTopologyData::ReadLOD(Candidates[Index], LOD, Topology, nullptr, &UVs) && RenderData->LODRenderData.IsValidIndex(LOD))
+				{
+					RenderData->LODRenderData[LOD].MultiSizeIndexContainer.GetIndexBuffer(Indices);
+					TArray<int32> Map;
+					FString Error;
+					if (Layout->Match(UVs, Indices, Map, Error)) { How = TEXT("exact UV/connectivity match"); }
+					else if (Layout->MatchFlippedDiagonals(UVs, Indices, Map, How, Error)) { }
+					else { How = Error; }
+				}
+				*OutOrdering = FString::Printf(TEXT("%s: %s LOD %d, %s"), *Body.Id, Names[Index], LOD, *How);
+			}
 			UE_LOG(LogMantleFitBodies, Display, TEXT("MANTLE_FIT_BODIES %s: %s"), *Body.Id, *OutLog);
 			return Candidates[Index];
 		}
