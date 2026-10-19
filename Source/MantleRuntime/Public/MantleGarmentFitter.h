@@ -202,9 +202,10 @@ public:
 
 	/**
 	 * Part of the cosmetic cache's fit key, so fits made by an older FitToWearer are not reused. 2: the
-	 * collar takes the face's skin weights and the garment's slots grow to the skin's.
+	 * collar takes the face's skin weights and the garment's slots grow to the skin's. 3: the face's share
+	 * is smoothed around the collar, and the weight smoothing covers the vertices that took it.
 	 */
-	static constexpr int32 WearerFitVersion = 2;
+	static constexpr int32 WearerFitVersion = 3;
 
 	/**
 	 * Fills Shape.Weights with the engine's RBF weights over Shape.Positions using PointCount
