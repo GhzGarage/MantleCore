@@ -55,6 +55,8 @@ namespace MantleDevNeckCheckPrivate
 		uint32 FaceNumbering = 0;
 		/** UV0 centroid of each face triangle, by triangle index (shape independent), and the triangle count of every face LOD. */
 		TArray<FVector2f> UVCentroids;
+		/** The three UV0s of each face triangle, by triangle index. */
+		TArray<FVector2f> TriangleUVs;
 		FString FaceLODs;
 	};
 
@@ -110,6 +112,7 @@ namespace MantleDevNeckCheckPrivate
 			for (int32 First = 0; First + 2 < Out.FaceIndices.Num(); First += 3)
 			{
 				Out.UVCentroids.Add((UVBuffer.GetVertexUV(Out.FaceIndices[First], 0) + UVBuffer.GetVertexUV(Out.FaceIndices[First + 1], 0) + UVBuffer.GetVertexUV(Out.FaceIndices[First + 2], 0)) / 3.0f);
+				for (int32 Corner = 0; Corner < 3; ++Corner) { Out.TriangleUVs.Add(UVBuffer.GetVertexUV(Out.FaceIndices[First + Corner], 0)); }
 			}
 		}
 		Out.FaceLOD = Chosen;
@@ -161,6 +164,67 @@ namespace MantleDevNeckCheckPrivate
 			Column ? Sum.X / Column : 0.0f, Column ? Sum.Y / Column : 0.0f, Ring.Num(), RingAverage, RingMax, Region);
 	}
 
+	/**
+	 * Which triangles differ by UV centroid (A's triangle T against B's): per built-layout section, how many lie in A's collar region, how far apart
+	 * they are, and whether the same triangle (the same three UVs, in any corner order) exists in B at another index (a renumbering) or not at all (a
+	 * different triangle). The first differing triangles in the region are listed.
+	 */
+	void DescribeDiffering(const FNeckCase& A, const FNeckCase& B)
+	{
+		if (A.TriangleUVs.Num() != A.Centroids.Num() * 3 || B.TriangleUVs.Num() != B.Centroids.Num() * 3 || A.Centroids.Num() != B.Centroids.Num()) { return; }
+		const FMantleFaceLayout* Layout = FMantleFaceLayout::Get();
+		const auto SameCorners = [&A, &B](const int32 TriangleA, const int32 TriangleB)
+		{
+			bool bUsed[3] = { false, false, false };
+			for (int32 CornerA = 0; CornerA < 3; ++CornerA)
+			{
+				bool bFound = false;
+				for (int32 CornerB = 0; CornerB < 3 && !bFound; ++CornerB)
+				{
+					if (!bUsed[CornerB] && FVector2f::Distance(A.TriangleUVs[TriangleA * 3 + CornerA], B.TriangleUVs[TriangleB * 3 + CornerB]) <= 0.002f) { bUsed[CornerB] = true; bFound = true; }
+				}
+				if (!bFound) { return false; }
+			}
+			return true;
+		};
+		int32 DifferingInRegion = 0, RegionMoved = 0, RegionDifferent = 0, Listed = 0;
+		TMap<FString, TPair<int32, int32>> PerSection; // (differing, of them in the region)
+		for (int32 Triangle = 0; Triangle < A.Centroids.Num(); ++Triangle)
+		{
+			if (FVector2f::Distance(A.UVCentroids[Triangle], B.UVCentroids[Triangle]) <= 0.002f) { continue; }
+			const bool bRegion = InRegion(A.Centroids[Triangle], A.BaseZ);
+			FString Section = TEXT("?");
+			if (Layout)
+			{
+				for (const FMantleFaceLayoutSection& Candidate : Layout->Sections)
+				{
+					if (Triangle >= Candidate.FirstIndex / 3 && Triangle < Candidate.FirstIndex / 3 + Candidate.NumTriangles) { Section = Candidate.Material; break; }
+				}
+			}
+			TPair<int32, int32>& Count = PerSection.FindOrAdd(Section);
+			++Count.Key;
+			Count.Value += bRegion ? 1 : 0;
+			if (!bRegion) { continue; }
+			++DifferingInRegion;
+			bool bElsewhere = false;
+			for (int32 Other = 0; Other < B.Centroids.Num() && !bElsewhere; ++Other) { bElsewhere = SameCorners(Triangle, Other); }
+			RegionMoved += bElsewhere ? 1 : 0;
+			RegionDifferent += bElsewhere ? 0 : 1;
+			if (Listed < 12)
+			{
+				++Listed;
+				UE_LOG(LogMantleNeckCheck, Display, TEXT("MANTLE_NECK_CHECK differing a=%s b=%s triangle=%d section=%s uvCentroidA=(%.4f,%.4f) uvCentroidB=(%.4f,%.4f) sameTriangleElsewhereInB=%d"),
+					*A.Name, *B.Name, Triangle, *Section, A.UVCentroids[Triangle].X, A.UVCentroids[Triangle].Y, B.UVCentroids[Triangle].X, B.UVCentroids[Triangle].Y, bElsewhere ? 1 : 0);
+			}
+		}
+		for (const TPair<FString, TPair<int32, int32>>& Pair : PerSection)
+		{
+			UE_LOG(LogMantleNeckCheck, Display, TEXT("MANTLE_NECK_CHECK differing a=%s b=%s section=%s differing=%d inCollarRegion=%d"), *A.Name, *B.Name, *Pair.Key, Pair.Value.Key, Pair.Value.Value);
+		}
+		UE_LOG(LogMantleNeckCheck, Display, TEXT("MANTLE_NECK_CHECK differing a=%s b=%s collarRegion: differing=%d (same triangle at another index in B=%d, no such triangle in B=%d)"),
+			*A.Name, *B.Name, DifferingInRegion, RegionMoved, RegionDifferent);
+	}
+
 	/** Triangle T of A against triangle T of B, and against B's nearest centroid, over A's collar region. */
 	void ComparePair(const FNeckCase& A, const FNeckCase& B)
 	{
@@ -199,6 +263,7 @@ namespace MantleDevNeckCheckPrivate
 		}
 		UE_LOG(LogMantleNeckCheck, Display, TEXT("MANTLE_NECK_CHECK pair a=%s b=%s uvCentroidSameIndex: trianglesDiffering=%d of %d, avg=%.5f max=%.5f"), *A.Name, *B.Name, UVDiffer,
 			A.UVCentroids.Num(), A.UVCentroids.IsEmpty() ? -1.0 : UVSum / A.UVCentroids.Num(), UVMax);
+		if (UVDiffer > 0) { DescribeDiffering(A, B); }
 		UE_LOG(LogMantleNeckCheck, Display,
 			TEXT("MANTLE_NECK_CHECK pair a=%s b=%s regionTris=%d sameIndexAvgCm=%.3f sameIndexMaxCm=%.3f nearestCentroidAvgCm=%.3f nearestCentroidMaxCm=%.3f"),
 			*A.Name, *B.Name, Probe.Num(), Probe.IsEmpty() ? -1.0 : SumSame / Probe.Num(), MaxSame, NearestAverage, NearestMax);
@@ -244,6 +309,7 @@ namespace MantleDevNeckCheckPrivate
 						{
 							Case.Centroids.Add((Case.FacePositions[Case.FaceIndices[First]] + Case.FacePositions[Case.FaceIndices[First + 1]] + Case.FacePositions[Case.FaceIndices[First + 2]]) / 3.0f);
 							Case.UVCentroids.Add((Face.UVs[Case.FaceIndices[First]] + Face.UVs[Case.FaceIndices[First + 1]] + Face.UVs[Case.FaceIndices[First + 2]]) / 3.0f);
+							for (int32 Corner = 0; Corner < 3; ++Corner) { Case.TriangleUVs.Add(Face.UVs[Case.FaceIndices[First + Corner]]); }
 						}
 						Case.FaceLOD = LOD;
 						Case.FaceLODs = TEXT("matched");

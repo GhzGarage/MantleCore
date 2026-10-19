@@ -2681,10 +2681,12 @@ namespace MantleCosmeticExportPrivate
 				return false;
 			}
 			FString Why;
-			if (Layout->IsNumberedLikeThis(Out.Glb, Why))
+			float BaseZ = 0.0f;
+			const bool bHasBase = FMantleFitBodies::NeckBaseZ(Face, BaseZ);
+			if (Layout->IsNumberedLikeThis(Out.Glb, Why, bHasBase ? &BaseZ : nullptr, &Note))
 			{
-				// The normal case: the fit bodies' faces are made from the DNA archetype like the build's, so they already number triangles like built faces.
-				if (OutNote) { *OutNote = TEXT("face numbered like Epic's built faces"); }
+				// The normal case: the fit bodies' faces are made from the DNA archetype like the build's, so they number the collar's triangles like built faces.
+				if (OutNote) { *OutNote = Note; }
 			}
 			else if (!Layout->Reorder(Out.Glb, Note, OutError))
 			{

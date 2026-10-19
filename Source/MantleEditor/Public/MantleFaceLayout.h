@@ -63,9 +63,11 @@ struct MANTLEEDITOR_API FMantleFaceLayout
 	/**
 	 * True when Mesh (one primitive per section, in this layout's order) already numbers its triangles like this layout: the same triangle count and
 	 * every triangle's UV centroid where the layout's triangle of that index has it. A face MetaHuman Creator made from the DNA archetype (as the
-	 * build does) is; nothing then needs reordering. OutWhy says what differs when it is not.
+	 * build does) is; nothing then needs reordering. OutWhy says what differs when it is not. With NeckBaseZ (the body's neck base) only the triangles of
+	 * the collar region the client samples (6 cm under the base to 12 cm over it, within 16 cm of the axis, by the mesh's own triangle centroids) have to
+	 * match; the others are counted into OutNote. The UV centroid is the same however the corners are rotated.
 	 */
-	bool IsNumberedLikeThis(const FMantleGlbMesh& Mesh, FString& OutWhy) const;
+	bool IsNumberedLikeThis(const FMantleGlbMesh& Mesh, FString& OutWhy, const float* NeckBaseZ = nullptr, FString* OutNote = nullptr) const;
 
 	static bool Parse(const FString& Json, FMantleFaceLayout& Out, FString& OutError);
 	FString ToJson() const;

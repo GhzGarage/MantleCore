@@ -424,7 +424,7 @@ bool FMantleFaceLayout::Reorder(FMantleGlbMesh& Mesh, FString& OutNote, FString&
 	return true;
 }
 
-bool FMantleFaceLayout::IsNumberedLikeThis(const FMantleGlbMesh& Mesh, FString& OutWhy) const
+bool FMantleFaceLayout::IsNumberedLikeThis(const FMantleGlbMesh& Mesh, FString& OutWhy, const float* NeckBaseZ, FString* OutNote) const
 {
 	int32 Triangles = 0;
 	for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives) { Triangles += Primitive.Indices.Num() / 3; }
@@ -434,7 +434,7 @@ bool FMantleFaceLayout::IsNumberedLikeThis(const FMantleGlbMesh& Mesh, FString& 
 		return false;
 	}
 	const float Scale = 1.0f / static_cast<float>(Quantization);
-	int32 Triangle = 0, Differing = 0, FirstDiffering = INDEX_NONE;
+	int32 Triangle = 0, Differing = 0, FirstDiffering = INDEX_NONE, InRegion = 0, DifferingInRegion = 0;
 	for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives)
 	{
 		for (int32 First = 0; First + 2 < Primitive.Indices.Num(); First += 3, ++Triangle)
@@ -453,18 +453,39 @@ bool FMantleFaceLayout::IsNumberedLikeThis(const FMantleGlbMesh& Mesh, FString& 
 				const FIntPoint& UV = QuantizedUVs[Indices[Triangle * 3 + Corner]];
 				Wanted += FVector2f(UV.X * Scale, UV.Y * Scale) / 3.0f;
 			}
+			bool bRegion = false;
+			if (NeckBaseZ && bValid)
+			{
+				FVector3f Where = FVector3f::ZeroVector;
+				for (int32 Corner = 0; Corner < 3; ++Corner) { Where += Mesh.Positions[Primitive.FirstVertex + static_cast<int32>(Primitive.Indices[First + Corner])] / 3.0f; }
+				bRegion = Where.Z >= *NeckBaseZ - 6.0f && Where.Z < *NeckBaseZ + 12.0f && FMath::Sqrt(Where.X * Where.X + Where.Y * Where.Y) <= 16.0f;
+			}
+			InRegion += bRegion ? 1 : 0;
 			if (!bValid || FMath::Abs(Centroid.X - Wanted.X) > 2.0f * Scale || FMath::Abs(Centroid.Y - Wanted.Y) > 2.0f * Scale)
 			{
 				++Differing;
+				DifferingInRegion += bRegion ? 1 : 0;
 				if (FirstDiffering == INDEX_NONE) { FirstDiffering = Triangle; }
 			}
 		}
+	}
+	if (NeckBaseZ)
+	{
+		if (DifferingInRegion > 0 || InRegion == 0)
+		{
+			OutWhy = FString::Printf(TEXT("%d of the %d collar-region triangles are not where the built face layout has them (%d of %d triangles overall)"), DifferingInRegion, InRegion, Differing, Triangles);
+			return false;
+		}
+		if (OutNote) { *OutNote = FString::Printf(TEXT("face numbered like Epic's built faces in the collar region (%d triangles); %d of %d triangles outside it differ"), InRegion, Differing, Triangles); }
+		UE_LOG(LogMantleFaceLayout, Display, TEXT("MANTLE_FACE_LAYOUT numbering: %d collar-region triangles all match; %d of %d triangles differ, all outside the region"), InRegion, Differing, Triangles);
+		return true;
 	}
 	if (Differing > 0)
 	{
 		OutWhy = FString::Printf(TEXT("%d of %d triangles are not where the built face layout has them (the first is triangle %d)"), Differing, Triangles, FirstDiffering);
 		return false;
 	}
+	if (OutNote) { *OutNote = TEXT("face numbered like Epic's built faces"); }
 	return true;
 }
 

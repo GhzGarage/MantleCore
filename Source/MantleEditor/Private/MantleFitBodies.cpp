@@ -48,6 +48,13 @@ namespace MantleFitBodiesPrivate
 		return Meshes;
 	}
 
+	/** The preview body that goes with each preview face (under CreatorPreviewLock). */
+	TMap<TWeakObjectPtr<const USkeletalMesh>, TWeakObjectPtr<const USkeletalMesh>>& FaceBodies()
+	{
+		static TMap<TWeakObjectPtr<const USkeletalMesh>, TWeakObjectPtr<const USkeletalMesh>> Map;
+		return Map;
+	}
+
 	UMetaHumanCharacterEditorSubsystem* GetSubsystem()
 	{
 		return GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
@@ -277,7 +284,7 @@ bool FMantleFitBodies::Make(const FString& Id, const EMetaHumanBodyType Type, FM
 		TSet<TWeakObjectPtr<const USkeletalMesh>>& Meshes = MantleFitBodiesPrivate::CreatorPreviews();
 		for (auto It = Meshes.CreateIterator(); It; ++It) { if (!It->IsValid()) { It.RemoveCurrent(); } }
 		Meshes.Add(Preview.BodyMesh.Get());
-		if (Preview.FaceMesh) { Meshes.Add(Preview.FaceMesh.Get()); }
+		if (Preview.FaceMesh) { Meshes.Add(Preview.FaceMesh.Get()); MantleFitBodiesPrivate::FaceBodies().Add(Preview.FaceMesh.Get(), Preview.BodyMesh.Get()); }
 	}
 	Out.FaceMesh.Reset(Preview.FaceMesh.Get());
 	Out.MergedHeadAndBodyMesh.Reset(Preview.MergedHeadAndBodyMesh.Get());
@@ -300,7 +307,7 @@ void FMantleFitBodies::Release(FMantleFitBody& Body)
 	{
 		FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
 		MantleFitBodiesPrivate::CreatorPreviews().Remove(Body.BodyMesh.Get());
-		if (Body.FaceMesh.IsValid()) { MantleFitBodiesPrivate::CreatorPreviews().Remove(Body.FaceMesh.Get()); }
+		if (Body.FaceMesh.IsValid()) { MantleFitBodiesPrivate::CreatorPreviews().Remove(Body.FaceMesh.Get()); MantleFitBodiesPrivate::FaceBodies().Remove(Body.FaceMesh.Get()); }
 	}
 	Body.BodyMesh.Reset();
 	Body.FaceMesh.Reset();
@@ -387,6 +394,34 @@ bool FMantleFitBodies::IsCreatorPreview(const USkeletalMesh* Mesh)
 {
 	FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
 	return Mesh && MantleFitBodiesPrivate::CreatorPreviews().Contains(Mesh);
+}
+
+bool FMantleFitBodies::NeckBaseZ(const USkeletalMesh* Face, float& OutZ)
+{
+	const USkeletalMesh* Body = nullptr;
+	{
+		FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
+		const TWeakObjectPtr<const USkeletalMesh>* Found = Face ? MantleFitBodiesPrivate::FaceBodies().Find(Face) : nullptr;
+		Body = Found ? Found->Get() : nullptr;
+	}
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get();
+	if (!Body || !Contract)
+	{
+		return false;
+	}
+	for (int32 LOD = 0; LOD < UMantleBodyTopologyData::GetNumLODs(Body); ++LOD)
+	{
+		FMantleBodyLODTopology Topology;
+		TArray<FVector3f> Positions;
+		if (UMantleBodyTopologyData::ReadLOD(Body, LOD, Topology, &Positions) && Topology.VertexCount == Contract->TopologyVertexCount)
+		{
+			float Base = -MAX_flt;
+			for (const FVector3f& P : Positions) { if (P.X * P.X + P.Y * P.Y <= 12.0f * 12.0f) { Base = FMath::Max(Base, P.Z); } }
+			OutZ = Base;
+			return Base > -MAX_flt;
+		}
+	}
+	return false;
 }
 
 USkeletalMesh* FMantleFitBodies::PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog, FString* OutOrdering)

@@ -110,6 +110,9 @@ struct MANTLEEDITOR_API FMantleFitBodies
 	 */
 	static bool IsCreatorPreview(const USkeletalMesh* Mesh);
 
+	/** The client's neck base (the highest body vertex within 12 cm of the z axis) of the body that goes with a face Make fetched; false for any other face. */
+	static bool NeckBaseZ(const USkeletalMesh* Face, float& OutZ);
+
 	/** LOD's vertex positions (component space, cm) from the render data, or the mesh description when there is no CPU copy. */
 	static bool ReadVertices(const USkeletalMesh* Mesh, int32 LODIndex, TArray<FVector3f>& OutPositions);
 
