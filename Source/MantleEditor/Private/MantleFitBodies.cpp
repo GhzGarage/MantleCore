@@ -2,6 +2,8 @@
 #include "MantleFitBodies.h"
 
 #include "MantleAvatarContract.h"
+#include "MantleBodyCorrespondence.h"
+#include "MantleBodyTopologyData.h"
 #include "MantleParametricOutfit.h"
 
 #include "Async/Async.h"
@@ -266,6 +268,49 @@ void FMantleFitBodies::Release(FMantleFitBody& Body)
 	Body.Character.Reset();
 }
 
+FString FMantleFitBodies::DescribeReferenceTopology(const USkeletalMesh* Mesh, const FMantleAvatarContract& Contract)
+{
+	FString Out;
+	const int32 NumLODs = UMantleBodyTopologyData::GetNumLODs(Mesh);
+	const FMantleBodyCorrespondence* Layout = FMantleBodyCorrespondence::Get();
+	for (int32 LOD = 0; LOD < NumLODs; ++LOD)
+	{
+		FMantleBodyLODTopology Topology;
+		TArray<FVector2f> UVs;
+		FString ReadError;
+		FString Line;
+		if (!UMantleBodyTopologyData::ReadLOD(Mesh, LOD, Topology, nullptr, &UVs, &ReadError))
+		{
+			Line = FString::Printf(TEXT("LOD%d unreadable (%s)"), LOD, *ReadError);
+		}
+		else
+		{
+			Line = FString::Printf(TEXT("LOD%d %d verts, %d tris, %d sections, uvhash %08x (reference %d verts, uvhash %08x)"), LOD, Topology.VertexCount,
+				Topology.TriangleCount, Topology.SectionCount, Topology.UVHash, Contract.TopologyVertexCount, Contract.TopologyUVHash);
+			if (Topology.VertexCount == Contract.TopologyVertexCount)
+			{
+				const FSkeletalMeshRenderData* RenderData = Mesh->GetResourceForRendering();
+				TArray<uint32> Indices;
+				if (RenderData && RenderData->LODRenderData.IsValidIndex(LOD))
+				{
+					RenderData->LODRenderData[LOD].MultiSizeIndexContainer.GetIndexBuffer(Indices);
+				}
+				FString MatchError = TEXT("no layout resource");
+				TArray<int32> Map;
+				if (Layout)
+				{
+					FString Error;
+					MatchError = Layout->Match(UVs, Indices, Map, Error) ? FString(TEXT("matches")) : Error;
+					MatchError += FString::Printf(TEXT(" [indices %d, reference %d]"), Indices.Num(), Layout->Indices.Num());
+				}
+				Line += TEXT(": Match: ") + MatchError;
+			}
+		}
+		Out += (Out.IsEmpty() ? TEXT("") : TEXT("; ")) + Line;
+	}
+	return Out.IsEmpty() ? FString(TEXT("no LODs")) : Out;
+}
+
 USkeletalMesh* FMantleFitBodies::PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog)
 {
 	const auto Counts = [](const USkeletalMesh* Mesh)
@@ -295,6 +340,7 @@ USkeletalMesh* FMantleFitBodies::PickShapeBody(const FMantleFitBody& Body, const
 			return Candidates[Index];
 		}
 	}
+	OutLog += TEXT(". Why the body mesh does not match: ") + DescribeReferenceTopology(Body.BodyMesh.Get(), Contract);
 	UE_LOG(LogMantleFitBodies, Warning, TEXT("MANTLE_FIT_BODIES %s: no LOD with the reference topology: %s"), *Body.Id, *OutLog);
 	return nullptr;
 }

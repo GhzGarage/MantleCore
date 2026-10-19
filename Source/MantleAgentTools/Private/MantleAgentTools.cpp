@@ -10,6 +10,7 @@
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticPackage.h"
 #include "MantleCosmeticUpload.h"
+#include "MantleCosmeticValidation.h"
 #include "MantleEditorActions.h"
 #include "MantleHeadFit.h"
 #include "MantleParametricOutfit.h"
@@ -820,6 +821,8 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 	{
 		// Clothing from an Outfit whose standard fit bodies could not be made: it still checks, but has no variants.
 		OutPackage.Notes.Add(Draft.FitBodiesStatus);
+		OutPackage.Issues.Add(FMantleCosmeticChecks::Warning(Draft.FitBodiesStatus,
+			TEXT("It can still be uploaded, but with one size only: the clothing is stretched from it to every wearer. Fix the cause above and check again.")));
 	}
 	return true;
 }

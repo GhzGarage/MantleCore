@@ -88,6 +88,9 @@ struct MANTLEEDITOR_API FMantleFitBodies
 	 * one of which is Mantle's 8568-vertex reference layout) and its merged head+body mesh that has a LOD with the reference
 	 * topology. Null when neither has; OutLog then lists each mesh's LOD vertex counts.
 	 */
+	/** Per LOD of Mesh, why it is or is not the reference topology: what reading it gave, counts, UV hash and the layout match's error. */
+	static FString DescribeReferenceTopology(const USkeletalMesh* Mesh, const FMantleAvatarContract& Contract);
+
 	static USkeletalMesh* PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog);
 
 	/** LOD's vertex positions (component space, cm) from the render data, or the mesh description when there is no CPU copy. */
