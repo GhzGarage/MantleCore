@@ -654,7 +654,7 @@ bool FMantleBodyCorrespondence::MatchFlippedDiagonals(TConstArrayView<FVector2f>
 				else if (FoundSecond == INDEX_NONE && OnlyInput[K] == Second) { FoundSecond = K; }
 			}
 			if (FoundFirst == INDEX_NONE || FoundSecond == INDEX_NONE) { continue; }
-			ReferenceUsed[I] = ReferenceUsed[J] = InputUsed[FoundFirst] = InputUsed[FoundSecond] = true;
+			ReferenceUsed[I] = true; ReferenceUsed[J] = true; InputUsed[FoundFirst] = true; InputUsed[FoundSecond] = true;
 			++Flipped;
 		}
 	}
