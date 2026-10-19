@@ -5107,6 +5107,25 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			}
 			FMantleCosmeticPackage Part = Build(Prepared, Contract);
 			if (Part.HasErrors()) { Result.Issues.Append(Part.Issues); return Result; }
+			if (!Result.GarmentVariants.IsEmpty() && Part.Materials.Num() == Result.Materials.Num())
+			{
+				// Areas are found on each source's own texels, so a later size can find a small extra area or miss one.
+				// The sections and their masks are the garment's own on every source: each takes the first source's areas.
+				for (int32 Index = 0; Index < Part.Materials.Num(); ++Index)
+				{
+					FMantleCosmeticMaterialRef& Material = Part.Materials[Index];
+					const FMantleCosmeticMaterialRef& First = Result.Materials[Index];
+					if (First.ColorRegions.IsEmpty())
+					{
+						Material.ColorRegions.Reset();
+						Material.ColorMaskKey.Reset();
+					}
+					else if (!Material.ColorMaskKey.IsEmpty())
+					{
+						Material.ColorRegions = First.ColorRegions;
+					}
+				}
+			}
 			if (!Result.GarmentVariants.IsEmpty())
 			{
 				// A found area's default colour is its average over this source's texels; one logical control keeps
