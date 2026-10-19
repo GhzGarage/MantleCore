@@ -156,6 +156,7 @@ void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& 
 			return;
 		}
 		Notes.Add(Ordering);
+		// The face goes with it; the export puts it in the built face layout (FMantleFaceLayout), or leaves it out with a Warning.
 		Targets.Add({ Body.Id, Body.Character.Get(), Shape, Body.FaceMesh.Get(), true });
 	}
 	Draft.OutfitTargets = MoveTemp(Targets);

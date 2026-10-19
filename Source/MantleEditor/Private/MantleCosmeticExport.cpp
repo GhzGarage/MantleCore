@@ -7,6 +7,7 @@
 #include "MantleBodyCoverage.h"
 #include "MantleBodyCorrespondence.h"
 #include "MantleBodyShape.h"
+#include "MantleFaceLayout.h"
 #include "MantleFitBodies.h"
 #include "MantleBodyTopologyData.h"
 #include "MantleCatalogGarmentFit.h"
@@ -2639,7 +2640,7 @@ namespace MantleCosmeticExportPrivate
 	 * within the face class's triangle limit, fitted to the face skeleton. False with the sentence for the creator.
 	 */
 	bool ReadFaceSource(const USkeletalMesh* Face, const FMantleAvatarContract& Contract, FMeshSource& Out, FString& OutError,
-		bool bNormalizeHeadSource = false, bool* OutGenerated = nullptr)
+		bool bNormalizeHeadSource = false, bool* OutGenerated = nullptr, FString* OutNote = nullptr)
 	{
 		if (OutGenerated) *OutGenerated = false;
 		const int32 NumFaceLODs = UMantleBodyTopologyData::GetNumLODs(Face);
@@ -2667,6 +2668,33 @@ namespace MantleCosmeticExportPrivate
 		else if (!ReadSkeletalLOD(Face,FaceLOD == INDEX_NONE ? 0 : FaceLOD,Out,OutError))
 		{
 			return false;
+		}
+		if (FMantleFitBodies::IsCreatorPreview(Face))
+		{
+			// A face made in memory by MetaHuman Creator numbers its triangles differently from Epic's built faces, and the client pairs a collar's
+			// samples by triangle index: put it in the built face layout (FMantleFaceLayout), or leave it out (the caller warns) rather than tear collars.
+			const FMantleFaceLayout* Layout = FMantleFaceLayout::Get();
+			FString Note;
+			if (!Layout)
+			{
+				OutError = TEXT("MetaHuman Creator's face is numbered differently from Epic's built faces and the built face layout (Resources/FaceLayout) is missing; Mantle.Dev.RecordFaceLayout records it");
+				return false;
+			}
+			FString Why;
+			float BaseZ = 0.0f;
+			const bool bHasBase = FMantleFitBodies::NeckBaseZ(Face, BaseZ);
+			if (Layout->IsNumberedLikeThis(Out.Glb, Why, bHasBase ? &BaseZ : nullptr, &Note))
+			{
+				// The normal case: the fit bodies' faces are made from the DNA archetype like the build's, so they number the collar's triangles like built faces.
+				if (OutNote) { *OutNote = Note; }
+			}
+			else if (!Layout->Reorder(Out.Glb, Note, OutError))
+			{
+				// Fallback only: a face that is numbered differently and does not match the built layout is left out rather than tear collars.
+				OutError = TEXT("MetaHuman Creator's face is not numbered like Epic's built faces (") + Why + TEXT(") and does not match the built face layout: ") + OutError;
+				return false;
+			}
+			else if (OutNote) { *OutNote = Note; }
 		}
 		int32 Dropped = 0;
 		if (!FitToClassSkeleton(Out, Contract.AvatarFace, Contract, true, Dropped, OutError))
@@ -5585,7 +5613,8 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			{
 				FString FaceError;
 				TArray<FMantleCosmeticIssue> FaceIssues;
-				if (ReadFaceSource(AuthoringFace, Contract, FaceMesh, FaceError, bHair, &bGeneratedHeadSource))
+				FString FaceNote;
+				if (ReadFaceSource(AuthoringFace, Contract, FaceMesh, FaceError, bHair, &bGeneratedHeadSource, &FaceNote))
 				{
 					FMantleCosmeticChecks::CheckMeshLimits(FaceMesh.NumTriangles, FaceMesh.Glb.Positions.Num(), FaceMesh.Glb.MaterialNames.Num(),
 						FaceMesh.MostInfluences, Contract.AvatarFace, FaceIssues, UMantleBodyTopologyData::GetNumLODs(AuthoringFace), EMantleLODPick::FirstWithinLimit);
@@ -5601,6 +5630,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 				bFace = FaceError.IsEmpty();
 				if (bFace)
 				{
+					if (!FaceNote.IsEmpty()) { Package.Notes.Add(FaceNote); }
 					if (bGeneratedHeadSource) Package.Notes.Add(FString::Printf(TEXT("Head binding surface normalized from the same source %s LOD%d to %d triangles on a transient duplicate; source UV sections and reference rig retained, source asset unchanged."),*AuthoringFace->GetPathName(),FaceMesh.LODIndex,FaceMesh.NumTriangles));
 					FaceSurface = UploadedFaceSurface(FaceMesh);
 					Package.Notes.Add(FString::Printf(TEXT("Authored with the face %s (LOD %d, %d triangles%s)"), *AuthoringFace->GetPathName(), FaceMesh.LODIndex,

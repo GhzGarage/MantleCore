@@ -10,9 +10,11 @@
 #include "Async/Async.h"
 #include "Editor.h"
 #include "MeshDescription.h"
+#include "HAL/IConsoleManager.h"
 #include "MetaHumanCharacterBodyIdentity.h"
 #include "MetaHumanCharacterEditorSubsystem.h"
 #include "Rendering/SkeletalMeshLODRenderData.h"
+#include "Rendering/StaticMeshVertexBuffer.h"
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "SkeletalMeshAttributes.h"
 #include "UObject/Package.h"
@@ -27,11 +29,30 @@ static_assert(static_cast<int32>(EMetaHumanBodyType::f_med_nrw) == 0 && static_c
 // Named, not anonymous: MantleEditor builds as a unity build.
 namespace MantleFitBodiesPrivate
 {
+	/** Sets mh.Character.LoadMeshesFromDNA while it lives (Creator then makes face and body meshes from the DNA archetypes, as the build does). */
+	struct FScopedDnaArchetypeMeshes
+	{
+		IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(TEXT("mh.Character.LoadMeshesFromDNA"));
+		bool bPrevious = false;
+		FScopedDnaArchetypeMeshes()
+		{
+			if (Variable) { bPrevious = Variable->GetBool(); Variable->Set(true, ECVF_SetByCode); }
+			else { UE_LOG(LogMantleFitBodies, Warning, TEXT("mh.Character.LoadMeshesFromDNA is not there; the fit bodies' faces may be numbered unlike built faces")); }
+		}
+		~FScopedDnaArchetypeMeshes() { if (Variable) { Variable->Set(bPrevious, ECVF_SetByCode); } }
+	};
 	FCriticalSection CreatorPreviewLock;
 	TSet<TWeakObjectPtr<const USkeletalMesh>>& CreatorPreviews()
 	{
 		static TSet<TWeakObjectPtr<const USkeletalMesh>> Meshes;
 		return Meshes;
+	}
+
+	/** The preview body that goes with each preview face (under CreatorPreviewLock). */
+	TMap<TWeakObjectPtr<const USkeletalMesh>, TWeakObjectPtr<const USkeletalMesh>>& FaceBodies()
+	{
+		static TMap<TWeakObjectPtr<const USkeletalMesh>, TWeakObjectPtr<const USkeletalMesh>> Map;
+		return Map;
 	}
 
 	UMetaHumanCharacterEditorSubsystem* GetSubsystem()
@@ -227,6 +248,10 @@ bool FMantleFitBodies::Make(const FString& Id, const EMetaHumanBodyType Type, FM
 		return false;
 	}
 	Out.Character.Reset(Character);
+	// Epic's build makes its meshes from the DNA archetypes (TryGenerateCharacterAssets), while Creator's preview of a character that has no face DNA uses
+	// the SKM_Face / SKM_Body assets, whose triangles are numbered differently: the client's collar pairs a wearer's face to the garment's by triangle index.
+	// Have Creator open this character the way the build does, for the length of this function.
+	MantleFitBodiesPrivate::FScopedDnaArchetypeMeshes DnaArchetypes;
 	Subsystem->InitializeMetaHumanCharacter(Character);
 	if (!Character->IsCharacterValid())
 	{
@@ -259,9 +284,11 @@ bool FMantleFitBodies::Make(const FString& Id, const EMetaHumanBodyType Type, FM
 		TSet<TWeakObjectPtr<const USkeletalMesh>>& Meshes = MantleFitBodiesPrivate::CreatorPreviews();
 		for (auto It = Meshes.CreateIterator(); It; ++It) { if (!It->IsValid()) { It.RemoveCurrent(); } }
 		Meshes.Add(Preview.BodyMesh.Get());
+		if (Preview.FaceMesh) { Meshes.Add(Preview.FaceMesh.Get()); MantleFitBodiesPrivate::FaceBodies().Add(Preview.FaceMesh.Get(), Preview.BodyMesh.Get()); }
 	}
 	Out.FaceMesh.Reset(Preview.FaceMesh.Get());
 	Out.MergedHeadAndBodyMesh.Reset(Preview.MergedHeadAndBodyMesh.Get());
+	Out.FaceNumberingHash = FaceNumberingHash(Out.FaceMesh.Get());
 	UE_LOG(LogMantleFitBodies, Display, TEXT("fit body %s made in memory"), *Out.Id);
 	return true;
 }
@@ -280,6 +307,7 @@ void FMantleFitBodies::Release(FMantleFitBody& Body)
 	{
 		FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
 		MantleFitBodiesPrivate::CreatorPreviews().Remove(Body.BodyMesh.Get());
+		if (Body.FaceMesh.IsValid()) { MantleFitBodiesPrivate::CreatorPreviews().Remove(Body.FaceMesh.Get()); MantleFitBodiesPrivate::FaceBodies().Remove(Body.FaceMesh.Get()); }
 	}
 	Body.BodyMesh.Reset();
 	Body.FaceMesh.Reset();
@@ -330,10 +358,70 @@ FString FMantleFitBodies::DescribeReferenceTopology(const USkeletalMesh* Mesh, c
 	return Out.IsEmpty() ? FString(TEXT("no LODs")) : Out;
 }
 
+uint32 FMantleFitBodies::FaceNumberingHash(const USkeletalMesh* Face)
+{
+	constexpr int32 ReferenceFaceTriangles = 6872;
+	const FSkeletalMeshRenderData* RenderData = Face ? Face->GetResourceForRendering() : nullptr;
+	if (!RenderData || RenderData->LODRenderData.IsEmpty())
+	{
+		return 0;
+	}
+	int32 Chosen = 0;
+	for (int32 LOD = 0; LOD < RenderData->LODRenderData.Num(); ++LOD)
+	{
+		if (RenderData->LODRenderData[LOD].GetTotalFaces() == ReferenceFaceTriangles) { Chosen = LOD; break; }
+	}
+	const FSkeletalMeshLODRenderData& LOD = RenderData->LODRenderData[Chosen];
+	const FStaticMeshVertexBuffer& Vertices = LOD.StaticVertexBuffers.StaticMeshVertexBuffer;
+	if (!LOD.MultiSizeIndexContainer.IsIndexBufferValid() || !Vertices.GetTexCoordData() || Vertices.GetNumTexCoords() == 0)
+	{
+		return 0;
+	}
+	TArray<uint32> Indices;
+	LOD.MultiSizeIndexContainer.GetIndexBuffer(Indices);
+	uint32 Hash = 0;
+	for (int32 First = 0; First + 2 < Indices.Num(); First += 3)
+	{
+		if (Indices[First] >= Vertices.GetNumVertices() || Indices[First + 1] >= Vertices.GetNumVertices() || Indices[First + 2] >= Vertices.GetNumVertices()) { return 0; }
+		const FVector2f Centroid = (Vertices.GetVertexUV(Indices[First], 0) + Vertices.GetVertexUV(Indices[First + 1], 0) + Vertices.GetVertexUV(Indices[First + 2], 0)) / 3.0f;
+		const int32 Quantized[2] = { FMath::RoundToInt32(Centroid.X * 1024.0f), FMath::RoundToInt32(Centroid.Y * 1024.0f) };
+		Hash = FCrc::MemCrc32(Quantized, sizeof(Quantized), Hash);
+	}
+	return Hash == 0 ? 1 : Hash;
+}
+
 bool FMantleFitBodies::IsCreatorPreview(const USkeletalMesh* Mesh)
 {
 	FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
 	return Mesh && MantleFitBodiesPrivate::CreatorPreviews().Contains(Mesh);
+}
+
+bool FMantleFitBodies::NeckBaseZ(const USkeletalMesh* Face, float& OutZ)
+{
+	const USkeletalMesh* Body = nullptr;
+	{
+		FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
+		const TWeakObjectPtr<const USkeletalMesh>* Found = Face ? MantleFitBodiesPrivate::FaceBodies().Find(Face) : nullptr;
+		Body = Found ? Found->Get() : nullptr;
+	}
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get();
+	if (!Body || !Contract)
+	{
+		return false;
+	}
+	for (int32 LOD = 0; LOD < UMantleBodyTopologyData::GetNumLODs(Body); ++LOD)
+	{
+		FMantleBodyLODTopology Topology;
+		TArray<FVector3f> Positions;
+		if (UMantleBodyTopologyData::ReadLOD(Body, LOD, Topology, &Positions) && Topology.VertexCount == Contract->TopologyVertexCount)
+		{
+			float Base = -MAX_flt;
+			for (const FVector3f& P : Positions) { if (P.X * P.X + P.Y * P.Y <= 12.0f * 12.0f) { Base = FMath::Max(Base, P.Z); } }
+			OutZ = Base;
+			return Base > -MAX_flt;
+		}
+	}
+	return false;
 }
 
 USkeletalMesh* FMantleFitBodies::PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog, FString* OutOrdering)

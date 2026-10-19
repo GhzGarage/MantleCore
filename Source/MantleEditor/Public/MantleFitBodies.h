@@ -22,6 +22,8 @@ struct MANTLEEDITOR_API FMantleFitBody
 	TStrongObjectPtr<USkeletalMesh> BodyMesh;
 	TStrongObjectPtr<USkeletalMesh> FaceMesh;
 	TStrongObjectPtr<USkeletalMesh> MergedHeadAndBodyMesh;
+	/** FMantleFitBodies::FaceNumberingHash of FaceMesh; 0 when it could not be read. */
+	uint32 FaceNumberingHash = 0;
 };
 
 /**
@@ -73,6 +75,14 @@ struct MANTLEEDITOR_API FMantleFitBodies
 	 */
 	static bool Make(const FString& Id, EMetaHumanBodyType Type, FMantleFitBody& Out, FString& OutError);
 
+	/**
+	 * Fingerprint (a diagnostic, logged by Mantle.Dev.NeckCheck) of how a face numbers its triangles: a hash, in triangle order, of each triangle's UV centroid on the face LOD with the
+	 * reference face topology (6872 triangles; else LOD0). UVs are the same on every MetaHuman face, so the hash does not depend on the face's
+	 * shape, only on the numbering. The client pairs a collar's samples by triangle index, so a face must number its triangles like Epic's built
+	 * faces. 0 when unreadable.
+	 */
+	static uint32 FaceNumberingHash(const USkeletalMesh* Face);
+
 	/** Unregisters the character from editing and drops every reference, so the objects can be collected. */
 	static void Release(FMantleFitBody& Body);
 
@@ -99,6 +109,9 @@ struct MANTLEEDITOR_API FMantleFitBodies
 	 * which FMantleCosmeticExport::HasReferenceTopology accepts for these meshes and no others.
 	 */
 	static bool IsCreatorPreview(const USkeletalMesh* Mesh);
+
+	/** The client's neck base (the highest body vertex within 12 cm of the z axis) of the body that goes with a face Make fetched; false for any other face. */
+	static bool NeckBaseZ(const USkeletalMesh* Face, float& OutZ);
 
 	/** LOD's vertex positions (component space, cm) from the render data, or the mesh description when there is no CPU copy. */
 	static bool ReadVertices(const USkeletalMesh* Mesh, int32 LODIndex, TArray<FVector3f>& OutPositions);
