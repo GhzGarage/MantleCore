@@ -12,6 +12,8 @@
 #include "MantleBodyTopologyData.h"
 #include "MantleFitBodies.h"
 
+#include "Rendering/StaticMeshVertexBuffer.h"
+
 #include "Editor.h"
 #include "Engine/SkeletalMesh.h"
 #include "HAL/IConsoleManager.h"
@@ -50,6 +52,9 @@ namespace MantleDevNeckCheckPrivate
 		TArray<FVector3f> Centroids;
 		/** FMantleFitBodies::FaceNumberingHash of the face: equal on faces that number their triangles alike. */
 		uint32 FaceNumbering = 0;
+		/** UV0 centroid of each face triangle, by triangle index (shape independent), and the triangle count of every face LOD. */
+		TArray<FVector2f> UVCentroids;
+		FString FaceLODs;
 	};
 
 	/** The first LOD of a body with the reference vertex count, its vertices; false when none. */
@@ -94,6 +99,18 @@ namespace MantleDevNeckCheckPrivate
 		}
 		for (uint32 Vertex = 0; Vertex < Positions.GetNumVertices(); ++Vertex) { Out.FacePositions.Add(Positions.VertexPosition(Vertex)); }
 		LOD.MultiSizeIndexContainer.GetIndexBuffer(Out.FaceIndices);
+		for (int32 Index = 0; Index < RenderData->LODRenderData.Num(); ++Index)
+		{
+			Out.FaceLODs += (Out.FaceLODs.IsEmpty() ? TEXT("") : TEXT("/")) + FString::FromInt(static_cast<int32>(RenderData->LODRenderData[Index].GetTotalFaces()));
+		}
+		const FStaticMeshVertexBuffer& UVBuffer = LOD.StaticVertexBuffers.StaticMeshVertexBuffer;
+		if (UVBuffer.GetNumTexCoords() > 0 && UVBuffer.GetTexCoordData())
+		{
+			for (int32 First = 0; First + 2 < Out.FaceIndices.Num(); First += 3)
+			{
+				Out.UVCentroids.Add((UVBuffer.GetVertexUV(Out.FaceIndices[First], 0) + UVBuffer.GetVertexUV(Out.FaceIndices[First + 1], 0) + UVBuffer.GetVertexUV(Out.FaceIndices[First + 2], 0)) / 3.0f);
+			}
+		}
 		Out.FaceLOD = Chosen;
 		Out.FaceNumbering = FMantleFitBodies::FaceNumberingHash(Mesh);
 		for (int32 First = 0; First + 2 < Out.FaceIndices.Num(); First += 3)
@@ -138,8 +155,8 @@ namespace MantleDevNeckCheckPrivate
 		int32 Region = 0;
 		for (const FVector3f& Centroid : Case.Centroids) { Region += InRegion(Centroid, BaseZ) ? 1 : 0; }
 		UE_LOG(LogMantleNeckCheck, Display,
-			TEXT("MANTLE_NECK_CHECK case=%s faceNumbering=%08x bodyLOD=%d bodyVerts=%d faceLOD=%d faceTris=%d baseZ=%.2f bodyZ=[%.2f, %.2f] faceZ=[%.2f, %.2f] faceColumnVerts=%d faceColumnCentre=(%.2f, %.2f) ringVerts=%d ringToFaceAvgCm=%.3f ringToFaceMaxCm=%.3f regionTris=%d"),
-			*Case.Name, Case.FaceNumbering, Case.BodyLOD, Case.Body.Num(), Case.FaceLOD, Case.Centroids.Num(), BaseZ, BodyBox.Min.Z, BodyBox.Max.Z, FaceBox.Min.Z, FaceBox.Max.Z, Column,
+			TEXT("MANTLE_NECK_CHECK case=%s faceLODTris=%s faceNumbering=%08x bodyLOD=%d bodyVerts=%d faceLOD=%d faceTris=%d baseZ=%.2f bodyZ=[%.2f, %.2f] faceZ=[%.2f, %.2f] faceColumnVerts=%d faceColumnCentre=(%.2f, %.2f) ringVerts=%d ringToFaceAvgCm=%.3f ringToFaceMaxCm=%.3f regionTris=%d"),
+			*Case.Name, *Case.FaceLODs, Case.FaceNumbering, Case.BodyLOD, Case.Body.Num(), Case.FaceLOD, Case.Centroids.Num(), BaseZ, BodyBox.Min.Z, BodyBox.Max.Z, FaceBox.Min.Z, FaceBox.Max.Z, Column,
 			Column ? Sum.X / Column : 0.0f, Column ? Sum.Y / Column : 0.0f, Ring.Num(), RingAverage, RingMax, Region);
 	}
 
@@ -164,6 +181,23 @@ namespace MantleDevNeckCheckPrivate
 		}
 		float NearestAverage = -1.0f, NearestMax = -1.0f;
 		FMantleFitBodies::CompareNearest(Probe, B.Centroids, NearestAverage, NearestMax);
+		// The UV layout, triangle by triangle: zero everywhere means the two faces number their triangles alike (UVs do not depend on shape); a
+		// difference means a different numbering or a different UV layout. Over all triangles, not only the collar region.
+		int32 UVDiffer = 0;
+		float UVMax = 0.0f;
+		double UVSum = 0.0;
+		if (A.UVCentroids.Num() == A.Centroids.Num() && B.UVCentroids.Num() == B.Centroids.Num())
+		{
+			for (int32 Triangle = 0; Triangle < A.UVCentroids.Num(); ++Triangle)
+			{
+				const float Distance = FVector2f::Distance(A.UVCentroids[Triangle], B.UVCentroids[Triangle]);
+				UVSum += Distance;
+				UVMax = FMath::Max(UVMax, Distance);
+				UVDiffer += Distance > 0.002f ? 1 : 0;
+			}
+		}
+		UE_LOG(LogMantleNeckCheck, Display, TEXT("MANTLE_NECK_CHECK pair a=%s b=%s uvCentroidSameIndex: trianglesDiffering=%d of %d, avg=%.5f max=%.5f"), *A.Name, *B.Name, UVDiffer,
+			A.UVCentroids.Num(), A.UVCentroids.IsEmpty() ? -1.0 : UVSum / A.UVCentroids.Num(), UVMax);
 		UE_LOG(LogMantleNeckCheck, Display,
 			TEXT("MANTLE_NECK_CHECK pair a=%s b=%s regionTris=%d sameIndexAvgCm=%.3f sameIndexMaxCm=%.3f nearestCentroidAvgCm=%.3f nearestCentroidMaxCm=%.3f"),
 			*A.Name, *B.Name, Probe.Num(), Probe.IsEmpty() ? -1.0 : SumSame / Probe.Num(), MaxSame, NearestAverage, NearestMax);
@@ -252,6 +286,9 @@ namespace MantleDevNeckCheckPrivate
 		if (Female && AeraBuilt) { ComparePair(*Female, *AeraBuilt); }
 		if (Male && AeraBuilt) { ComparePair(*Male, *AeraBuilt); }
 		if (Male && Female) { ComparePair(*Male, *Female); }
+		// Two BUILT faces: do they pair correctly by triangle index?
+		if (AeraBuilt && BoBuilt) { ComparePair(*AeraBuilt, *BoBuilt); ComparePair(*BoBuilt, *AeraBuilt); }
+		if (AeraBuilt && Male) { ComparePair(*AeraBuilt, *Male); }
 		// Started from Epic's presets: the same-index distance should be at the nearest-centroid level (shape differences only).
 		if (FemaleFromAera && AeraBuilt) { ComparePair(*FemaleFromAera, *AeraBuilt); }
 		if (MaleFromBo && BoBuilt) { ComparePair(*MaleFromBo, *BoBuilt); }
