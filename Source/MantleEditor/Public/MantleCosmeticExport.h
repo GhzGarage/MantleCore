@@ -71,6 +71,9 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	/** Native Outfit: resize onto the Creator character behind the converted authoring body/face. */
 	TWeakObjectPtr<UMetaHumanCharacter> OutfitAuthoringCharacter;
 
+	/** Dev spike: OutfitAuthoringCharacter is a fit body made in memory (FMantleFitBodies), so Prepare skips the converted-body checks. */
+	bool bOutfitAuthoringInMemory = false;
+
 	/** Native Outfit: representative converted source shapes packaged together in one catalog item. */
 	TArray<FMantleOutfitAuthoringTarget> OutfitTargets;
 	/** Hand-made colour areas (the panel's advanced section). Any declaration here turns detection off for the item. */

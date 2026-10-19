@@ -57,19 +57,25 @@ namespace MantleParametricOutfitPrivate
 		UMetaHumanCharacter* Character = Draft.OutfitAuthoringCharacter.Get();
 		USkeletalMesh* Body = Draft.AuthoringBody.Get();
 		USkeletalMesh* Face = Draft.AuthoringFace.Get();
-		if (!Character || !FMantleAvatarConverter::IsConvertOutput(Body) || !FMantleAvatarConverter::IsConvertOutput(Face)
-			|| FMantleCosmeticExport::FindReferenceLOD(Body, Contract) == INDEX_NONE)
+		// Dev spike (Mantle.Dev.FitFromNumbers): a fit body made in memory has no converted body/face and no build stamp,
+		// so the converted-body ownership checks apply only to the converted route.
+		const bool bInMemory = Draft.bOutfitAuthoringInMemory;
+		if (!Character || (!bInMemory && (!FMantleAvatarConverter::IsConvertOutput(Body) || !FMantleAvatarConverter::IsConvertOutput(Face)
+			|| FMantleCosmeticExport::FindReferenceLOD(Body, Contract) == INDEX_NONE)))
 		{
 			Error = TEXT("native resizing requires the Creator character and its complete converted authoring body and face");
 			return nullptr;
 		}
-		const FString* BodyBuild = Body->GetPackage()->GetMetaData().FindValue(Body, FMantleAvatarConverter::BuiltKey);
-		const FString* FaceBuild = Face->GetPackage()->GetMetaData().FindValue(Face, FMantleAvatarConverter::BuiltKey);
-		const FString CharacterFolder = FPaths::GetPath(Character->GetOutermost()->GetName());
-		if (!BodyBuild || !FaceBuild || *BodyBuild != *FaceBuild || !BodyBuild->StartsWith(CharacterFolder + TEXT("/Unpacked/")))
+		if (!bInMemory)
 		{
-			Error = TEXT("the converted authoring body/face do not belong to the selected Creator character's build");
-			return nullptr;
+			const FString* BodyBuild = Body->GetPackage()->GetMetaData().FindValue(Body, FMantleAvatarConverter::BuiltKey);
+			const FString* FaceBuild = Face->GetPackage()->GetMetaData().FindValue(Face, FMantleAvatarConverter::BuiltKey);
+			const FString CharacterFolder = FPaths::GetPath(Character->GetOutermost()->GetName());
+			if (!BodyBuild || !FaceBuild || *BodyBuild != *FaceBuild || !BodyBuild->StartsWith(CharacterFolder + TEXT("/Unpacked/")))
+			{
+				Error = TEXT("the converted authoring body/face do not belong to the selected Creator character's build");
+				return nullptr;
+			}
 		}
 		UMetaHumanCharacterEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
 		if (!Subsystem) { Error = TEXT("MetaHuman Creator's editor subsystem is unavailable"); return nullptr; }
