@@ -22,6 +22,7 @@
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionTextureBase.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionUtils.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInterface.h"
 #include "MeshDescription.h"
@@ -1183,7 +1184,7 @@ namespace MantleAvatarAtlasFixerPrivate
 		UMaterialExpressionTextureSampleParameter2D* Sample = NewObject<UMaterialExpressionTextureSampleParameter2D>(&Material, NAME_None, RF_Transactional);
 		Sample->ParameterName = FName(Name);
 		Sample->Texture = Texture;
-		Sample->SamplerType = UMaterialExpressionTextureBase::GetSamplerTypeForTexture(Texture);
+		Sample->SamplerType = MaterialExpressionUtils::GetSamplerTypeForTexture(Texture);
 		Sample->MaterialExpressionEditorX = -400;
 		Sample->MaterialExpressionEditorY = Row * 250;
 		Material.GetExpressionCollection().AddExpression(Sample);
@@ -1205,7 +1206,7 @@ namespace MantleAvatarAtlasFixerPrivate
 		UMaterial* Material = NewObject<UMaterial>(Package, FName(*AssetName), RF_Public | RF_Standalone | RF_Transactional);
 		Material->BlendMode = Group.Blend == EMantleAtlasBlend::Masked ? BLEND_Masked : Group.Blend == EMantleAtlasBlend::Translucent ? BLEND_Translucent : BLEND_Opaque;
 		Material->TwoSided = Group.bTwoSided;
-		Material->bUsedWithSkeletalMesh = true;
+		Material->SetUsageByFlag(MATUSAGE_SkeletalMesh, true);
 		UMaterialEditorOnlyData* Inputs = Material->GetEditorOnlyData();
 		UMaterialExpressionTextureSampleParameter2D* Colour = AtlasAddTextureParameter(*Material, MantlePlaceMaterialParameters::BaseColor, BaseColor, 0);
 		Inputs->BaseColor.Connect(0, Colour);
