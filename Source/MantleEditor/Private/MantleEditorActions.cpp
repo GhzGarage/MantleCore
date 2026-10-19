@@ -6,6 +6,7 @@
 #include "MantleCosmeticPackage.h"
 #include "MantleCosmeticValidation.h"
 #include "MantleCreatorSignIn.h"
+#include "MantleFitBodies.h"
 #include "MantleParametricOutfit.h"
 #include "MantlePublishPanel.h"
 
@@ -50,7 +51,7 @@ FMantleCosmeticDraft FMantleEditorActions::MakeCosmeticDraft(const EMantleCosmet
 	TArray<FName> SecondaryCandidates;
 	ApplyCosmeticSecondaryDefaults(Draft, &Contract, SecondaryCandidates);
 	ApplyCosmeticOutfitDefaults(Draft);
-	ApplyCosmeticFitTargetDefaults(Draft);
+	ApplyCosmeticFitTargetDefaults(Draft, &Contract);
 	ApplyCosmeticRoleDefaults(Draft, &Contract);
 	return Draft;
 }
@@ -113,30 +114,39 @@ FMantleCosmeticOutfitRows FMantleEditorActions::ApplyCosmeticOutfitDefaults(FMan
 	return Rows;
 }
 
-void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& Draft)
+void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract)
 {
 	if (Draft.Class != EMantleCosmeticClass::Garment || !Draft.OutfitTargets.IsEmpty() || !FMantleParametricOutfit::IsSource(Draft.Source.Get()))
 	{
 		return;
 	}
-	const auto Load = [](const FString& Package) -> UObject*
+	Draft.FitBodies.Reset();
+	Draft.FitBodiesStatus.Reset();
+	if (!Contract)
 	{
-		return FPackageName::DoesPackageExist(Package) ? LoadObject<UObject>(nullptr, *(Package + TEXT(".") + FPackageName::GetShortName(Package))) : nullptr;
-	};
-	for (const TCHAR* Name : { TEXT("Aera"), TEXT("Bo") })
-	{
-		// The converter builds a copy of the preset (Converted/<Name>/<Name>); its build sits under that copy's Unpacked folder.
-		const FString Copy = FString::Printf(TEXT("/Game/MetaHumans/%s/Converted/%s"), Name, Name);
-		const FString Built = FString::Printf(TEXT("%s/Unpacked/%s"), *Copy, Name);
-		UMetaHumanCharacter* Character = Cast<UMetaHumanCharacter>(Load(FString::Printf(TEXT("%s/%s"), *Copy, Name)));
-		USkeletalMesh* Body = Cast<USkeletalMesh>(Load(FString::Printf(TEXT("%s/Body/SKM_%s_BodyMesh"), *Built, Name)));
-		USkeletalMesh* Face = Cast<USkeletalMesh>(Load(FString::Printf(TEXT("%s/Face/SKM_%s_FaceMesh"), *Built, Name)));
-		if (!Character || !Body || !Face)
-		{
-			continue;
-		}
-		Draft.OutfitTargets.Add({ FString(Name).ToLower(), Character, Body, Face });
+		Contract = FMantleAvatarContract::Get();
 	}
+	if (!Contract)
+	{
+		Draft.FitBodiesStatus = TEXT("Garment variants were not made: the avatar contract is unavailable.");
+		return;
+	}
+	// Epic's standard body types, made in memory (no converted Aera/Bo, no Epic sign-in). The set lives in the draft, so
+	// the bodies last for the whole check and upload, and are released when the last copy of the draft goes.
+	TSharedPtr<FMantleFitBodySet> Set;
+	FString Error;
+	if (!FMantleFitBodies::MakeSet(Draft.Source.Get(), Draft.FitSex, *Contract, Set, Error) || !Set.IsValid())
+	{
+		Draft.FitBodiesStatus = FString::Printf(TEXT("Garment variants were not made: %s."), *Error);
+		UE_LOG(LogTemp, Warning, TEXT("MANTLE_FIT_BODIES %s"), *Draft.FitBodiesStatus);
+		return;
+	}
+	for (const FMantleFitBody& Body : Set->Bodies)
+	{
+		Draft.OutfitTargets.Add({ Body.Id, Body.Character.Get(), Body.MergedHeadAndBodyMesh.Get(), Body.FaceMesh.Get(), true });
+	}
+	Draft.FitBodies = Set;
+	Draft.FitBodiesStatus = Set->Status;
 }
 
 bool FMantleEditorActions::ApplyCosmeticJawDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract, TArray<FName>& OutCandidates)

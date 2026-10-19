@@ -18,14 +18,25 @@ struct FMantleContractSkeleton;
 class UTexture;
 class UTexture2D;
 struct FMantleSkinnedMesh;
+struct FMantleFitBodySet;
 
-/** One representative current converted shape for a logical native clothing piece. */
+/** Which sex's standard MetaHuman bodies an Outfit's garment variants are fitted to. Auto lets the plugin decide from the Outfit's own sizes. */
+enum class EMantleFitSex : uint8
+{
+	Auto,
+	Female,
+	Male,
+};
+
+/** One representative body shape for a logical native clothing piece: a converted Creator character, or a standard body type made in memory. */
 struct MANTLEEDITOR_API FMantleOutfitAuthoringTarget
 {
 	FString Id;
 	TWeakObjectPtr<UMetaHumanCharacter> Character;
 	TWeakObjectPtr<USkeletalMesh> Body;
 	TWeakObjectPtr<USkeletalMesh> Face;
+	/** A standard body type made in memory (FMantleFitBodies): Body is its merged head+body, and the converted-body checks do not apply. */
+	bool bInMemory = false;
 };
 
 /** Explicit UV0 mask and region controls for one named exported clothing material. */
@@ -70,6 +81,19 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 
 	/** Native Outfit: resize onto the Creator character behind the converted authoring body/face. */
 	TWeakObjectPtr<UMetaHumanCharacter> OutfitAuthoringCharacter;
+
+	/** OutfitAuthoringCharacter is a standard body type made in memory (FMantleFitBodies), so Prepare skips the converted-body checks. */
+	bool bOutfitAuthoringInMemory = false;
+
+	/**
+	 * Clothing from an Outfit: which sex's standard bodies the garment variants are fitted to. Auto (the default) picks from the
+	 * Outfit's own authored sizes; Female or Male overrides it. Read by FMantleEditorActions::ApplyCosmeticFitTargetDefaults.
+	 */
+	EMantleFitSex FitSex = EMantleFitSex::Auto;
+	/** The standard bodies behind OutfitTargets that were made in memory; held here so they live as long as any copy of the draft (the whole export), and are released with the last. */
+	TSharedPtr<FMantleFitBodySet> FitBodies;
+	/** What ApplyCosmeticFitTargetDefaults chose and why, or why it made no fit bodies; shown in the check's notes. */
+	FString FitBodiesStatus;
 
 	/** Native Outfit: representative converted source shapes packaged together in one catalog item. */
 	TArray<FMantleOutfitAuthoringTarget> OutfitTargets;

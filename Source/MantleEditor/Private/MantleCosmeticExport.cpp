@@ -5003,7 +5003,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 		Result.Description = Draft.Description;
 		if (!FMantleParametricOutfit::IsSource(Draft.Source.Get()) || Draft.OutfitTargets.Num() > 8)
 		{
-			Result.Issues.Add(FMantleCosmeticChecks::Error(TEXT("One logical native clothing piece needs one to eight representative converted source bodies.")));
+			Result.Issues.Add(FMantleCosmeticChecks::Error(TEXT("One logical native clothing piece needs one to eight representative source bodies.")));
 			return Result;
 		}
 		TArray<FMantleOutfitSourceSize> SourceSizes;
@@ -5032,7 +5032,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			}
 			if (!bValidId || Seen.Contains(Target.Id) || !Target.Character.IsValid() || !Target.Body.IsValid() || !Target.Face.IsValid())
 			{
-				Result.Issues.Add(FMantleCosmeticChecks::Error(TEXT("Every clothing source needs a unique lowercase ID, Creator character, and its converted body and face.")));
+				Result.Issues.Add(FMantleCosmeticChecks::Error(TEXT("Every clothing source needs a unique lowercase ID, a Creator character, and its body and face.")));
 				return Result;
 			}
 			Seen.Add(Target.Id);
@@ -5040,6 +5040,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			Input.OutfitTargets.Reset();
 			Input.OutfitSourceSize.Reset(); // Native selection chooses from every authored size for this target.
 			Input.OutfitAuthoringCharacter = Target.Character;
+			Input.bOutfitAuthoringInMemory = Target.bInMemory;
 			Input.AuthoringBody = Target.Body;
 			Input.AuthoringFace = Target.Face;
 			FMantleCosmeticDraft Prepared;
@@ -5103,6 +5104,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			Result.GarmentVariants.Add(MoveTemp(Variant));
 			Result.Notes.Add(FString::Printf(TEXT("Clothing source %s: native auto-selected %s; one catalog item, runtime policy body-rms-v1."), *Target.Id, *Prepared.OutfitSourceSize));
 		}
+		if (!Draft.FitBodiesStatus.IsEmpty()) { Result.Notes.Insert(Draft.FitBodiesStatus, 0); }
 		return Result;
 	}
 	if (Draft.Class == EMantleCosmeticClass::Accessory && FMantleParametricOutfit::IsSource(Draft.Source.Get()))

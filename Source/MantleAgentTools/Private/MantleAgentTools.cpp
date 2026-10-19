@@ -816,6 +816,11 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 
 	OutObjectPath = Asset->GetPathName();
 	OutPackage = FMantleCosmeticExport::Build(Draft, *Contract);
+	if (OutPackage.GarmentVariants.IsEmpty() && !Draft.FitBodiesStatus.IsEmpty())
+	{
+		// Clothing from an Outfit whose standard fit bodies could not be made: it still checks, but has no variants.
+		OutPackage.Notes.Add(Draft.FitBodiesStatus);
+	}
 	return true;
 }
 

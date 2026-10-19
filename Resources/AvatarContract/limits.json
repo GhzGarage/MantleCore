@@ -27,6 +27,11 @@
     "maxStandingHeightCm": 210,
     "comment": "#581: the character's gameplay size follows its avatar. The server scales the hidden driver (SKM_UEFN_Mannequin), its hitboxes (PA_UEFN_Mannequin), the capsule and the eye uniformly by s = clamp(bodyMetrics.standingHeightCm x heightPct / 100, minStandingHeightCm, maxStandingHeightCm) / driverStandingHeightCm, from the avatar item's metrics it fetches itself; an item without metrics plays at s = heightPct / 100, and a place with settings.avatarHeight uniform at s = 1. driverStandingHeightCm is the top of SKM_UEFN_Mannequin in its reference pose (its imported bounds, 165.57 cm). The mannequin has no eye bones (its head joint is at 152.0 cm): driverEyeHeightCm is the mean of the two reference eyes normalized to the driver's scale (156.4 cm and 155.4 cm; each is within 0.5 cm), the server's eye and the first-person camera at s = 1. The client mirrors these values in FMantleCharacterScale."
   },
+  "garmentFit": {
+    "comment": "Garment variants (clothing from a MetaHuman Outfit) are fitted to Epic's fixed compatibility bodies, made in memory by the plugin: <sex>_<entry>, so female med_nrw is f_med_nrw (the variant id). Entries are srt|med|tal then unw|nrw|ovw; at most 8 (the backend's variant limit, garment_variants.go). The plugin picks female or male from the Outfit's own authored size bodies: male only when closer to the male body than the female one by more than sexMarginCm, else female.",
+    "bodyTypes": ["med_unw", "med_nrw", "med_ovw"],
+    "sexMarginCm": 0.25
+  },
   "version": 1,
   "comment": "Avatar catalog contract, read by the backend (go:embed), the cook worker, the plugin and the client. everything, avatarBounds included (see sourceStatus), is hand-maintained and cross-checked by schema/validate.py against avatar.schema.json, the palettes, the empty base-avatars.json registry and the skeleton fixtures.",
   "skin": {

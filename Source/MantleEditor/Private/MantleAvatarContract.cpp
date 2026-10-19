@@ -210,6 +210,34 @@ bool FMantleAvatarContract::LoadFromDirectory(const FString& Directory, FMantleA
 		}
 	}
 
+	// The standard body types garment variants are fitted to. Absent or unusable: the defaults in the header.
+	if (const TSharedPtr<FJsonObject> Fit = ObjectField(Limits, TEXT("garmentFit")))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* TypeValues = nullptr;
+		if (Fit->TryGetArrayField(TEXT("bodyTypes"), TypeValues))
+		{
+			TArray<FString> Types;
+			for (const TSharedPtr<FJsonValue>& Value : *TypeValues)
+			{
+				FString Type;
+				if (Value.IsValid() && Value->TryGetString(Type))
+				{
+					Types.Add(Type);
+				}
+			}
+			Types = FMantleFitBodies::SanitizeBodyTypes(Types);
+			if (!Types.IsEmpty())
+			{
+				Out.GarmentFitBodyTypes = MoveTemp(Types);
+			}
+		}
+		double Margin = 0.0;
+		if (Fit->TryGetNumberField(TEXT("sexMarginCm"), Margin) && Margin >= 0.0)
+		{
+			Out.GarmentFitSexMarginCm = static_cast<float>(Margin);
+		}
+	}
+
 	const TArray<TSharedPtr<FJsonValue>>* SlotValues = nullptr;
 	if (!Limits->TryGetArrayField(TEXT("slots"), SlotValues))
 	{

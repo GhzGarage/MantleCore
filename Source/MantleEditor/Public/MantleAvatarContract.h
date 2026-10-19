@@ -149,6 +149,15 @@ public:
 	 */
 	FMantleCharacterScaleRule CharacterScale;
 
+	/**
+	 * limits.json garmentFit: the standard MetaHuman body types a clothing item's garment variants are fitted to, without
+	 * the sex (the plugin adds f_ or m_): srt|med|tal then unw|nrw|ovw, in order, at most 8 (the backend's variant limit).
+	 * Variant ids are the full type names (f_med_nrw). Medium height, three builds, when the file has no such block.
+	 */
+	TArray<FString> GarmentFitBodyTypes = { TEXT("med_unw"), TEXT("med_nrw"), TEXT("med_ovw") };
+	/** garmentFit.sexMarginCm: how much closer to the male body than the female one an Outfit's sizes must be to be fitted to male bodies. */
+	float GarmentFitSexMarginCm = 0.25f;
+
 	float BindToleranceCm = 0.5f;
 	float BindToleranceDegrees = 1.0f;
 	TArray<FName> KneeBones;

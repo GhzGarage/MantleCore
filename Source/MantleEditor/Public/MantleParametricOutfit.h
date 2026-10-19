@@ -27,7 +27,8 @@ struct MANTLEEDITOR_API FMantleParametricOutfit
 	/**
 	 * Converts Draft's native source (auto-selected when a character is supplied) into transient skinned render geometry.
 	 * With OutfitAuthoringCharacter, the native Collection pipeline evaluates its configured resizing graph
-	 * onto that character; AuthoringBody/Face must be that character's final converted output.
+	 * onto that character; AuthoringBody/Face must be that character's final converted output, unless bOutfitAuthoringInMemory
+	 * says the character is a standard body type made in memory (FMantleFitBodies), which needs neither.
 	 * Without a character, the authored body/head must have the complete reference layout.
 	 * Does not combine source sizes or preserve simulation.
 	 * Without a character, KeepSlots (the Outfit's material slots) carries over to the exported mesh, and kept sections
