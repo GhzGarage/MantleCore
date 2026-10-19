@@ -178,6 +178,13 @@ bool FMantleNailSlotRulesTest::RunTest(const FString& Parameters)
 	const TArray<FName> ShortBody = { FName(TEXT("hand_l")), FName(TEXT("index_03_l")) };
 	TestFalse(TEXT("the overlay rule skips the garment's spine, not the body's"),
 		FMantleAvatarRefit::CheckBones(HandBones, Weighted, ShortBody, Error, /*bOverlay*/ true));
+
+	// Nails follow their finger bones, however far the source arm was posed: the whole-piece move cap is not theirs.
+	FMantleRefitPlan Plan;
+	Plan.MaxMoveCm = FMantleAvatarRefit::MaxMoveCm + 20.0;
+	TestTrue(TEXT("a body piece that moves too far is capped"), Plan.ExceedsMoveCap());
+	Plan.bOnBones = true;
+	TestFalse(TEXT("a nail carried on its finger bone is not"), Plan.ExceedsMoveCap());
 	return true;
 }
 

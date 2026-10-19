@@ -61,8 +61,19 @@ struct MANTLEEDITOR_API FMantleRefitPlan
 	double MaxMoveCm = 0.0;
 	int32 MaxMoveLOD = INDEX_NONE;
 
+	/**
+	 * Overlay slots (nails): every shared bone's source pose is the authoring body's, so each piece is carried rigidly by
+	 * its own bones (a fingertip nail by its finger) onto the body, with no warp; however far the source arm and hand were
+	 * posed, a nail keeps its place on its finger. Seating (FMantleNailSeating) then sets it on the skin and is the
+	 * sanity check: the whole-piece MaxMoveCm cap does not apply.
+	 */
+	bool bOnBones = false;
+
 	/** P through the field (P itself on the identity). */
 	FVector3f Warp(const FVector3f& P) const;
+
+	/** A vertex would move more than FMantleAvatarRefit::MaxMoveCm, and the cap applies (not bOnBones). */
+	bool ExceedsMoveCap() const;
 };
 
 /**
@@ -146,7 +157,8 @@ public:
 	 * imported LOD models). SourceBody is the body the garment was made on (the character's own); null when unknown,
 	 * and then the garment's own reference pose stands for it (joint landmarks only). bAllowDense false forces the
 	 * joint landmarks (tests). False with why when the skeleton rule fails or the field cannot be made; a move over
-	 * MaxMoveCm is not a failure here (Out.MaxMoveCm says it). bOverlay: the piece is an IsOverlaySlot one (CheckBones).
+	 * MaxMoveCm is not a failure here (Out.MaxMoveCm says it). bOverlay: the piece is an IsOverlaySlot one (CheckBones), and
+	 * it is carried on its bones (FMantleRefitPlan::bOnBones).
 	 */
 	static bool Plan(const USkeletalMesh& Garment, const USkeletalMesh* SourceBody, const USkeletalMesh& Target, bool bAllowDense,
 		FMantleRefitPlan& Out, FString& OutError, bool bOverlay = false);
@@ -160,9 +172,10 @@ public:
 	/**
 	 * A NEW skeletal mesh, PackagePath/AssetName, Garment refitted by InPlan on every LOD (FMantleAvatarRepose::
 	 * WriteWithPose), with InPlan.TargetLocal as its reference pose. Garment is never modified. Null with why when a LOD
-	 * cannot be refitted or a vertex would move more than MaxMoveCm. OutMaxMoveCm: the largest move written.
+	 * cannot be refitted or a vertex would move more than MaxMoveCm (not bOnBones). OutMaxMoveCm: the largest move written.
 	 * SeatBody (#740, nails): when given, each LOD is then seated on it (FMantleNailSeating), after the move check;
-	 * OutSeating gets the last LOD's result.
+	 * OutSeating gets the last LOD's result. A bOnBones plan needs it, and fails when a nail is not seated or its seat
+	 * moves it more than FMantleNailSeating::MaxSeatMoveCm (the nail is not where its finger bone puts a fingertip).
 	 */
 	static USkeletalMesh* WriteRefit(USkeletalMesh* Garment, const FMantleRefitPlan& InPlan, const FString& PackagePath, const FString& AssetName,
 		double& OutMaxMoveCm, FString& OutError, const FMantleSkinnedMeshLOD* SeatBody = nullptr, FMantleNailSeatingResult* OutSeating = nullptr);
