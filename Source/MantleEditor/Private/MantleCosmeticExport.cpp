@@ -607,9 +607,9 @@ namespace MantleCosmeticExportPrivate
 				// Creator's in-memory body, put into the reference order by the learned map: its positions, normals and skin are
 				// the reference vertices', and the layout (UVs, triangles) is the reference's own, which is what the backend checks.
 				FMantleBodyLODTopology Source;
-				const FMantleCreatorBodyMap* CreatorMap = FMantleCreatorBodyMap::Get();
-				if (CreatorMap && UMantleBodyTopologyData::ReadLOD(Mesh, LODIndex, Source) && CreatorMap->Applies(Source.UVHash, Source.VertexCount)
-					&& CreatorMap->ReferenceUVHash == Layout->UVHash)
+				const FMantleCreatorBodyMap* CreatorMap = UMantleBodyTopologyData::ReadLOD(Mesh, LODIndex, Source)
+					? FMantleCreatorBodyMap::Find(Source.UVHash, Source.VertexCount) : nullptr;
+				if (CreatorMap && CreatorMap->ReferenceUVHash == Layout->UVHash)
 				{
 					for (int32 Vertex = 0; Vertex < Glb.UVs.Num(); ++Vertex)
 					{
@@ -3861,8 +3861,8 @@ bool FMantleCosmeticExport::HasReferenceTopology(const USkeletalMesh* Mesh, cons
 		{
 			// MetaHuman Creator's in-memory body (the standard body types): the same body as the reference before Epic's
 			// Optimized build renumbered it, mapped by the learned point map (FMantleCreatorBodyMap).
-			const FMantleCreatorBodyMap* CreatorMap = FMantleCreatorBodyMap::Get();
-			if (CreatorMap && CreatorMap->Applies(Topology.UVHash, Topology.VertexCount) && CreatorMap->ReferenceUVHash == Contract.TopologyUVHash
+			const FMantleCreatorBodyMap* CreatorMap = FMantleCreatorBodyMap::Find(Topology.UVHash, Topology.VertexCount);
+			if (CreatorMap && CreatorMap->ReferenceUVHash == Contract.TopologyUVHash
 				&& Indices.Num() == Layout->Indices.Num())
 			{
 				RenderOfReference = CreatorMap->PreviewOfReference;

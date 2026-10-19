@@ -86,29 +86,35 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FMantleCreatorBodyMapTest::RunTest(const FString& Parameters)
 {
-	FMantleCreatorBodyMap Map;
-	Map.SourceUVHash = 0x49f70128;
-	Map.ReferenceUVHash = 0x4514a950;
-	Map.PreviewOfReference = { 2, 0, 3, 1 };
-	Map.MaxErrorCmAera = 0.01;
-	Map.MaxErrorCmBo = 0.02;
-	Map.Generated = TEXT("2026-10-19T00:00:00Z");
+	FMantleCreatorBodyMap First;
+	First.SourceUVHash = 0x231721b0;
+	First.ReferenceUVHash = 0x4514a950;
+	First.PreviewOfReference = { 2, 0, 3, 1 };
+	First.Source = TEXT("Aera");
+	First.MaxErrorCm = 0.01;
+	FMantleCreatorBodyMap Second = First;
+	Second.SourceUVHash = 0x49f70128;
+	Second.PreviewOfReference = { 1, 0, 2, 3 };
 
-	FMantleCreatorBodyMap Read;
+	TArray<FMantleCreatorBodyMap> Read;
 	FString Error;
-	TestTrue(TEXT("a written map reads back"), FMantleCreatorBodyMap::Parse(Map.ToJson(), Read, Error));
-	TestEqual(TEXT("source hash"), Read.SourceUVHash, Map.SourceUVHash);
-	TestEqual(TEXT("reference hash"), Read.ReferenceUVHash, Map.ReferenceUVHash);
-	TestEqual(TEXT("map"), FString::JoinBy(Read.PreviewOfReference, TEXT(","), [](const int32 Index) { return FString::FromInt(Index); }), FString(TEXT("2,0,3,1")));
-	TestTrue(TEXT("applies to the layout it was learned on"), Read.Applies(0x49f70128, 4));
-	TestFalse(TEXT("not to another UV hash"), Read.Applies(0x4514a950, 4));
-	TestFalse(TEXT("not to another vertex count"), Read.Applies(0x49f70128, 5));
+	TestTrue(TEXT("written maps read back"), FMantleCreatorBodyMap::ParseFile(FMantleCreatorBodyMap::ToJson({ First, Second }), Read, Error));
+	TestEqual(TEXT("both layouts are kept"), Read.Num(), 2);
+	if (Read.Num() == 2)
+	{
+		TestEqual(TEXT("source hash"), Read[1].SourceUVHash, Second.SourceUVHash);
+		TestEqual(TEXT("reference hash"), Read[1].ReferenceUVHash, Second.ReferenceUVHash);
+		TestEqual(TEXT("map"), FString::JoinBy(Read[0].PreviewOfReference, TEXT(","), [](const int32 Index) { return FString::FromInt(Index); }), FString(TEXT("2,0,3,1")));
+		TestTrue(TEXT("a map applies to the layout it was learned on"), Read[0].Applies(0x231721b0, 4));
+		TestFalse(TEXT("not to the other layout"), Read[0].Applies(0x49f70128, 4));
+		TestFalse(TEXT("not to another vertex count"), Read[0].Applies(0x231721b0, 5));
+	}
 
-	Map.PreviewOfReference = { 2, 2, 3, 1 };
-	TestFalse(TEXT("a map that is not one-to-one is refused"), FMantleCreatorBodyMap::Parse(Map.ToJson(), Read, Error));
-	Map.PreviewOfReference = { 2, 0, 4, 1 };
-	TestFalse(TEXT("an index past the vertex count is refused"), FMantleCreatorBodyMap::Parse(Map.ToJson(), Read, Error));
-	TestFalse(TEXT("text that is not JSON is refused"), FMantleCreatorBodyMap::Parse(TEXT("nope"), Read, Error));
+	First.PreviewOfReference = { 2, 2, 3, 1 };
+	TestFalse(TEXT("a map that is not one-to-one is refused"), FMantleCreatorBodyMap::ParseFile(FMantleCreatorBodyMap::ToJson({ First }), Read, Error));
+	First.PreviewOfReference = { 2, 0, 4, 1 };
+	TestFalse(TEXT("an index past the vertex count is refused"), FMantleCreatorBodyMap::ParseFile(FMantleCreatorBodyMap::ToJson({ First }), Read, Error));
+	TestFalse(TEXT("text that is not JSON is refused"), FMantleCreatorBodyMap::ParseFile(TEXT("nope"), Read, Error));
 	return true;
 }
 

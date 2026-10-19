@@ -2,13 +2,16 @@
 //
 // Maintainer command: Mantle.Dev.LearnBodyLayoutMap [out=<path>]
 // Learns, once, how MetaHuman Creator's in-memory body (LOD1) is numbered against Mantle's reference body (the output of Epic's
-// UE Optimized / Medium build), from a converted Aera, checks the same map on a converted Bo, and writes it to the plugin-only
+// UE Optimized / Medium build), one map per distinct preview layout, from the converted Aera and Bo (each map checked on the other
+// character when it has the same layout), and writes them to the plugin-only
 // resource Resources/BodyLayout/creator-preview-to-reference-v1.json (FMantleCreatorBodyMap). Nothing is uploaded or changed.
 #include "MantleAvatarContract.h"
 #include "MantleBodyTopologyData.h"
 #include "MantleCosmeticExport.h"
 #include "MantleCreatorBodyMap.h"
+#include "MantleFitBodies.h"
 
+#include "Algo/Find.h"
 #include "Algo/Sort.h"
 #include "Editor.h"
 #include "Engine/SkeletalMesh.h"
@@ -216,18 +219,30 @@ namespace MantleDevLearnBodyLayoutMapPrivate
 		return Out;
 	}
 
-	/** Every built triangle must land on a preview triangle once seam copies are welded. Returns the number that do not. */
-	int32 CountBrokenTriangles(const FSide& Preview, const FSide& Built, const TArray<int32>& Map, int32& OutInconsistentGroups)
+	struct FTriangleCheck
 	{
+		int32 Broken = 0;
+		int32 Flipped = 0;
+		int32 Unexplained = 0;
+		int32 InconsistentGroups = 0;
+	};
+
+	/**
+	 * Every built triangle should land on a preview triangle once seam copies are welded. A few may not: Epic's optimized build can
+	 * flip the diagonal of a quad. Those are accepted only as pairs (two built triangles sharing an edge whose four vertices are two
+	 * preview triangles on the other diagonal), each logged; anything else is unexplained.
+	 */
+	FTriangleCheck CheckTriangles(const FSide& Preview, const FSide& Built, const TArray<int32>& Map)
+	{
+		FTriangleCheck Result;
 		const TArray<int32> PreviewGroup = WeldGroups(Preview.Positions);
 		const TArray<int32> BuiltGroup = WeldGroups(Built.Positions);
 		TMap<int32, int32> PreviewOfBuiltGroup;
-		OutInconsistentGroups = 0;
 		for (int32 Reference = 0; Reference < Map.Num(); ++Reference)
 		{
 			const int32 Wanted = PreviewGroup[Map[Reference]];
 			const int32 Target = PreviewOfBuiltGroup.FindOrAdd(BuiltGroup[Reference], Wanted);
-			if (Target != Wanted) { ++OutInconsistentGroups; }
+			if (Target != Wanted) { ++Result.InconsistentGroups; }
 		}
 		const auto Key = [](const int32 A, const int32 B, const int32 C)
 		{
@@ -240,15 +255,45 @@ namespace MantleDevLearnBodyLayoutMapPrivate
 		{
 			PreviewTriangles.Add(Key(PreviewGroup[Preview.Indices[First]], PreviewGroup[Preview.Indices[First + 1]], PreviewGroup[Preview.Indices[First + 2]]));
 		}
-		int32 Broken = 0;
+		struct FBroken { int32 Triangle; int32 Groups[3]; bool bUsed; };
+		TArray<FBroken> Broken;
 		for (int32 First = 0; First + 2 < Built.Indices.Num(); First += 3)
 		{
 			const int32* A = PreviewOfBuiltGroup.Find(BuiltGroup[Built.Indices[First]]);
 			const int32* B = PreviewOfBuiltGroup.Find(BuiltGroup[Built.Indices[First + 1]]);
 			const int32* C = PreviewOfBuiltGroup.Find(BuiltGroup[Built.Indices[First + 2]]);
-			if (!A || !B || !C || !PreviewTriangles.Contains(Key(*A, *B, *C))) { ++Broken; }
+			if (A && B && C && PreviewTriangles.Contains(Key(*A, *B, *C))) { continue; }
+			++Result.Broken;
+			if (A && B && C) { Broken.Add({ First / 3, { *A, *B, *C }, false }); }
+			else { ++Result.Unexplained; }
 		}
-		return Broken;
+		for (int32 I = 0; I < Broken.Num(); ++I)
+		{
+			if (Broken[I].bUsed) { continue; }
+			for (int32 J = I + 1; J < Broken.Num() && !Broken[I].bUsed; ++J)
+			{
+				if (Broken[J].bUsed) { continue; }
+				TArray<int32> Shared, OnlyI, OnlyJ;
+				for (const int32 Group : Broken[I].Groups) { (Algo::Find(Broken[J].Groups, Group) ? Shared : OnlyI).AddUnique(Group); }
+				for (const int32 Group : Broken[J].Groups) { if (!Shared.Contains(Group)) { OnlyJ.AddUnique(Group); } }
+				if (Shared.Num() != 2 || OnlyI.Num() != 1 || OnlyJ.Num() != 1 || OnlyI[0] == OnlyJ[0]) { continue; }
+				if (PreviewTriangles.Contains(Key(OnlyI[0], OnlyJ[0], Shared[0])) && PreviewTriangles.Contains(Key(OnlyI[0], OnlyJ[0], Shared[1])))
+				{
+					Broken[I].bUsed = Broken[J].bUsed = true;
+					Result.Flipped += 2;
+					UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP flipped diagonal: reference triangles %d and %d are the preview's other diagonal of the same quad"), Broken[I].Triangle, Broken[J].Triangle);
+				}
+			}
+		}
+		for (const FBroken& Entry : Broken)
+		{
+			if (!Entry.bUsed)
+			{
+				++Result.Unexplained;
+				UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP unexplained triangle: reference triangle %d is not a preview triangle and not half of a flipped quad"), Entry.Triangle);
+			}
+		}
+		return Result;
 	}
 
 	/** The largest distance between a built vertex and the preview vertex the map names for it, after the best whole-body shift. */
@@ -263,6 +308,43 @@ namespace MantleDevLearnBodyLayoutMapPrivate
 			Largest = FMath::Max(Largest, FVector3f::Distance(Built.Positions[Reference], Mapped[Reference] + OutShift));
 		}
 		return Largest;
+	}
+
+	constexpr float AcceptCm = 0.1f;
+	constexpr int32 AcceptBrokenTriangles = 16;
+
+	bool Accepts(const FTriangleCheck& Check, const float MaxCm)
+	{
+		return MaxCm <= AcceptCm && Check.InconsistentGroups == 0 && Check.Unexplained == 0 && Check.Broken <= AcceptBrokenTriangles;
+	}
+
+	/** One converted character, read and released: its name, preview and built sides, and which standard body it is nearest to. */
+	struct FCharacter
+	{
+		FPair Pair;
+		FString Sex;
+	};
+
+	/** Preview LOD1 vertices of a standard body made in memory (nothing saved), or empty. */
+	TArray<FVector3f> StandardBodyVertices(const TCHAR* Id, const EMetaHumanBodyType Type, uint32& OutUVHash)
+	{
+		TArray<FVector3f> Out;
+		OutUVHash = 0;
+		FMantleFitBody Body;
+		FString Error;
+		if (FMantleFitBodies::Make(Id, Type, Body, Error))
+		{
+			FSide Side;
+			if (ReadSide(Body.BodyMesh.Get(), 1, Side, Error))
+			{
+				Out = MoveTemp(Side.Positions);
+				OutUVHash = Side.Topology.UVHash;
+			}
+			else { UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP standard body %s LOD1 unreadable: %s"), Id, *Error); }
+		}
+		else { UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP standard body %s not made: %s"), Id, *Error); }
+		FMantleFitBodies::Release(Body);
+		return Out;
 	}
 
 	void Run(const TArray<FString>& Args)
@@ -280,80 +362,127 @@ namespace MantleDevLearnBodyLayoutMapPrivate
 		const FMantleAvatarContract* Contract = FMantleAvatarContract::Get();
 		if (!Contract || OutPath.IsEmpty()) { Finish(TEXT("the avatar contract or the output path is unavailable")); return; }
 
-		FPair Aera, Bo;
-		FString Error;
-		if (!LoadPair(TEXT("Aera"), *Contract, Aera, Error)) { ReleasePair(Aera); Finish(*Error); return; }
-		if (Aera.Preview.Topology.VertexCount != Contract->TopologyVertexCount || Aera.Built.Topology.UVHash != Contract->TopologyUVHash)
+		// The layout of every standard body type's preview LOD1 (the bodies the upload makes), and the female/male medium bodies
+		// the converted characters are told apart by. Tells which layouts a map is still needed for.
+		TArray<FVector3f> FemaleStandard, MaleStandard;
+		for (const TPair<const TCHAR*, EMetaHumanBodyType>& Standard : { TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("f_med_nrw"), EMetaHumanBodyType::f_med_nrw),
+			TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("f_med_ovw"), EMetaHumanBodyType::f_med_ovw), TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("f_med_unw"), EMetaHumanBodyType::f_med_unw),
+			TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("m_med_nrw"), EMetaHumanBodyType::m_med_nrw), TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("m_med_ovw"), EMetaHumanBodyType::m_med_ovw),
+			TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("m_med_unw"), EMetaHumanBodyType::m_med_unw) })
 		{
-			const FString Why = FString::Printf(TEXT("Aera's preview LOD%d has %d vertices (reference %d) or its built body is not the reference UV layout"), Aera.PreviewLOD,
-				Aera.Preview.Topology.VertexCount, Contract->TopologyVertexCount);
-			ReleasePair(Aera);
-			Finish(*Why);
+			uint32 Hash = 0;
+			TArray<FVector3f> Vertices = StandardBodyVertices(Standard.Key, Standard.Value, Hash);
+			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP standard body %s preview LOD1: %d verts, uvhash %08x"), Standard.Key, Vertices.Num(), Hash);
+			if (FString(Standard.Key) == TEXT("f_med_nrw")) { FemaleStandard = MoveTemp(Vertices); }
+			else if (FString(Standard.Key) == TEXT("m_med_nrw")) { MaleStandard = MoveTemp(Vertices); }
+		}
+
+		// Both characters are read even when the first fails; nothing is held in the editor afterwards.
+		TArray<TUniquePtr<FCharacter>> Characters;
+		for (const TCHAR* Name : { TEXT("Aera"), TEXT("Bo") })
+		{
+			TUniquePtr<FCharacter> Character = MakeUnique<FCharacter>();
+			FString Error;
+			if (!LoadPair(Name, *Contract, Character->Pair, Error))
+			{
+				UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP %s skipped: %s"), Name, *Error);
+				ReleasePair(Character->Pair);
+				continue;
+			}
+			ReleasePair(Character->Pair);
+			float ToFemale = -1.0f, ToMale = -1.0f, Largest = 0.0f;
+			TArray<FVector3f> Probe;
+			for (int32 Index = 0; Index < Character->Pair.Preview.Positions.Num(); Index += 4) { Probe.Add(Character->Pair.Preview.Positions[Index]); }
+			FMantleFitBodies::CompareNearest(Probe, FemaleStandard, ToFemale, Largest);
+			FMantleFitBodies::CompareNearest(Probe, MaleStandard, ToMale, Largest);
+			Character->Sex = ToFemale < 0.0f || ToMale < 0.0f ? TEXT("unknown") : (ToMale < ToFemale ? TEXT("male") : TEXT("female"));
+			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP %s is %s by body shape (%.2f cm from the standard female medium body, %.2f cm from the male one); preview LOD1 uvhash %08x"),
+				Name, *Character->Sex, ToFemale, ToMale, Character->Pair.Preview.Topology.UVHash);
+			Characters.Add(MoveTemp(Character));
+		}
+
+		// One map per distinct preview layout: learned from the first character that has it, checked on the others that do.
+		TArray<FMantleCreatorBodyMap> Maps;
+		TSet<uint32> Done;
+		for (const TUniquePtr<FCharacter>& Source : Characters)
+		{
+			const uint32 Hash = Source->Pair.Preview.Topology.UVHash;
+			if (Done.Contains(Hash)) { continue; }
+			const FPair& Pair = Source->Pair;
+			if (Pair.Preview.Topology.VertexCount != Contract->TopologyVertexCount || Pair.Built.Topology.UVHash != Contract->TopologyUVHash)
+			{
+				UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP %s: preview LOD%d has %d vertices (reference %d) or its built body is not the reference UV layout; skipped"),
+					*Pair.Name, Pair.PreviewLOD, Pair.Preview.Topology.VertexCount, Contract->TopologyVertexCount);
+				continue;
+			}
+			FMantleCreatorBodyMap Map;
+			Map.SourceUVHash = Hash;
+			Map.ReferenceUVHash = Pair.Built.Topology.UVHash;
+			Map.Source = Pair.Name + TEXT(" (") + Source->Sex + TEXT(")");
+			FVector3f Shift;
+			float MaxCm = 0.0f;
+			FString Error;
+			if (!LearnMap(Pair.Preview, Pair.Built, Shift, Map.PreviewOfReference, MaxCm, Error))
+			{
+				UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP %s layout %08x: %s"), *Pair.Name, Hash, *Error);
+				continue;
+			}
+			const FTriangleCheck Check = CheckTriangles(Pair.Preview, Pair.Built, Map.PreviewOfReference);
+			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP %s learned for layout %08x: shift (%.3f, %.3f, %.3f) cm, max position error %.4f cm, %d of %d triangles differ (%d in flipped-diagonal pairs, %d unexplained), %d inconsistent weld groups"),
+				*Pair.Name, Hash, Shift.X, Shift.Y, Shift.Z, MaxCm, Check.Broken, Pair.Built.Indices.Num() / 3, Check.Flipped, Check.Unexplained, Check.InconsistentGroups);
+			if (!Accepts(Check, MaxCm))
+			{
+				UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP %s layout %08x not accepted (needs positions within %.1f mm, at most %d differing triangles all in flipped pairs)"), *Pair.Name, Hash, AcceptCm * 10.0f, AcceptBrokenTriangles);
+				continue;
+			}
+			Map.MaxErrorCm = MaxCm;
+			Map.FlippedTriangles = Check.Flipped;
+			bool bVerifiedAll = true;
+			for (const TUniquePtr<FCharacter>& Other : Characters)
+			{
+				if (Other.Get() == Source.Get() || Other->Pair.Preview.Topology.UVHash != Hash || Other->Pair.Preview.Topology.VertexCount != Map.PreviewOfReference.Num()) { continue; }
+				FVector3f OtherShift;
+				const float OtherMax = MaxErrorWithMap(Other->Pair.Preview, Other->Pair.Built, Map.PreviewOfReference, OtherShift);
+				const FTriangleCheck OtherCheck = CheckTriangles(Other->Pair.Preview, Other->Pair.Built, Map.PreviewOfReference);
+				UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP %s's map checked on %s: shift (%.3f, %.3f, %.3f) cm, max position error %.4f cm, %d triangles differ (%d flipped, %d unexplained)"),
+					*Pair.Name, *Other->Pair.Name, OtherShift.X, OtherShift.Y, OtherShift.Z, OtherMax, OtherCheck.Broken, OtherCheck.Flipped, OtherCheck.Unexplained);
+				Map.VerifiedOn += (Map.VerifiedOn.IsEmpty() ? TEXT("") : TEXT(", ")) + Other->Pair.Name + TEXT(" (") + Other->Sex + TEXT(")");
+				Map.MaxErrorCm = FMath::Max<double>(Map.MaxErrorCm, OtherMax);
+				bVerifiedAll &= Accepts(OtherCheck, OtherMax);
+			}
+			if (!bVerifiedAll)
+			{
+				UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP layout %08x: the map does not carry over to every character with that layout; not written"), Hash);
+				continue;
+			}
+			Map.Generated = FDateTime::UtcNow().ToIso8601();
+			Maps.Add(MoveTemp(Map));
+			Done.Add(Hash);
+		}
+
+		// What the standard bodies need: a map for each preview layout they have.
+		if (Maps.IsEmpty())
+		{
+			Finish(TEXT("no layout could be learned; no map written"));
 			return;
 		}
-
-		FMantleCreatorBodyMap Map;
-		Map.SourceUVHash = Aera.Preview.Topology.UVHash;
-		Map.ReferenceUVHash = Aera.Built.Topology.UVHash;
-		FVector3f Shift;
-		float MaxCm = 0.0f;
-		if (!LearnMap(Aera.Preview, Aera.Built, Shift, Map.PreviewOfReference, MaxCm, Error)) { ReleasePair(Aera); Finish(*Error); return; }
-		int32 Inconsistent = 0;
-		const int32 Broken = CountBrokenTriangles(Aera.Preview, Aera.Built, Map.PreviewOfReference, Inconsistent);
-		UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP Aera learned: shift (%.3f, %.3f, %.3f) cm, max position error %.4f cm, %d of %d triangles not on a preview triangle, %d inconsistent weld groups"),
-			Shift.X, Shift.Y, Shift.Z, MaxCm, Broken, Aera.Built.Indices.Num() / 3, Inconsistent);
-		Map.MaxErrorCmAera = MaxCm;
-		ReleasePair(Aera);
-		if (MaxCm > 0.1f || Broken != 0 || Inconsistent != 0)
-		{
-			Finish(TEXT("Aera's preview and built bodies do not agree to 1 mm / in connectivity; no map written"));
-			return;
-		}
-
-		FString BoError;
-		if (LoadPair(TEXT("Bo"), *Contract, Bo, BoError))
-		{
-			if (Bo.Preview.Topology.UVHash != Map.SourceUVHash || Bo.Preview.Topology.VertexCount != Map.PreviewOfReference.Num())
-			{
-				const FString Why = FString::Printf(TEXT("Bo's preview LOD has uvhash %08x, not Aera's %08x; the layout is not shared, no map written"), Bo.Preview.Topology.UVHash, Map.SourceUVHash);
-				ReleasePair(Bo);
-				Finish(*Why);
-				return;
-			}
-			FVector3f BoShift;
-			const float BoMax = MaxErrorWithMap(Bo.Preview, Bo.Built, Map.PreviewOfReference, BoShift);
-			int32 BoInconsistent = 0;
-			const int32 BoBroken = CountBrokenTriangles(Bo.Preview, Bo.Built, Map.PreviewOfReference, BoInconsistent);
-			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP Bo checked with Aera's map: shift (%.3f, %.3f, %.3f) cm, max position error %.4f cm, %d triangles not on a preview triangle"),
-				BoShift.X, BoShift.Y, BoShift.Z, BoMax, BoBroken);
-			Map.MaxErrorCmBo = BoMax;
-			ReleasePair(Bo);
-			if (BoMax > 0.1f || BoBroken != 0)
-			{
-				Finish(TEXT("Aera's map does not carry over to Bo within 1 mm; no map written (the map is not topology-level)"));
-				return;
-			}
-		}
-		else
-		{
-			ReleasePair(Bo);
-			UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP Bo not checked: %s"), *BoError);
-		}
-
-		Map.Generated = FDateTime::UtcNow().ToIso8601();
-		if (!FFileHelper::SaveStringToFile(Map.ToJson(), *OutPath))
+		if (!FFileHelper::SaveStringToFile(FMantleCreatorBodyMap::ToJson(Maps), *OutPath))
 		{
 			Finish(*FString::Printf(TEXT("could not write %s"), *OutPath));
 			return;
 		}
-		UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP written=%s vertices=%d sourceUVHash=%08x referenceUVHash=%08x maxErrorCm aera=%.4f bo=%.4f"), *OutPath,
-			Map.PreviewOfReference.Num(), Map.SourceUVHash, Map.ReferenceUVHash, Map.MaxErrorCmAera, Map.MaxErrorCmBo);
+		for (const FMantleCreatorBodyMap& Map : Maps)
+		{
+			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP written=%s layout=%08x from=%s verifiedOn=%s maxErrorCm=%.4f flippedTriangles=%d"), *OutPath, Map.SourceUVHash,
+				*Map.Source, *Map.VerifiedOn, Map.MaxErrorCm, Map.FlippedTriangles);
+		}
 		Finish(nullptr);
 	}
 
 	FAutoConsoleCommand GMantleDevLearnBodyLayoutMapCommand(
 		TEXT("Mantle.Dev.LearnBodyLayoutMap"),
-		TEXT("Mantle.Dev.LearnBodyLayoutMap [out=<path>] -- maintainer command: learns how Creator's in-memory body LOD1 is numbered against Mantle's reference body ")
-		TEXT("from the converted Aera (/Game/MetaHumans/Aera/Converted), checks it on Bo, and writes Resources/BodyLayout/creator-preview-to-reference-v1.json. Logs MANTLE_LAYOUT_MAP lines."),
+		TEXT("Mantle.Dev.LearnBodyLayoutMap [out=<path>] -- maintainer command: learns how Creator's in-memory body LOD1 is numbered against Mantle's reference body, one map per ")
+		TEXT("preview layout, from the converted Aera and Bo (/Game/MetaHumans/<Name>/Converted), and writes Resources/BodyLayout/creator-preview-to-reference-v1.json. ")
+		TEXT("Also logs the preview layout of the standard body types. Logs MANTLE_LAYOUT_MAP lines."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&Run));
 }

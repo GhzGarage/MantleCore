@@ -37,30 +37,26 @@ FString FMantleCreatorBodyMap::DefaultPath()
 	return Plugin.IsValid() ? FPaths::Combine(Plugin->GetBaseDir(), TEXT("Resources"), TEXT("BodyLayout"), TEXT("creator-preview-to-reference-v1.json")) : FString();
 }
 
-const FMantleCreatorBodyMap* FMantleCreatorBodyMap::Get()
+const FMantleCreatorBodyMap* FMantleCreatorBodyMap::Find(const uint32 UVHash, const int32 VertexCount)
 {
-	static TUniquePtr<FMantleCreatorBodyMap> Loaded;
+	static TArray<FMantleCreatorBodyMap> Loaded;
 	static bool bTried = false;
 	if (!bTried)
 	{
 		bTried = true;
 		const FString Path = DefaultPath();
 		FString Json, Error;
-		FMantleCreatorBodyMap Map;
 		if (Path.IsEmpty() || !FFileHelper::LoadFileToString(Json, *Path))
 		{
-			UE_LOG(LogMantleCreatorBodyMap, Display, TEXT("MANTLE_LAYOUT_MAP no map at %s"), *Path);
+			UE_LOG(LogMantleCreatorBodyMap, Display, TEXT("MANTLE_LAYOUT_MAP no map file at %s"), *Path);
 		}
-		else if (!Parse(Json, Map, Error))
+		else if (!ParseFile(Json, Loaded, Error))
 		{
+			Loaded.Reset();
 			UE_LOG(LogMantleCreatorBodyMap, Warning, TEXT("MANTLE_LAYOUT_MAP %s is not usable: %s"), *Path, *Error);
 		}
-		else
-		{
-			Loaded = MakeUnique<FMantleCreatorBodyMap>(MoveTemp(Map));
-		}
 	}
-	return Loaded.Get();
+	return Loaded.FindByPredicate([UVHash, VertexCount](const FMantleCreatorBodyMap& Map) { return Map.Applies(UVHash, VertexCount); });
 }
 
 bool FMantleCreatorBodyMap::Applies(const uint32 UVHash, const int32 VertexCount) const
@@ -68,73 +64,85 @@ bool FMantleCreatorBodyMap::Applies(const uint32 UVHash, const int32 VertexCount
 	return VertexCount == PreviewOfReference.Num() && VertexCount > 0 && UVHash == SourceUVHash;
 }
 
-bool FMantleCreatorBodyMap::Parse(const FString& Json, FMantleCreatorBodyMap& Out, FString& OutError)
+bool FMantleCreatorBodyMap::ParseFile(const FString& Json, TArray<FMantleCreatorBodyMap>& Out, FString& OutError)
 {
-	Out = FMantleCreatorBodyMap();
+	Out.Reset();
 	TSharedPtr<FJsonObject> Root;
 	if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Root) || !Root.IsValid())
 	{
 		OutError = TEXT("not valid JSON");
 		return false;
 	}
-	int32 Version = 0, Count = 0;
-	if (!Root->TryGetNumberField(TEXT("version"), Version) || Version != 1 || !Root->TryGetNumberField(TEXT("vertexCount"), Count) || Count <= 0)
+	int32 Version = 0;
+	const TArray<TSharedPtr<FJsonValue>>* Entries = nullptr;
+	if (!Root->TryGetNumberField(TEXT("version"), Version) || Version != 2 || !Root->TryGetArrayField(TEXT("maps"), Entries))
 	{
-		OutError = TEXT("not version 1 or no vertexCount");
+		OutError = TEXT("not version 2 with a maps list");
 		return false;
 	}
-	if (!MantleCreatorBodyMapPrivate::ReadHash(Root, TEXT("sourceUVHash"), Out.SourceUVHash) || !MantleCreatorBodyMapPrivate::ReadHash(Root, TEXT("referenceUVHash"), Out.ReferenceUVHash))
+	for (const TSharedPtr<FJsonValue>& Entry : *Entries)
 	{
-		OutError = TEXT("sourceUVHash and referenceUVHash must be hex");
-		return false;
-	}
-	const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
-	if (!Root->TryGetArrayField(TEXT("previewOfReference"), Values) || Values->Num() != Count)
-	{
-		OutError = TEXT("previewOfReference does not have vertexCount entries");
-		return false;
-	}
-	TBitArray<> Seen(false, Count);
-	for (const TSharedPtr<FJsonValue>& Value : *Values)
-	{
-		double Number = 0.0;
-		if (!Value.IsValid() || !Value->TryGetNumber(Number) || Number < 0.0 || Number >= Count || Seen[static_cast<int32>(Number)])
+		const TSharedPtr<FJsonObject> Object = Entry.IsValid() ? Entry->AsObject() : nullptr;
+		int32 Count = 0;
+		const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+		FMantleCreatorBodyMap Map;
+		if (!Object.IsValid() || !Object->TryGetNumberField(TEXT("vertexCount"), Count) || Count <= 0
+			|| !MantleCreatorBodyMapPrivate::ReadHash(Object, TEXT("sourceUVHash"), Map.SourceUVHash)
+			|| !MantleCreatorBodyMapPrivate::ReadHash(Object, TEXT("referenceUVHash"), Map.ReferenceUVHash)
+			|| !Object->TryGetArrayField(TEXT("previewOfReference"), Values) || Values->Num() != Count)
 		{
-			OutError = TEXT("previewOfReference is not a one-to-one map");
+			OutError = TEXT("a map has no vertexCount, hashes or previewOfReference of that length");
 			return false;
 		}
-		Seen[static_cast<int32>(Number)] = true;
-		Out.PreviewOfReference.Add(static_cast<int32>(Number));
+		TBitArray<> Seen(false, Count);
+		for (const TSharedPtr<FJsonValue>& Value : *Values)
+		{
+			double Number = 0.0;
+			if (!Value.IsValid() || !Value->TryGetNumber(Number) || Number < 0.0 || Number >= Count || Seen[static_cast<int32>(Number)])
+			{
+				OutError = TEXT("previewOfReference is not a one-to-one map");
+				return false;
+			}
+			Seen[static_cast<int32>(Number)] = true;
+			Map.PreviewOfReference.Add(static_cast<int32>(Number));
+		}
+		Object->TryGetStringField(TEXT("source"), Map.Source);
+		Object->TryGetStringField(TEXT("verifiedOn"), Map.VerifiedOn);
+		Object->TryGetNumberField(TEXT("maxErrorCm"), Map.MaxErrorCm);
+		Object->TryGetNumberField(TEXT("flippedTriangles"), Map.FlippedTriangles);
+		Object->TryGetStringField(TEXT("generated"), Map.Generated);
+		Out.Add(MoveTemp(Map));
 	}
-	if (const TSharedPtr<FJsonObject>* Errors = nullptr; Root->TryGetObjectField(TEXT("maxErrorCm"), Errors))
-	{
-		(*Errors)->TryGetNumberField(TEXT("aera"), Out.MaxErrorCmAera);
-		(*Errors)->TryGetNumberField(TEXT("bo"), Out.MaxErrorCmBo);
-	}
-	Root->TryGetStringField(TEXT("generated"), Out.Generated);
 	return true;
 }
 
-FString FMantleCreatorBodyMap::ToJson() const
+FString FMantleCreatorBodyMap::ToJson(const TArray<FMantleCreatorBodyMap>& Maps)
 {
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-	Root->SetNumberField(TEXT("version"), 1);
-	Root->SetStringField(TEXT("comment"), TEXT("Maintainer-generated by Mantle.Dev.LearnBodyLayoutMap. Plugin-only; not part of the synced avatar contract. previewOfReference[i] is the render vertex of MetaHuman Creator's in-memory body LOD1 that is vertex i of Mantle's reference body (Epic's UE Optimized / Medium build)."));
-	Root->SetStringField(TEXT("generated"), Generated);
-	Root->SetNumberField(TEXT("vertexCount"), PreviewOfReference.Num());
-	Root->SetStringField(TEXT("sourceUVHash"), FString::Printf(TEXT("%08x"), SourceUVHash));
-	Root->SetStringField(TEXT("referenceUVHash"), FString::Printf(TEXT("%08x"), ReferenceUVHash));
-	TSharedRef<FJsonObject> Errors = MakeShared<FJsonObject>();
-	Errors->SetNumberField(TEXT("aera"), MaxErrorCmAera);
-	Errors->SetNumberField(TEXT("bo"), MaxErrorCmBo);
-	Root->SetObjectField(TEXT("maxErrorCm"), Errors);
-	TArray<TSharedPtr<FJsonValue>> Values;
-	Values.Reserve(PreviewOfReference.Num());
-	for (const int32 Index : PreviewOfReference)
+	Root->SetNumberField(TEXT("version"), 2);
+	Root->SetStringField(TEXT("comment"), TEXT("Maintainer-generated by Mantle.Dev.LearnBodyLayoutMap. Plugin-only; not part of the synced avatar contract. One map per layout of MetaHuman Creator's in-memory body LOD1, keyed by sourceUVHash. previewOfReference[i] is the render vertex of that body that is vertex i of Mantle's reference body (Epic's UE Optimized / Medium build)."));
+	TArray<TSharedPtr<FJsonValue>> Entries;
+	for (const FMantleCreatorBodyMap& Map : Maps)
 	{
-		Values.Add(MakeShared<FJsonValueNumber>(Index));
+		TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		Object->SetStringField(TEXT("source"), Map.Source);
+		Object->SetStringField(TEXT("verifiedOn"), Map.VerifiedOn);
+		Object->SetStringField(TEXT("generated"), Map.Generated);
+		Object->SetNumberField(TEXT("maxErrorCm"), Map.MaxErrorCm);
+		Object->SetNumberField(TEXT("flippedTriangles"), Map.FlippedTriangles);
+		Object->SetNumberField(TEXT("vertexCount"), Map.PreviewOfReference.Num());
+		Object->SetStringField(TEXT("sourceUVHash"), FString::Printf(TEXT("%08x"), Map.SourceUVHash));
+		Object->SetStringField(TEXT("referenceUVHash"), FString::Printf(TEXT("%08x"), Map.ReferenceUVHash));
+		TArray<TSharedPtr<FJsonValue>> Values;
+		Values.Reserve(Map.PreviewOfReference.Num());
+		for (const int32 Index : Map.PreviewOfReference)
+		{
+			Values.Add(MakeShared<FJsonValueNumber>(Index));
+		}
+		Object->SetArrayField(TEXT("previewOfReference"), Values);
+		Entries.Add(MakeShared<FJsonValueObject>(Object));
 	}
-	Root->SetArrayField(TEXT("previewOfReference"), Values);
+	Root->SetArrayField(TEXT("maps"), Entries);
 	FString Out;
 	TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Out);
 	FJsonSerializer::Serialize(Root, Writer);
