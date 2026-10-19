@@ -10,6 +10,7 @@
 // Nothing is changed, saved or uploaded. Logs MANTLE_NECK_CHECK lines.
 #include "MantleAvatarContract.h"
 #include "MantleBodyTopologyData.h"
+#include "MantleFaceLayout.h"
 #include "MantleFitBodies.h"
 
 #include "Rendering/StaticMeshVertexBuffer.h"
@@ -203,15 +204,54 @@ namespace MantleDevNeckCheckPrivate
 			*A.Name, *B.Name, Probe.Num(), Probe.IsEmpty() ? -1.0 : SumSame / Probe.Num(), MaxSame, NearestAverage, NearestMax);
 	}
 
-	/** A standard body type made in memory (nothing saved): the body and face the upload would use. */
-	FNeckCase InMemory(const TCHAR* Id, const EMetaHumanBodyType Type, const int32 ReferenceVertices, const bool bFromPreset)
+	/**
+	 * A standard body type made in memory (nothing saved): the body and face the upload would use. bMatched: the face put into the built
+	 * face layout (FMantleFaceLayout::Reorder), the way the upload does; the result of the match is logged.
+	 */
+	FNeckCase InMemory(const TCHAR* Id, const EMetaHumanBodyType Type, const int32 ReferenceVertices, const bool bMatched)
 	{
 		FNeckCase Case;
-		Case.Name = FString(Id) + (bFromPreset ? (Id[0] == TEXT('m') ? TEXT("(from Bo)") : TEXT("(from Aera)")) : TEXT("(fresh)"));
+		Case.Name = FString(Id) + (bMatched ? TEXT("(matched face)") : TEXT("(fresh)"));
 		FMantleFitBody Body;
-		if (FMantleFitBodies::Make(Id, Type, Body, Case.Error, bFromPreset))
+		if (FMantleFitBodies::Make(Id, Type, Body, Case.Error))
 		{
-			Case.bOk = ReadBody(Body.BodyMesh.Get(), ReferenceVertices, Case) && ReadFace(Body.FaceMesh.Get(), Case);
+			if (!bMatched)
+			{
+				Case.bOk = ReadBody(Body.BodyMesh.Get(), ReferenceVertices, Case) && ReadFace(Body.FaceMesh.Get(), Case);
+			}
+			else if (ReadBody(Body.BodyMesh.Get(), ReferenceVertices, Case))
+			{
+				const FMantleFaceLayout* Layout = FMantleFaceLayout::Get();
+				const int32 LOD = FMantleFaceLayout::FindFaceLOD(Body.FaceMesh.Get());
+				FMantleGlbMesh Face;
+				FString Note;
+				if (!Layout) { Case.Error = TEXT("no built face layout (Resources/FaceLayout); Mantle.Dev.RecordFaceLayout records it"); }
+				else if (LOD == INDEX_NONE) { Case.Error = TEXT("the in-memory face has no 6872-triangle LOD"); }
+				else if (FMantleFaceLayout::ReadRender(Body.FaceMesh.Get(), LOD, Face, Case.Error))
+				{
+					const int32 SourceVerts = Face.Positions.Num();
+					FString SourceSections;
+					for (const FMantleGlbPrimitive& Primitive : Face.Primitives) { SourceSections += FString::Printf(TEXT(" %s:%dv/%dt"), *Face.MaterialNames[Primitive.MaterialIndex], Primitive.NumVertices, Primitive.Indices.Num() / 3); }
+					if (Layout->Reorder(Face, Note, Case.Error))
+					{
+						UE_LOG(LogMantleNeckCheck, Display, TEXT("MANTLE_NECK_CHECK case=%s face match ok: %s"), *Case.Name, *Note);
+						Case.FacePositions = Face.Positions;
+						for (const FMantleGlbPrimitive& Primitive : Face.Primitives)
+						{
+							for (const uint32 Index : Primitive.Indices) { Case.FaceIndices.Add(Index + static_cast<uint32>(Primitive.FirstVertex)); }
+						}
+						for (int32 First = 0; First + 2 < Case.FaceIndices.Num(); First += 3)
+						{
+							Case.Centroids.Add((Case.FacePositions[Case.FaceIndices[First]] + Case.FacePositions[Case.FaceIndices[First + 1]] + Case.FacePositions[Case.FaceIndices[First + 2]]) / 3.0f);
+							Case.UVCentroids.Add((Face.UVs[Case.FaceIndices[First]] + Face.UVs[Case.FaceIndices[First + 1]] + Face.UVs[Case.FaceIndices[First + 2]]) / 3.0f);
+						}
+						Case.FaceLOD = LOD;
+						Case.FaceLODs = TEXT("matched");
+						Case.bOk = true;
+					}
+					else { UE_LOG(LogMantleNeckCheck, Warning, TEXT("MANTLE_NECK_CHECK case=%s face match FAILED (%d vertices; sections%s): %s"), *Case.Name, SourceVerts, *SourceSections, *Case.Error); }
+				}
+			}
 		}
 		FMantleFitBodies::Release(Body);
 		return Case;
@@ -280,8 +320,8 @@ namespace MantleDevNeckCheckPrivate
 		const FNeckCase* BoBuilt = Find(TEXT("Bo(built)"));
 		const FNeckCase* Male = Find(TEXT("m_med_nrw(fresh)"));
 		const FNeckCase* Female = Find(TEXT("f_med_nrw(fresh)"));
-		const FNeckCase* MaleFromBo = Find(TEXT("m_med_nrw(from Bo)"));
-		const FNeckCase* FemaleFromAera = Find(TEXT("f_med_nrw(from Aera)"));
+		const FNeckCase* MaleMatched = Find(TEXT("m_med_nrw(matched face)"));
+		const FNeckCase* FemaleMatched = Find(TEXT("f_med_nrw(matched face)"));
 		if (AeraPreview && AeraBuilt) { ComparePair(*AeraPreview, *AeraBuilt); }
 		if (Female && AeraBuilt) { ComparePair(*Female, *AeraBuilt); }
 		if (Male && AeraBuilt) { ComparePair(*Male, *AeraBuilt); }
@@ -289,11 +329,15 @@ namespace MantleDevNeckCheckPrivate
 		// Two BUILT faces: do they pair correctly by triangle index?
 		if (AeraBuilt && BoBuilt) { ComparePair(*AeraBuilt, *BoBuilt); ComparePair(*BoBuilt, *AeraBuilt); }
 		if (AeraBuilt && Male) { ComparePair(*AeraBuilt, *Male); }
-		// Started from Epic's presets: the same-index distance should be at the nearest-centroid level (shape differences only).
-		if (FemaleFromAera && AeraBuilt) { ComparePair(*FemaleFromAera, *AeraBuilt); }
-		if (MaleFromBo && BoBuilt) { ComparePair(*MaleFromBo, *BoBuilt); }
-		if (MaleFromBo && AeraBuilt) { ComparePair(*MaleFromBo, *AeraBuilt); }
-		if (MaleFromBo && FemaleFromAera) { ComparePair(*MaleFromBo, *FemaleFromAera); }
+		// The in-memory faces put into the built layout: uvCentroidSameIndex should show ~0 differing triangles against Aera(built), and the
+		// same-index distances should fall to the nearest-centroid level (shape differences only).
+		for (const FNeckCase* Matched : { MaleMatched, FemaleMatched })
+		{
+			if (!Matched) { continue; }
+			if (AeraBuilt) { ComparePair(*Matched, *AeraBuilt); }
+			if (BoBuilt) { ComparePair(*Matched, *BoBuilt); }
+		}
+		if (MaleMatched && FemaleMatched) { ComparePair(*MaleMatched, *FemaleMatched); }
 		UE_LOG(LogMantleNeckCheck, Display, TEXT("MANTLE_NECK_CHECK done"));
 	}
 

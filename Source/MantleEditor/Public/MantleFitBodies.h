@@ -73,22 +73,15 @@ struct MANTLEEDITOR_API FMantleFitBodies
 	 * Makes the body type's character, selects the body type, commits it and fetches the editor's body, face and merged
 	 * head+body meshes. The character stays registered for editing until Release. Game thread only.
 	 */
-	static bool Make(const FString& Id, EMetaHumanBodyType Type, FMantleFitBody& Out, FString& OutError, bool bFromPreset = true);
+	static bool Make(const FString& Id, EMetaHumanBodyType Type, FMantleFitBody& Out, FString& OutError);
 
 	/**
-	 * Fingerprint of how a face numbers its triangles: a hash, in triangle order, of each triangle's UV centroid on the face LOD with the
+	 * Fingerprint (a diagnostic, logged by Mantle.Dev.NeckCheck) of how a face numbers its triangles: a hash, in triangle order, of each triangle's UV centroid on the face LOD with the
 	 * reference face topology (6872 triangles; else LOD0). UVs are the same on every MetaHuman face, so the hash does not depend on the face's
 	 * shape, only on the numbering. The client pairs a collar's samples by triangle index, so a face must number its triangles like Epic's built
 	 * faces. 0 when unreadable.
 	 */
 	static uint32 FaceNumberingHash(const USkeletalMesh* Face);
-
-	/**
-	 * Whether a face's numbering is shown to be Epic's built numbering: equal to limits garment-fit.json builtFaceNumberingHash when that is
-	 * set; otherwise (not yet recorded) different from the numbering of a freshly initialised Creator character, which is known not to match.
-	 * Why says what was compared.
-	 */
-	static bool FaceNumberingIsBuilt(uint32 Hash, const FMantleAvatarContract& Contract, FString& OutWhy);
 
 	/** Unregisters the character from editing and drops every reference, so the objects can be collected. */
 	static void Release(FMantleFitBody& Body);

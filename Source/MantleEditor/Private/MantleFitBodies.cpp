@@ -206,7 +206,7 @@ EMantleFitSex FMantleFitBodies::ChooseSex(const TArray<float>& FemaleCm, const T
 	return EMantleFitSex::Female;
 }
 
-bool FMantleFitBodies::Make(const FString& Id, const EMetaHumanBodyType Type, FMantleFitBody& Out, FString& OutError, const bool bFromPreset)
+bool FMantleFitBodies::Make(const FString& Id, const EMetaHumanBodyType Type, FMantleFitBody& Out, FString& OutError)
 {
 	Release(Out);
 	Out = FMantleFitBody();
@@ -240,19 +240,6 @@ bool FMantleFitBodies::Make(const FString& Id, const EMetaHumanBodyType Type, FM
 		return false;
 	}
 	Out.bEditing = true;
-	if (bFromPreset)
-	{
-		// Started from Epic's shipped preset (Aera for a female body, Bo for a male one): such a character has the face numbering of Epic's built
-		// faces, which the client's collar pairing needs. The body type is then selected over the preset's own body.
-		const FString PresetName = Id.StartsWith(TEXT("m_")) ? TEXT("Bo") : TEXT("Aera");
-		UMetaHumanCharacter* Preset = LoadObject<UMetaHumanCharacter>(nullptr, *FString::Printf(TEXT("/MetaHumanCharacter/Optional/Presets/%s.%s"), *PresetName, *PresetName));
-		if (!Preset)
-		{
-			OutError = FString::Printf(TEXT("Epic's preset %s was not found (MetaHuman Optional Content?)"), *PresetName);
-			return false;
-		}
-		Subsystem->InitializeFromPreset(Character, Preset);
-	}
 
 	// Creator's own body-type picker does this: select the fixed body, then commit it. All local; no cloud.
 	Subsystem->SetMetaHumanBodyType(Character, Type, UMetaHumanCharacterEditorSubsystem::EBodyMeshUpdateMode::Full);
@@ -273,6 +260,7 @@ bool FMantleFitBodies::Make(const FString& Id, const EMetaHumanBodyType Type, FM
 		TSet<TWeakObjectPtr<const USkeletalMesh>>& Meshes = MantleFitBodiesPrivate::CreatorPreviews();
 		for (auto It = Meshes.CreateIterator(); It; ++It) { if (!It->IsValid()) { It.RemoveCurrent(); } }
 		Meshes.Add(Preview.BodyMesh.Get());
+		if (Preview.FaceMesh) { Meshes.Add(Preview.FaceMesh.Get()); }
 	}
 	Out.FaceMesh.Reset(Preview.FaceMesh.Get());
 	Out.MergedHeadAndBodyMesh.Reset(Preview.MergedHeadAndBodyMesh.Get());
@@ -295,6 +283,7 @@ void FMantleFitBodies::Release(FMantleFitBody& Body)
 	{
 		FScopeLock Lock(&MantleFitBodiesPrivate::CreatorPreviewLock);
 		MantleFitBodiesPrivate::CreatorPreviews().Remove(Body.BodyMesh.Get());
+		if (Body.FaceMesh.IsValid()) { MantleFitBodiesPrivate::CreatorPreviews().Remove(Body.FaceMesh.Get()); }
 	}
 	Body.BodyMesh.Reset();
 	Body.FaceMesh.Reset();
@@ -375,33 +364,6 @@ uint32 FMantleFitBodies::FaceNumberingHash(const USkeletalMesh* Face)
 		Hash = FCrc::MemCrc32(Quantized, sizeof(Quantized), Hash);
 	}
 	return Hash == 0 ? 1 : Hash;
-}
-
-bool FMantleFitBodies::FaceNumberingIsBuilt(const uint32 Hash, const FMantleAvatarContract& Contract, FString& OutWhy)
-{
-	if (Hash == 0)
-	{
-		OutWhy = TEXT("its face could not be read");
-		return false;
-	}
-	if (Contract.GarmentFitBuiltFaceNumberingHash != 0)
-	{
-		OutWhy = FString::Printf(TEXT("face numbering %08x, built faces %08x"), Hash, Contract.GarmentFitBuiltFaceNumberingHash);
-		return Hash == Contract.GarmentFitBuiltFaceNumberingHash;
-	}
-	// Not recorded yet: the numbering of a freshly initialised character is the one known to be wrong. Made once.
-	static uint32 FreshHash = 0;
-	static bool bTried = false;
-	if (!bTried)
-	{
-		bTried = true;
-		FMantleFitBody Fresh;
-		FString Error;
-		if (Make(TEXT("f_med_nrw"), EMetaHumanBodyType::f_med_nrw, Fresh, Error, /*bFromPreset*/ false)) { FreshHash = Fresh.FaceNumberingHash; }
-		Release(Fresh);
-	}
-	OutWhy = FString::Printf(TEXT("face numbering %08x, a freshly initialised character's %08x"), Hash, FreshHash);
-	return FreshHash == 0 || Hash != FreshHash;
 }
 
 bool FMantleFitBodies::IsCreatorPreview(const USkeletalMesh* Mesh)

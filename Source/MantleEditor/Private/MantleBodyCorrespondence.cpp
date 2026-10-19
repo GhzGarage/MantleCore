@@ -497,11 +497,12 @@ bool FMantleBodyCorrespondence::MatchDNABodyPolygons(TConstArrayView<FVector2f> 
 }
 
 bool FMantleBodyCorrespondence::MatchFlippedDiagonals(TConstArrayView<FVector2f> UVs, TConstArrayView<uint32> InputIndices,
-	TArray<int32>& OutInputOfReference, FString& OutNote, FString& OutError) const
+	TArray<int32>& OutInputOfReference, FString& OutNote, FString& OutError, const int32 MaxFlippedPairs, int32* OutFlippedPairs) const
 {
 	using namespace MantleBodyCorrespondencePrivate;
 	OutInputOfReference.Reset();
 	OutNote.Reset();
+	if (OutFlippedPairs) { *OutFlippedPairs = 0; }
 	const int32 Count = QuantizedUVs.Num();
 	if (Count == 0 || UVs.Num() != Count || InputIndices.Num() != Indices.Num() || Indices.Num() % 3 != 0)
 	{
@@ -562,7 +563,7 @@ bool FMantleBodyCorrespondence::MatchFlippedDiagonals(TConstArrayView<FVector2f>
 			InputOfReference[Group.Value[0]] = (*Input)[0];
 			continue;
 		}
-		if (N > 4)
+		if (N > 6)
 		{
 			return Fail(OutError, TEXT("the reference repeats a UV too often to tell the vertices apart"));
 		}
@@ -626,8 +627,7 @@ bool FMantleBodyCorrespondence::MatchFlippedDiagonals(TConstArrayView<FVector2f>
 			else { OnlyInput.Add(Sorted(A, B, C)); }
 		}
 	}
-	constexpr int32 MaxFlipped = 8;
-	if (OnlyReference.Num() != OnlyInput.Num() || OnlyReference.Num() > 2 * MaxFlipped || OnlyReference.Num() % 2 != 0)
+	if (OnlyReference.Num() != OnlyInput.Num() || static_cast<int64>(OnlyReference.Num()) > 2ll * MaxFlippedPairs || OnlyReference.Num() % 2 != 0)
 	{
 		return Fail(OutError, TEXT("the body's triangles differ from the reference layout by more than flipped quad diagonals"));
 	}
@@ -662,6 +662,7 @@ bool FMantleBodyCorrespondence::MatchFlippedDiagonals(TConstArrayView<FVector2f>
 	{
 		return Fail(OutError, TEXT("some of the body's triangles differ from the reference layout in more than a flipped quad diagonal"));
 	}
+	if (OutFlippedPairs) { *OutFlippedPairs = Flipped; }
 	OutInputOfReference = MoveTemp(InputOfReference);
 	OutNote = FString::Printf(TEXT("UV match, %d repeated-UV vertices told apart by their neighbours, %d diagonal%s flipped"), Repeated, Flipped, Flipped == 1 ? TEXT("") : TEXT("s"));
 	OutError.Reset();

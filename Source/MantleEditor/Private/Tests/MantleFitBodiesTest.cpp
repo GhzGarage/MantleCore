@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAvatarContract.h"
 #include "MantleBodyCorrespondence.h"
+#include "MantleFaceLayout.h"
 #include "MantleFitBodies.h"
 
 #include "Misc/AutomationTest.h"
@@ -130,6 +131,82 @@ bool FMantleFlippedDiagonalsTest::RunTest(const FString& Parameters)
 	MakeInput(Layout.Indices, UVs, Indices);
 	UVs[0].X += 0.5f;
 	TestFalse(TEXT("a different UV layout is refused"), Layout.MatchFlippedDiagonals(UVs, Indices, InputOfReference, Note, Error));
+	return true;
+}
+
+// A face made in memory is put into the built face layout: two sections, one of them cut the other way, renumbered, with per-vertex data carried along.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleFaceLayoutTest,
+	"Mantle.Editor.FitBodies.FaceLayout",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleFaceLayoutTest::RunTest(const FString& Parameters)
+{
+	// Layout: section "skin" is a 3 x 2 grid (vertices 0..5, two quads), section "teeth" a single triangle (vertices 6..8).
+	FMantleFaceLayout Layout;
+	Layout.Source = TEXT("test");
+	for (int32 Y = 0; Y < 2; ++Y) { for (int32 X = 0; X < 3; ++X) { Layout.QuantizedUVs.Add(FIntPoint(X * 2048 + 100, Y * 2048 + 100)); } }
+	Layout.QuantizedUVs.Add(FIntPoint(9000, 9000));
+	Layout.QuantizedUVs.Add(FIntPoint(9100, 9000));
+	Layout.QuantizedUVs.Add(FIntPoint(9000, 9100));
+	Layout.Indices = { 0, 1, 4,  0, 4, 3,  1, 2, 5,  1, 5, 4,  6, 7, 8 };
+	Layout.Sections = { { TEXT("skin"), 0, 6, 0, 4 }, { TEXT("teeth"), 6, 3, 12, 1 } };
+
+	FMantleFaceLayout Read;
+	FString Error;
+	TestTrue(TEXT("a written layout reads back"), FMantleFaceLayout::Parse(Layout.ToJson(), Read, Error));
+	TestEqual(TEXT("sections survive"), Read.Sections.Num(), 2);
+	TestEqual(TEXT("indices survive"), Read.Indices.Num(), 15);
+	TestFalse(TEXT("text that is not a layout is refused"), FMantleFaceLayout::Parse(TEXT("{}"), Read, Error));
+
+	// The face: the same vertices renumbered (reference vertex r is input vertex InputOfReference[r]), the skin's first quad cut the other way.
+	FMantleGlbMesh Mesh;
+	Mesh.NumInfluences = 1;
+	Mesh.MaterialNames = { TEXT("skin_mat"), TEXT("teeth_mat") };
+	const int32 InputOfReference[9] = { 3, 0, 5, 1, 2, 4, 8, 6, 7 };
+	Mesh.Positions.SetNum(9);
+	Mesh.UVs.SetNum(9);
+	Mesh.InfluenceJoints.SetNum(9);
+	Mesh.InfluenceWeights.SetNum(9);
+	for (int32 Reference = 0; Reference < 9; ++Reference)
+	{
+		const int32 Input = InputOfReference[Reference];
+		Mesh.Positions[Input] = FVector3f(static_cast<float>(Reference), 0.0f, 0.0f);
+		Mesh.UVs[Input] = FVector2f(Layout.QuantizedUVs[Reference].X / 2048.0f, Layout.QuantizedUVs[Reference].Y / 2048.0f);
+		Mesh.InfluenceJoints[Input] = static_cast<uint16>(Reference);
+		Mesh.InfluenceWeights[Input] = 1.0f;
+	}
+	FMantleGlbPrimitive& Skin = Mesh.Primitives.AddDefaulted_GetRef();
+	Skin.MaterialIndex = 0; Skin.FirstVertex = 0; Skin.NumVertices = 6;
+	// Reference triangles (0,1,4)(0,4,3)(1,2,5)(1,5,4), the first quad cut the other way: (0,1,3)(1,4,3).
+	for (const int32 Reference : { 0, 1, 3,  1, 4, 3,  1, 2, 5,  1, 5, 4 }) { Skin.Indices.Add(InputOfReference[Reference]); }
+	FMantleGlbPrimitive& Teeth = Mesh.Primitives.AddDefaulted_GetRef();
+	Teeth.MaterialIndex = 1; Teeth.FirstVertex = 6; Teeth.NumVertices = 3;
+	for (const int32 Reference : { 6, 7, 8 }) { Teeth.Indices.Add(InputOfReference[Reference] - 6); }
+
+	FMantleGlbMesh Original = Mesh;
+	FString Note;
+	TestFalse(TEXT("a face with another vertex count is refused"), [&Layout, &Original]()
+	{
+		FMantleGlbMesh Short = Original;
+		Short.Positions.Pop();
+		FString Note2, Error2;
+		return Layout.Reorder(Short, Note2, Error2);
+	}());
+	TestTrue(TEXT("the face is put in the layout"), Layout.Reorder(Mesh, Note, Error));
+	if (Mesh.Positions.Num() == 9)
+	{
+		bool bCarried = true;
+		for (int32 Reference = 0; Reference < 9; ++Reference)
+		{
+			bCarried &= FMath::IsNearlyEqual(Mesh.Positions[Reference].X, static_cast<float>(Reference)) && Mesh.InfluenceJoints[Reference] == Reference;
+		}
+		TestTrue(TEXT("positions and skin follow the vertices"), bCarried);
+		TestEqual(TEXT("the sections are the layout's"), Mesh.Primitives.Num(), 2);
+		TestTrue(TEXT("the skin keeps its material"), Mesh.Primitives.Num() == 2 && Mesh.Primitives[0].MaterialIndex == 0 && Mesh.Primitives[1].MaterialIndex == 1);
+		TestTrue(TEXT("the triangles are the layout's"), Mesh.Primitives.Num() == 2 && Mesh.Primitives[0].Indices == TArray<uint32>({ 0, 1, 4,  0, 4, 3,  1, 2, 5,  1, 5, 4 }));
+		TestTrue(TEXT("the note says a diagonal was flipped"), Note.Contains(TEXT("1 flipped")));
+	}
 	return true;
 }
 
