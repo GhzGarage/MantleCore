@@ -35,7 +35,7 @@ bool FMantleEditorActions::IsPublishRunning()
 }
 
 FMantleCosmeticDraft FMantleEditorActions::MakeCosmeticDraft(const EMantleCosmeticClass Class, UObject* Source, const FString& Slot,
-	const FString& Name, const FMantleAvatarContract& Contract)
+	const FString& Name, const FMantleAvatarContract& Contract, const EMantleFitSex FitSex)
 {
 	// SetClass and a slot pick leave a fresh draft; SetSource then applies these in this order.
 	FMantleCosmeticDraft Draft;
@@ -43,6 +43,7 @@ FMantleCosmeticDraft FMantleEditorActions::MakeCosmeticDraft(const EMantleCosmet
 	Draft.Slot = Slot;
 	Draft.Name = Name;
 	Draft.Source = Source;
+	Draft.FitSex = FitSex;
 	ApplyCosmeticSourceDefaults(Draft, &Contract);
 	ApplyCosmeticSectionDefaults(Draft);
 	ApplyCosmeticSocketDefaults(Draft, &Contract);
@@ -163,6 +164,41 @@ void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& 
 	Draft.FitBodyNotes = MoveTemp(Notes);
 	Draft.FitBodies = Set;
 	Draft.FitBodiesStatus = Set->Status;
+}
+
+void FMantleEditorActions::SetCosmeticFitSex(FMantleCosmeticDraft& Draft, const EMantleFitSex Sex, const FMantleAvatarContract* Contract)
+{
+	Draft.FitSex = Sex;
+	// The standard bodies are the ones made in memory; the creator's own fit sources stay, after the new ones.
+	TArray<FMantleOutfitAuthoringTarget> Own = Draft.OutfitTargets.FilterByPredicate(
+		[](const FMantleOutfitAuthoringTarget& Target) { return !Target.bOutfitAuthoringInMemory; });
+	Draft.OutfitTargets.Reset();
+	Draft.FitBodies.Reset();
+	Draft.FitBodiesStatus.Reset();
+	Draft.FitBodyNotes.Reset();
+	ApplyCosmeticFitTargetDefaults(Draft, Contract);
+	Draft.OutfitTargets.Append(MoveTemp(Own));
+}
+
+bool FMantleEditorActions::ParseFitSex(const FString& Text, EMantleFitSex& OutSex)
+{
+	const FString Name = Text.TrimStartAndEnd();
+	if (Name.IsEmpty() || Name.Equals(TEXT("auto"), ESearchCase::IgnoreCase))
+	{
+		OutSex = EMantleFitSex::Auto;
+		return true;
+	}
+	if (Name.Equals(TEXT("female"), ESearchCase::IgnoreCase))
+	{
+		OutSex = EMantleFitSex::Female;
+		return true;
+	}
+	if (Name.Equals(TEXT("male"), ESearchCase::IgnoreCase))
+	{
+		OutSex = EMantleFitSex::Male;
+		return true;
+	}
+	return false;
 }
 
 bool FMantleEditorActions::ApplyCosmeticJawDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract, TArray<FName>& OutCandidates)

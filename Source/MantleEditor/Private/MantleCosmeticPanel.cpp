@@ -1278,6 +1278,8 @@ void SMantleCosmeticPanel::SetSource(UObject* Source)
 	Draft.SectionRoles.Reset();
 	Draft.OutfitTargets.Reset();
 	Draft.FitBodies.Reset();
+	// "Made for" is about this piece; a new source starts on Automatic.
+	Draft.FitSex = EMantleFitSex::Auto;
 	// Clothing from an Outfit starts with Mantle's standard fit bodies, so it uploads in sizes without a creator step.
 	FMantleEditorActions::ApplyCosmeticFitTargetDefaults(Draft, FMantleAvatarContract::Get());
 	RefreshOutfitTargets();
@@ -2365,6 +2367,26 @@ void SMantleCosmeticPanel::RefreshOutfitSizes()
 
 TSharedRef<SWidget> SMantleCosmeticPanel::MakeParametricOutfitSection()
 {
+	// "Made for": the body the creator made the clothing on picks Epic's women's or men's standard bodies for its sizes.
+	auto FitSexButton = [this](const EMantleFitSex Sex, const FText& Label)
+	{
+		return SNew(SCheckBox)
+			.Style(&FAppStyle::Get(), "RadioButton")
+			.IsEnabled_Lambda([this] { return !IsRunning(); })
+			.IsChecked_Lambda([this, Sex] { return Draft.FitSex == Sex ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([this, Sex](const ECheckBoxState State)
+			{
+				if (State != ECheckBoxState::Checked || Draft.FitSex == Sex) return;
+				FMantleEditorActions::SetCosmeticFitSex(Draft, Sex, FMantleAvatarContract::Get());
+				Package.Reset();
+				if (PreviewSession.IsValid()) PreviewSession->Cancel();
+				OutfitPreviewKeepAlive.Reset();
+				RefreshOutfitTargets();
+			})
+			[
+				SNew(STextBlock).Text(Label)
+			];
+	};
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
@@ -2395,6 +2417,31 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeParametricOutfitSection()
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				SNew(STextBlock).AutoWrapText(true).Text(LOCTEXT("OutfitTargetsHelp", "Mantle fits the clothing to Epic's standard body types automatically (listed below), so nothing needs converting. To add a body of your own, choose a Creator character and its converted body/face, then add it as a fit source. All sources upload as one clothing item; Epic chooses its authored size for each source."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+				[
+					SNew(STextBlock).Text(LOCTEXT("FitSexLabel", "Made for:"))
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+				[
+					FitSexButton(EMantleFitSex::Auto, LOCTEXT("FitSexAuto", "Automatic"))
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+				[
+					FitSexButton(EMantleFitSex::Female, LOCTEXT("FitSexFemale", "Women's body"))
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					FitSexButton(EMantleFitSex::Male, LOCTEXT("FitSexMale", "Men's body"))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.Text(LOCTEXT("FitSexHelp", "The style of body you made this clothing on. It picks whether its sizes are made on Epic's standard women's or men's bodies; Automatic guesses from the Outfit's own sizes."))
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4)
 			[
@@ -2469,7 +2516,7 @@ FReply SMantleCosmeticPanel::OnCreateParametricOutfit()
 	FAssetRegistryModule::AssetCreated(Outfit);
 	AuthoredOutfitKeepAlive = MoveTemp(KeepAlive);
 	SetSource(Outfit);
-	OutfitAuthoringStatus = TEXT("Saved ") + Outfit->GetPathName() + TEXT(". Add converted fit sources before checking and uploading this clothing item.");
+	OutfitAuthoringStatus = TEXT("Saved ") + Outfit->GetPathName() + TEXT(". Mantle fits it to Epic's standard bodies automatically; choose what it was made for, then check and upload it.");
 	return FReply::Handled();
 }
 
