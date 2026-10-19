@@ -195,6 +195,11 @@ FVector3f FMantleRefitPlan::Warp(const FVector3f& P) const
 	return Path == EMantleRefitCorrespondence::Identity || Field.bIdentity ? P : Field.Evaluate(P);
 }
 
+bool FMantleRefitPlan::ExceedsMoveCap() const
+{
+	return !bOnBones && MaxMoveCm > FMantleAvatarRefit::MaxMoveCm;
+}
+
 const TArray<FName>& FMantleAvatarRefit::RequiredBones()
 {
 	static const TArray<FName> Bones = {
@@ -434,7 +439,9 @@ bool FMantleAvatarRefit::Plan(const USkeletalMesh& Garment, const USkeletalMesh*
 		return false;
 	}
 
-	// The poses: shared bones at each body's, the garment's own extra bones keeping their local transforms.
+	// The poses: shared bones at each body's, the garment's own extra bones keeping their local transforms. An overlay
+	// piece's source pose is the authoring body's (bOnBones): each nail follows its own finger bone onto the body.
+	Out.bOnBones = bOverlay;
 	const int32 NumBones = GarmentSkeleton.Names.Num();
 	Out.Names = GarmentSkeleton.Names;
 	Out.Parents = GarmentSkeleton.Parents;
@@ -449,7 +456,12 @@ bool FMantleAvatarRefit::Plan(const USkeletalMesh& Garment, const USkeletalMesh*
 		const FTransform& Local = GarmentSkeleton.Local[Bone];
 		const bool bHasParent = Parent != INDEX_NONE && Parent < Bone;
 		const int32* InSource = SourceBody ? SourceSkeleton.IndexOf.Find(Name) : nullptr;
-		if (!SourceBody)
+		const int32* InTarget = TargetSkeleton.IndexOf.Find(Name);
+		if (Out.bOnBones)
+		{
+			Out.SourceComponent[Bone] = InTarget ? TargetSkeleton.Component[*InTarget] : bHasParent ? Local * Out.SourceComponent[Parent] : Local;
+		}
+		else if (!SourceBody)
 		{
 			Out.SourceComponent[Bone] = GarmentSkeleton.Component[Bone];
 		}
@@ -461,7 +473,6 @@ bool FMantleAvatarRefit::Plan(const USkeletalMesh& Garment, const USkeletalMesh*
 		{
 			Out.SourceComponent[Bone] = bHasParent ? Local * Out.SourceComponent[Parent] : Local;
 		}
-		const int32* InTarget = TargetSkeleton.IndexOf.Find(Name);
 		if (InTarget)
 		{
 			Out.TargetComponent[Bone] = TargetSkeleton.Component[*InTarget];
@@ -477,7 +488,7 @@ bool FMantleAvatarRefit::Plan(const USkeletalMesh& Garment, const USkeletalMesh*
 	// The field from the source body's space to the authoring body's.
 	TArray<FVector3f> From;
 	TArray<FVector3f> To;
-	if (SourceBody == &Target)
+	if (SourceBody == &Target || Out.bOnBones)
 	{
 		Out.Path = EMantleRefitCorrespondence::Identity;
 	}
@@ -800,7 +811,7 @@ USkeletalMesh* FMantleAvatarRefit::WriteRefit(USkeletalMesh* Garment, const FMan
 			{
 				return false;
 			}
-			if (Move > MaxMoveCm)
+			if (Move > MaxMoveCm && !Refit.bOnBones)
 			{
 				OutLODError = FString::Printf(TEXT("a vertex of LOD %d would move %.1f cm (at most %.0f cm), so the piece is probably not made for a body like this one"),
 					LOD, Move, MaxMoveCm);
@@ -820,6 +831,24 @@ USkeletalMesh* FMantleAvatarRefit::WriteRefit(USkeletalMesh* Garment, const FMan
 				{
 					*OutSeating = Seated;
 				}
+				// Carried by its bones, a nail is already on its fingertip: seating only sets it on the skin.
+				if (Refit.bOnBones && Seated.NumSeated < Seated.NumIslands)
+				{
+					OutLODError = FString::Printf(TEXT("%d of %d nails of LOD %d are not within %.0f cm of the body once on their finger bones, so the piece is probably not bound to the fingers it covers"),
+						Seated.NumIslands - Seated.NumSeated, Seated.NumIslands, LOD, FMantleNailSeating::SearchCm);
+					return false;
+				}
+				if (Refit.bOnBones && Seated.MaxMoveCm > FMantleNailSeating::MaxSeatMoveCm)
+				{
+					OutLODError = FString::Printf(TEXT("a nail of LOD %d is %.1f cm off its fingertip once on its finger bone (at most %.0f cm), so the piece is probably not bound to the fingers it covers"),
+						LOD, Seated.MaxMoveCm, FMantleNailSeating::MaxSeatMoveCm);
+					return false;
+				}
+			}
+			else if (Refit.bOnBones)
+			{
+				OutLODError = TEXT("a piece carried on its bones needs the body to seat it on");
+				return false;
 			}
 			return true;
 		}, OutError);
@@ -969,12 +998,17 @@ void FMantleAvatarRefitFixer::AnalyzePart(const FMantleConvertContext& Context, 
 		Fix.bCanFix = false;
 		Fix.bEnabled = false;
 	}
-	else if (Plan.MaxMoveCm > FMantleAvatarRefit::MaxMoveCm)
+	else if (Plan.ExceedsMoveCap())
 	{
 		Fix.Action = FString::Printf(TEXT("Can't refit it onto %s: a vertex would move %.1f cm (at most %.0f cm), so it is probably not made for a body like it."),
 			*Bodies.Target->GetName(), Plan.MaxMoveCm, FMantleAvatarRefit::MaxMoveCm);
 		Fix.bCanFix = false;
 		Fix.bEnabled = false;
+	}
+	else if (Plan.bOnBones)
+	{
+		Fix.Action = FString::Printf(TEXT("refits %s onto %s: each nail follows its finger bone onto its pose (max move %.1f cm), then sits on the fingertip"),
+			*What, *Bodies.Target->GetName(), Plan.MaxMoveCm);
 	}
 	else
 	{
@@ -1076,7 +1110,7 @@ bool FMantleAvatarRefitFixer::Apply(const FMantleConvertFix& Fix, FMantleConvert
 	{
 		return false;
 	}
-	if (Plan.MaxMoveCm > FMantleAvatarRefit::MaxMoveCm)
+	if (Plan.ExceedsMoveCap())
 	{
 		OutError = FString::Printf(TEXT("a vertex would move %.1f cm (at most %.0f cm), so %s is probably not made for a body like %s"), Plan.MaxMoveCm,
 			FMantleAvatarRefit::MaxMoveCm, *Mesh->GetName(), *Bodies.Target->GetName());

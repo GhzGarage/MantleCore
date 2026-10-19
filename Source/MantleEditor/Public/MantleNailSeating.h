@@ -50,6 +50,12 @@ public:
 	static constexpr float SearchCm = 10.0f;
 
 	/**
+	 * A nail carried onto the body by its finger bone (FMantleRefitPlan::bOnBones) is seated by at most this much (cm);
+	 * more says it is not bound to the finger it sits on.
+	 */
+	static constexpr float MaxSeatMoveCm = 2.0f;
+
+	/**
 	 * The connected shells of a triangle list: OutIsland gets each vertex's island (0 up), INDEX_NONE for a vertex no
 	 * triangle uses. Returns the number of islands. Pure (tested).
 	 */
