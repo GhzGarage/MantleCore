@@ -55,21 +55,22 @@ jobs:
           retention-days: 14
 
   # Compile proof: RunUAT BuildPlugin on the zip's source (Fab Technical Requirements 4.3.6.2.b,
-  # issue 950 step 4). DISABLED: only our self-hosted builders have UE 5.8, and their runners are
-  # registered to GhzGarage/mantle, not this repo, so no runner would pick this job up. Until the
-  # owner picks a way to give this repo a UE 5.8 runner, run the command from issue 950 step 4 by
-  # hand before tagging. Once a runner is available: set its labels in runs-on, remove `if: false`,
-  # and add `buildplugin` to the release job's `needs`.
-  # UE_ROOT must be an installed (Launcher) UE 5.8, the kind Fab compiles against: on an installed
-  # engine BuildPlugin always builds as Rocket. A source-built engine doesn't prove the same thing.
+  # issue 950 step 4). A failed compile blocks the release.
+  # Runner: a second runner on the Windows builder, registered to this repo only (label
+  # mantlecore-buildplugin, folder C:\actions-runner-mantlecore, service
+  # actions.runner.GhzGarage-MantleCore.mantlecore-buildplugin, account NETWORK SERVICE). The
+  # builder's other runner serves GhzGarage/mantle and is separate.
+  # UE_ROOT (repo variable MANTLECORE_UE_ROOT) must be an installed (Launcher) UE 5.8, the kind
+  # Fab compiles against: on an installed engine BuildPlugin always builds as Rocket.
+  # This job runs on a self-hosted runner, so never trigger this workflow on pull_request once the
+  # repo is public: a fork's pull request could then run code on the builder.
   buildplugin:
     name: BuildPlugin (UE 5.8, Win64)
     needs: package
-    if: false
     runs-on: [self-hosted, Windows, X64, mantlecore-buildplugin]
     timeout-minutes: 60
     env:
-      UE_ROOT: ${{ vars.MANTLECORE_UE_ROOT || 'D:\EpicGames\UE_5.8' }}
+      UE_ROOT: ${{ vars.MANTLECORE_UE_ROOT || 'C:\Program Files\Epic Games\UE_5.8' }}
     steps:
       - name: Download the zip
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -77,9 +78,13 @@ jobs:
           name: ${{ needs.package.outputs.name }}
           path: ${{ runner.temp }}\zip
 
-      - name: Unpack
+      - name: Unpack (and check the engine is an installed UE 5.8)
         shell: pwsh
         run: |
+          if (-not (Test-Path -LiteralPath "$env:UE_ROOT\Engine\Build\InstalledBuild.txt")) { throw "$env:UE_ROOT is not an installed engine (no Engine\Build\InstalledBuild.txt)" }
+          $version = Get-Content -Raw "$env:UE_ROOT\Engine\Build\Build.version" | ConvertFrom-Json
+          if ("$($version.MajorVersion).$($version.MinorVersion)" -ne '5.8') { throw "$env:UE_ROOT is UE $($version.MajorVersion).$($version.MinorVersion), not 5.8" }
+          Write-Output "Engine: $env:UE_ROOT (UE $($version.MajorVersion).$($version.MinorVersion).$($version.PatchVersion), installed)"
           $src = Join-Path $env:RUNNER_TEMP 'src'
           Remove-Item -Recurse -Force $src -ErrorAction SilentlyContinue
           Expand-Archive -Path (Join-Path $env:RUNNER_TEMP 'zip\${{ needs.package.outputs.name }}') -DestinationPath $src
@@ -95,8 +100,7 @@ jobs:
 
   release:
     name: GitHub release
-    # Add buildplugin here once that job is enabled.
-    needs: package
+    needs: [package, buildplugin]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10
