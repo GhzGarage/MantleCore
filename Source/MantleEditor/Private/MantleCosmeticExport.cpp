@@ -2680,12 +2680,19 @@ namespace MantleCosmeticExportPrivate
 				OutError = TEXT("MetaHuman Creator's face is numbered differently from Epic's built faces and the built face layout (Resources/FaceLayout) is missing; Mantle.Dev.RecordFaceLayout records it");
 				return false;
 			}
-			if (!Layout->Reorder(Out.Glb, Note, OutError))
+			FString Why;
+			if (Layout->IsNumberedLikeThis(Out.Glb, Why))
 			{
-				OutError = TEXT("MetaHuman Creator's face does not match the built face layout: ") + OutError;
+				// The normal case: the fit bodies' faces are made from the DNA archetype like the build's, so they already number triangles like built faces.
+				if (OutNote) { *OutNote = TEXT("face numbered like Epic's built faces"); }
+			}
+			else if (!Layout->Reorder(Out.Glb, Note, OutError))
+			{
+				// Fallback only: a face that is numbered differently and does not match the built layout is left out rather than tear collars.
+				OutError = TEXT("MetaHuman Creator's face is not numbered like Epic's built faces (") + Why + TEXT(") and does not match the built face layout: ") + OutError;
 				return false;
 			}
-			if (OutNote) { *OutNote = Note; }
+			else if (OutNote) { *OutNote = Note; }
 		}
 		int32 Dropped = 0;
 		if (!FitToClassSkeleton(Out, Contract.AvatarFace, Contract, true, Dropped, OutError))

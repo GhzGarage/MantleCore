@@ -10,6 +10,7 @@
 #include "Async/Async.h"
 #include "Editor.h"
 #include "MeshDescription.h"
+#include "HAL/IConsoleManager.h"
 #include "MetaHumanCharacterBodyIdentity.h"
 #include "MetaHumanCharacterEditorSubsystem.h"
 #include "Rendering/SkeletalMeshLODRenderData.h"
@@ -28,6 +29,18 @@ static_assert(static_cast<int32>(EMetaHumanBodyType::f_med_nrw) == 0 && static_c
 // Named, not anonymous: MantleEditor builds as a unity build.
 namespace MantleFitBodiesPrivate
 {
+	/** Sets mh.Character.LoadMeshesFromDNA while it lives (Creator then makes face and body meshes from the DNA archetypes, as the build does). */
+	struct FScopedDnaArchetypeMeshes
+	{
+		IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(TEXT("mh.Character.LoadMeshesFromDNA"));
+		bool bPrevious = false;
+		FScopedDnaArchetypeMeshes()
+		{
+			if (Variable) { bPrevious = Variable->GetBool(); Variable->Set(true, ECVF_SetByCode); }
+			else { UE_LOG(LogMantleFitBodies, Warning, TEXT("mh.Character.LoadMeshesFromDNA is not there; the fit bodies' faces may be numbered unlike built faces")); }
+		}
+		~FScopedDnaArchetypeMeshes() { if (Variable) { Variable->Set(bPrevious, ECVF_SetByCode); } }
+	};
 	FCriticalSection CreatorPreviewLock;
 	TSet<TWeakObjectPtr<const USkeletalMesh>>& CreatorPreviews()
 	{
@@ -228,6 +241,10 @@ bool FMantleFitBodies::Make(const FString& Id, const EMetaHumanBodyType Type, FM
 		return false;
 	}
 	Out.Character.Reset(Character);
+	// Epic's build makes its meshes from the DNA archetypes (TryGenerateCharacterAssets), while Creator's preview of a character that has no face DNA uses
+	// the SKM_Face / SKM_Body assets, whose triangles are numbered differently: the client's collar pairs a wearer's face to the garment's by triangle index.
+	// Have Creator open this character the way the build does, for the length of this function.
+	MantleFitBodiesPrivate::FScopedDnaArchetypeMeshes DnaArchetypes;
 	Subsystem->InitializeMetaHumanCharacter(Character);
 	if (!Character->IsCharacterValid())
 	{

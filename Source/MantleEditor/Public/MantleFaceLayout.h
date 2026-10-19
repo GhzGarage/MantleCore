@@ -60,6 +60,13 @@ struct MANTLEEDITOR_API FMantleFaceLayout
 	 */
 	bool Reorder(FMantleGlbMesh& Mesh, FString& OutNote, FString& OutError) const;
 
+	/**
+	 * True when Mesh (one primitive per section, in this layout's order) already numbers its triangles like this layout: the same triangle count and
+	 * every triangle's UV centroid where the layout's triangle of that index has it. A face MetaHuman Creator made from the DNA archetype (as the
+	 * build does) is; nothing then needs reordering. OutWhy says what differs when it is not.
+	 */
+	bool IsNumberedLikeThis(const FMantleGlbMesh& Mesh, FString& OutWhy) const;
+
 	static bool Parse(const FString& Json, FMantleFaceLayout& Out, FString& OutError);
 	FString ToJson() const;
 };

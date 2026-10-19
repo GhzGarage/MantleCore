@@ -424,6 +424,50 @@ bool FMantleFaceLayout::Reorder(FMantleGlbMesh& Mesh, FString& OutNote, FString&
 	return true;
 }
 
+bool FMantleFaceLayout::IsNumberedLikeThis(const FMantleGlbMesh& Mesh, FString& OutWhy) const
+{
+	int32 Triangles = 0;
+	for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives) { Triangles += Primitive.Indices.Num() / 3; }
+	if (Triangles != Indices.Num() / 3 || Mesh.UVs.IsEmpty())
+	{
+		OutWhy = FString::Printf(TEXT("the face has %d triangles and the built face layout %d"), Triangles, Indices.Num() / 3);
+		return false;
+	}
+	const float Scale = 1.0f / static_cast<float>(Quantization);
+	int32 Triangle = 0, Differing = 0, FirstDiffering = INDEX_NONE;
+	for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives)
+	{
+		for (int32 First = 0; First + 2 < Primitive.Indices.Num(); First += 3, ++Triangle)
+		{
+			FVector2f Centroid = FVector2f::ZeroVector;
+			bool bValid = true;
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				const int32 Vertex = Primitive.FirstVertex + static_cast<int32>(Primitive.Indices[First + Corner]);
+				if (!Mesh.UVs.IsValidIndex(Vertex)) { bValid = false; break; }
+				Centroid += Mesh.UVs[Vertex] / 3.0f;
+			}
+			FVector2f Wanted = FVector2f::ZeroVector;
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				const FIntPoint& UV = QuantizedUVs[Indices[Triangle * 3 + Corner]];
+				Wanted += FVector2f(UV.X * Scale, UV.Y * Scale) / 3.0f;
+			}
+			if (!bValid || FMath::Abs(Centroid.X - Wanted.X) > 2.0f * Scale || FMath::Abs(Centroid.Y - Wanted.Y) > 2.0f * Scale)
+			{
+				++Differing;
+				if (FirstDiffering == INDEX_NONE) { FirstDiffering = Triangle; }
+			}
+		}
+	}
+	if (Differing > 0)
+	{
+		OutWhy = FString::Printf(TEXT("%d of %d triangles are not where the built face layout has them (the first is triangle %d)"), Differing, Triangles, FirstDiffering);
+		return false;
+	}
+	return true;
+}
+
 bool FMantleFaceLayout::Parse(const FString& Json, FMantleFaceLayout& Out, FString& OutError)
 {
 	Out = FMantleFaceLayout();
