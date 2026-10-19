@@ -171,7 +171,7 @@ void FMantleEditorActions::SetCosmeticFitSex(FMantleCosmeticDraft& Draft, const 
 	Draft.FitSex = Sex;
 	// The standard bodies are the ones made in memory; the creator's own fit sources stay, after the new ones.
 	TArray<FMantleOutfitAuthoringTarget> Own = Draft.OutfitTargets.FilterByPredicate(
-		[](const FMantleOutfitAuthoringTarget& Target) { return !Target.bOutfitAuthoringInMemory; });
+		[](const FMantleOutfitAuthoringTarget& Target) { return !Target.bInMemory; });
 	Draft.OutfitTargets.Reset();
 	Draft.FitBodies.Reset();
 	Draft.FitBodiesStatus.Reset();
