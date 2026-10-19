@@ -27,7 +27,7 @@ struct FMantleAgentTools
 	 * BuildCosmeticPackage's, then check_failed with the check's issues when it finds errors), or
 	 * the upload it started, whose result completes with DescribeCosmeticUpload when that ends.
 	 */
-	static UToolCallAsyncResultString* UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections);
+	static UToolCallAsyncResultString* UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections, const FString& ItemId);
 
 	/** FMantlePlaceValidator::Validate, as CheckPlace describes it. */
 	static FString CheckPlace(UWorld* World);
@@ -67,7 +67,7 @@ struct FMantleAgentTools
 	 * OutObjectPath is the mesh's full object path.
 	 */
 	static bool BuildCosmeticPackage(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections,
-		FMantleCosmeticPackage& OutPackage, FString& OutObjectPath, FString& OutRefusal);
+		const FString& ItemId, FMantleCosmeticPackage& OutPackage, FString& OutObjectPath, FString& OutRefusal);
 
 	/** MeasureHead, as the toolset describes it. */
 	static FString MeasureHead(const FString& BodyPath, const FString& FacePath);

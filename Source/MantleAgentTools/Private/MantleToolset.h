@@ -162,12 +162,14 @@ public:
 	 * @param Slot The item's slot, as for CheckCosmetic.
 	 * @param Name The item's name players see; "" takes the asset's name. Always pass it.
 	 * @param Sections The sections to upload, as for CheckCosmetic. Always pass it.
+	 * @param ItemId "" creates a new item. An id (itm_...) publishes a new version into that existing item instead,
+	 * which the signed-in creator must own; the slot must match the item's, and the new version is screened again.
 	 * @return JSON: {"ok", "itemId", "itemStatus", "moderationState", "mayClipInMotion",
 	 * "message", "files": [{"label", "state", "assetId", "alreadyOnMantle", "message"}]}, or a
 	 * refusal (with "issues" when the check found errors).
 	 */
 	UFUNCTION(meta = (AICallable))
-	static UToolCallAsyncResultString* UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name = TEXT(""), const FString& Sections = TEXT(""));
+	static UToolCallAsyncResultString* UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name = TEXT(""), const FString& Sections = TEXT(""), const FString& ItemId = TEXT(""));
 
 	/**
 	 * Convert a character so it can be uploaded, as the Cosmetics panel's Convert does: lists what

@@ -622,6 +622,12 @@ bool FMantleCosmeticPackage::MakeItemPatchJson(const TMap<FString, FString>& Ids
 	case EMantleCosmeticClass::Garment:
 		ClearString(TEXT("coverageAssetId"));
 		ClearString(TEXT("faceMeshAssetId"));
+		// Hair authored with a face carries no source shape; a garment without size variants carries no manifest.
+		ClearString(TEXT("sourceShapeAssetId"));
+		if (Class == EMantleCosmeticClass::Garment)
+		{
+			ClearObject(TEXT("garmentVariants"));
+		}
 		break;
 	case EMantleCosmeticClass::Accessory:
 		// An empty transform is stored as no offset.
