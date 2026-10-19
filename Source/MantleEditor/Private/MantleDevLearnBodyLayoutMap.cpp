@@ -1,6 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 //
-// Maintainer command: Mantle.Dev.LearnBodyLayoutMap [out=<path>]
+// Maintainer command: Mantle.Dev.LearnBodyLayoutMap [out=<path>] [build=0] [verify=0]
 // Learns, once, how MetaHuman Creator's in-memory body (LOD1) is numbered against Mantle's reference body (the output of Epic's
 // UE Optimized / Medium build), one map per distinct preview layout, from the converted Aera and Bo (each map checked on the other
 // character when it has the same layout), and writes them to the plugin-only
@@ -10,9 +10,11 @@
 #include "MantleCosmeticExport.h"
 #include "MantleCreatorBodyMap.h"
 #include "MantleFitBodies.h"
+#include "MantleMetaHumanBuild.h"
 
 #include "Algo/Find.h"
 #include "Algo/Sort.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Editor.h"
 #include "Engine/SkeletalMesh.h"
 #include "HAL/IConsoleManager.h"
@@ -23,6 +25,7 @@
 #include "MetaHumanCharacterEditorSubsystem.h"
 #include "Rendering/SkeletalMeshLODRenderData.h"
 #include "Rendering/SkeletalMeshRenderData.h"
+#include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMantleLayoutMap, Log, All);
@@ -82,18 +85,17 @@ namespace MantleDevLearnBodyLayoutMapPrivate
 		Pair.Character.Reset();
 	}
 
-	bool LoadPair(const TCHAR* Name, const FMantleAvatarContract& Contract, FPair& Out, FString& OutError)
+	bool LoadPairAt(const TCHAR* Name, const FString& CharacterPackage, const FString& CharacterObject, const FString& BodyPackage, const FString& BodyObject,
+		const FMantleAvatarContract& Contract, FPair& Out, FString& OutError)
 	{
 		Out.Name = Name;
-		const FString CharacterPackage = FString::Printf(TEXT("/Game/MetaHumans/%s/Converted/%s/%s"), Name, Name, Name);
-		const FString BodyPackage = FString::Printf(TEXT("/Game/MetaHumans/%s/Converted/%s/Unpacked/%s/Body/SKM_%s_BodyMesh"), Name, Name, Name, Name);
 		if (!FPackageName::DoesPackageExist(CharacterPackage) || !FPackageName::DoesPackageExist(BodyPackage))
 		{
 			OutError = FString::Printf(TEXT("%s or %s is not in the project"), *CharacterPackage, *BodyPackage);
 			return false;
 		}
-		UMetaHumanCharacter* Character = LoadObject<UMetaHumanCharacter>(nullptr, *FString::Printf(TEXT("%s.%s"), *CharacterPackage, Name));
-		const USkeletalMesh* Built = LoadObject<USkeletalMesh>(nullptr, *FString::Printf(TEXT("%s.SKM_%s_BodyMesh"), *BodyPackage, Name));
+		UMetaHumanCharacter* Character = LoadObject<UMetaHumanCharacter>(nullptr, *FString::Printf(TEXT("%s.%s"), *CharacterPackage, *CharacterObject));
+		const USkeletalMesh* Built = LoadObject<USkeletalMesh>(nullptr, *FString::Printf(TEXT("%s.%s"), *BodyPackage, *BodyObject));
 		UMetaHumanCharacterEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
 		if (!Character || !Built || !Subsystem)
 		{
@@ -134,6 +136,70 @@ namespace MantleDevLearnBodyLayoutMapPrivate
 			Name, Out.PreviewLOD, Out.Preview.Topology.VertexCount, Out.Preview.Indices.Num() / 3, Out.Preview.Topology.SectionCount, Out.Preview.Topology.UVHash,
 			Out.BuiltLOD, Out.Built.Topology.VertexCount, Out.Built.Indices.Num() / 3, Out.Built.Topology.UVHash);
 		return true;
+	}
+
+	bool LoadConverted(const TCHAR* Name, const FMantleAvatarContract& Contract, FPair& Out, FString& OutError)
+	{
+		return LoadPairAt(Name, FString::Printf(TEXT("/Game/MetaHumans/%s/Converted/%s/%s"), Name, Name, Name), Name,
+			FString::Printf(TEXT("/Game/MetaHumans/%s/Converted/%s/Unpacked/%s/Body/SKM_%s_BodyMesh"), Name, Name, Name, Name), FString::Printf(TEXT("SKM_%s_BodyMesh"), Name),
+			Contract, Out, OutError);
+	}
+
+	/**
+	 * A standard body type as a built character, for learning its layout: /Game/MetaHumans/FitRef_<type>. When its built body is not in the
+	 * project yet, the character is made (Epic's initial character set to the fixed body type, in the project) and built through the plugin's
+	 * converter build (FMantleMetaHumanBuild::Build, Optimized / Medium, the route Aera and Bo took). That asks Epic for the sign-in and uses
+	 * Epic's cloud for the skin and rig; not signed in is a clean stop with Epic's message.
+	 */
+	bool LoadOrBuildStandard(const TCHAR* Id, const EMetaHumanBodyType Type, const FMantleAvatarContract& Contract, const bool bAllowBuild, FPair& Out, FString& OutError)
+	{
+		const FString Name = FString(TEXT("FitRef_")) + Id;
+		const FString Folder = FString::Printf(TEXT("/Game/MetaHumans/%s"), *Name);
+		const FString CharacterPackage = FString::Printf(TEXT("%s/%s"), *Folder, *Name);
+		const FString BodyPackage = FString::Printf(TEXT("%s/Unpacked/%s/Body/SKM_%s_BodyMesh"), *Folder, *Name, *Name);
+		if (!FPackageName::DoesPackageExist(BodyPackage))
+		{
+			UMetaHumanCharacterEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
+			if (!bAllowBuild || !Subsystem)
+			{
+				OutError = FString::Printf(TEXT("%s is not built in the project (and building is off or MetaHuman Creator is unavailable)"), *Name);
+				return false;
+			}
+			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP building %s with the converter build (Epic sign-in needed, about 5 minutes)"), *Name);
+			UPackage* Package = FPackageName::DoesPackageExist(CharacterPackage) ? LoadPackage(nullptr, *CharacterPackage, LOAD_None) : CreatePackage(*CharacterPackage);
+			UMetaHumanCharacter* Character = Package ? FindObject<UMetaHumanCharacter>(Package, *Name) : nullptr;
+			if (Package && !Character)
+			{
+				Character = NewObject<UMetaHumanCharacter>(Package, FName(*Name), RF_Public | RF_Standalone | RF_Transactional);
+				if (Character)
+				{
+					FAssetRegistryModule::AssetCreated(Character);
+					Subsystem->InitializeMetaHumanCharacter(Character);
+				}
+			}
+			if (!Character || !Character->IsCharacterValid())
+			{
+				OutError = FString::Printf(TEXT("the character %s could not be made"), *CharacterPackage);
+				return false;
+			}
+			if (!Subsystem->IsObjectAddedForEditing(Character) && !Subsystem->TryAddObjectToEdit(Character))
+			{
+				OutError = FString::Printf(TEXT("MetaHuman Creator could not open %s"), *CharacterPackage);
+				return false;
+			}
+			Subsystem->SetMetaHumanBodyType(Character, Type, UMetaHumanCharacterEditorSubsystem::EBodyMeshUpdateMode::Full);
+			Subsystem->CommitBodyState(Character);
+			Character->MarkPackageDirty();
+			FMantleMetaHumanBuildResult Result;
+			FString BuildError;
+			if (!FMantleMetaHumanBuild::Build(*Character, Folder, Result, BuildError))
+			{
+				OutError = FString::Printf(TEXT("the converter build of %s stopped: %s"), *Name, *BuildError);
+				return false;
+			}
+			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP built %s at %s"), *Name, *Result.BuildRoot);
+		}
+		return LoadPairAt(*Name, CharacterPackage, Name, BodyPackage, FString::Printf(TEXT("SKM_%s_BodyMesh"), *Name), Contract, Out, OutError);
 	}
 
 	FVector3f Mean(const TArray<FVector3f>& Points)
@@ -362,44 +428,47 @@ namespace MantleDevLearnBodyLayoutMapPrivate
 		const FMantleAvatarContract* Contract = FMantleAvatarContract::Get();
 		if (!Contract || OutPath.IsEmpty()) { Finish(TEXT("the avatar contract or the output path is unavailable")); return; }
 
-		// The layout of every standard body type's preview LOD1 (the bodies the upload makes), and the female/male medium bodies
-		// the converted characters are told apart by. Tells which layouts a map is still needed for.
-		TArray<FVector3f> FemaleStandard, MaleStandard;
-		for (const TPair<const TCHAR*, EMetaHumanBodyType>& Standard : { TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("f_med_nrw"), EMetaHumanBodyType::f_med_nrw),
-			TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("f_med_ovw"), EMetaHumanBodyType::f_med_ovw), TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("f_med_unw"), EMetaHumanBodyType::f_med_unw),
-			TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("m_med_nrw"), EMetaHumanBodyType::m_med_nrw), TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("m_med_ovw"), EMetaHumanBodyType::m_med_ovw),
-			TPair<const TCHAR*, EMetaHumanBodyType>(TEXT("m_med_unw"), EMetaHumanBodyType::m_med_unw) })
+		// Converted characters (Aera, Bo) and standard body types built once into the project (FitRef_<type>, see LoadOrBuildStandard). Every one
+		// is read even when an earlier one fails; nothing is held in the editor afterwards.
+		bool bAllowBuild = true, bVerifyBuild = true;
+		for (const FString& Arg : Args)
 		{
-			uint32 Hash = 0;
-			TArray<FVector3f> Vertices = StandardBodyVertices(Standard.Key, Standard.Value, Hash);
-			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP standard body %s preview LOD1: %d verts, uvhash %08x"), Standard.Key, Vertices.Num(), Hash);
-			if (FString(Standard.Key) == TEXT("f_med_nrw")) { FemaleStandard = MoveTemp(Vertices); }
-			else if (FString(Standard.Key) == TEXT("m_med_nrw")) { MaleStandard = MoveTemp(Vertices); }
+			if (Arg.Equals(TEXT("build=0"), ESearchCase::IgnoreCase)) { bAllowBuild = false; }
+			if (Arg.Equals(TEXT("verify=0"), ESearchCase::IgnoreCase)) { bVerifyBuild = false; }
 		}
-
-		// Both characters are read even when the first fails; nothing is held in the editor afterwards.
 		TArray<TUniquePtr<FCharacter>> Characters;
+		const auto Keep = [&Characters](TUniquePtr<FCharacter> Character)
+		{
+			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP %s (%s): preview LOD1 uvhash %08x, %d verts"), *Character->Pair.Name, *Character->Sex,
+				Character->Pair.Preview.Topology.UVHash, Character->Pair.Preview.Topology.VertexCount);
+			Characters.Add(MoveTemp(Character));
+		};
 		for (const TCHAR* Name : { TEXT("Aera"), TEXT("Bo") })
 		{
 			TUniquePtr<FCharacter> Character = MakeUnique<FCharacter>();
+			Character->Sex = TEXT("converted preset");
 			FString Error;
-			if (!LoadPair(Name, *Contract, Character->Pair, Error))
-			{
-				UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP %s skipped: %s"), Name, *Error);
-				ReleasePair(Character->Pair);
-				continue;
-			}
+			const bool bLoaded = LoadConverted(Name, *Contract, Character->Pair, Error);
 			ReleasePair(Character->Pair);
-			float ToFemale = -1.0f, ToMale = -1.0f, Largest = 0.0f;
-			TArray<FVector3f> Probe;
-			for (int32 Index = 0; Index < Character->Pair.Preview.Positions.Num(); Index += 4) { Probe.Add(Character->Pair.Preview.Positions[Index]); }
-			FMantleFitBodies::CompareNearest(Probe, FemaleStandard, ToFemale, Largest);
-			FMantleFitBodies::CompareNearest(Probe, MaleStandard, ToMale, Largest);
-			Character->Sex = ToFemale < 0.0f || ToMale < 0.0f ? TEXT("unknown") : (ToMale < ToFemale ? TEXT("male") : TEXT("female"));
-			UE_LOG(LogMantleLayoutMap, Display, TEXT("MANTLE_LAYOUT_MAP %s is %s by body shape (%.2f cm from the standard female medium body, %.2f cm from the male one); preview LOD1 uvhash %08x"),
-				Name, *Character->Sex, ToFemale, ToMale, Character->Pair.Preview.Topology.UVHash);
-			Characters.Add(MoveTemp(Character));
+			if (bLoaded) { Keep(MoveTemp(Character)); }
+			else { UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP %s skipped: %s"), Name, *Error); }
 		}
+		// The standard body types the upload makes: the layout of every one is the same (one build is enough to learn it); a second, differently
+		// shaped body checks that the map carries across shapes. A build is Epic's converter build (about 5 minutes, needs Epic sign-in).
+		TArray<TPair<const TCHAR*, EMetaHumanBodyType>> Standards;
+		Standards.Emplace(TEXT("f_med_nrw"), EMetaHumanBodyType::f_med_nrw);
+		if (bVerifyBuild) { Standards.Emplace(TEXT("f_med_ovw"), EMetaHumanBodyType::f_med_ovw); }
+		for (const TPair<const TCHAR*, EMetaHumanBodyType>& Standard : Standards)
+		{
+			TUniquePtr<FCharacter> Character = MakeUnique<FCharacter>();
+			Character->Sex = TEXT("standard female body");
+			FString Error;
+			const bool bLoaded = LoadOrBuildStandard(Standard.Key, Standard.Value, *Contract, bAllowBuild, Character->Pair, Error);
+			ReleasePair(Character->Pair);
+			if (bLoaded) { Keep(MoveTemp(Character)); }
+			else { UE_LOG(LogMantleLayoutMap, Warning, TEXT("MANTLE_LAYOUT_MAP standard body %s skipped: %s"), Standard.Key, *Error); }
+		}
+
 
 		// One map per distinct preview layout: learned from the first character that has it, checked on the others that do.
 		TArray<FMantleCreatorBodyMap> Maps;
@@ -482,7 +551,7 @@ namespace MantleDevLearnBodyLayoutMapPrivate
 	FAutoConsoleCommand GMantleDevLearnBodyLayoutMapCommand(
 		TEXT("Mantle.Dev.LearnBodyLayoutMap"),
 		TEXT("Mantle.Dev.LearnBodyLayoutMap [out=<path>] -- maintainer command: learns how Creator's in-memory body LOD1 is numbered against Mantle's reference body, one map per ")
-		TEXT("preview layout, from the converted Aera and Bo (/Game/MetaHumans/<Name>/Converted), and writes Resources/BodyLayout/creator-preview-to-reference-v1.json. ")
-		TEXT("Also logs the preview layout of the standard body types. Logs MANTLE_LAYOUT_MAP lines."),
+		TEXT("preview layout, from the converted Aera and Bo (/Game/MetaHumans/<Name>/Converted) and from the standard body types f_med_nrw / f_med_ovw built once into /Game/MetaHumans/FitRef_<type> (Epic sign-in, ~5 min each; build=0 never builds, verify=0 builds only f_med_nrw), and writes Resources/BodyLayout/creator-preview-to-reference-v1.json. ")
+		TEXT("Logs MANTLE_LAYOUT_MAP lines."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&Run));
 }
