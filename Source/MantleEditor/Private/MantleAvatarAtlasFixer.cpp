@@ -21,6 +21,7 @@
 #include "MaterialBakingStructures.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionTextureBase.h"
+#include "Materials/MaterialExpressionTextureSampleParameter2D.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInterface.h"
 #include "MeshDescription.h"
@@ -1176,17 +1177,83 @@ namespace MantleAvatarAtlasFixerPrivate
 		return Texture;
 	}
 
+	/** A texture parameter node of Material named Name, sampling Texture (its sampler type), into the material's graph. */
+	UMaterialExpressionTextureSampleParameter2D* AtlasAddTextureParameter(UMaterial& Material, const TCHAR* Name, UTexture2D* Texture, const int32 Row)
+	{
+		UMaterialExpressionTextureSampleParameter2D* Sample = NewObject<UMaterialExpressionTextureSampleParameter2D>(&Material, NAME_None, RF_Transactional);
+		Sample->ParameterName = FName(Name);
+		Sample->Texture = Texture;
+		Sample->SamplerType = UMaterialExpressionTextureBase::GetSamplerTypeForTexture(Texture);
+		Sample->MaterialExpressionEditorX = -400;
+		Sample->MaterialExpressionEditorY = Row * 250;
+		Material.GetExpressionCollection().AddExpression(Sample);
+		return Sample;
+	}
+
+	/**
+	 * The bake's own parent material, for a project without Mantle's M_MantlePlace permutations (they live in the Mantle
+	 * game's /Game/Mantle/Materials; the plugin ships no materials): a plain graph built here, in Folder, whose BaseColor,
+	 * Normal and ORM texture parameters (the bake's textures by default) drive the inputs, so the upload reads them by name
+	 * as it reads M_MantlePlace's.
+	 */
+	UMaterial* AtlasCreateParentMaterial(const FString& Folder, const FString& BaseName, const FMantleAtlasGroup& Group, UTexture2D* BaseColor,
+		UTexture2D* Normal, UTexture2D* Orm)
+	{
+		FString PackageName, AssetName;
+		AtlasUniqueAssetName(Folder, BaseName, PackageName, AssetName);
+		UPackage* Package = CreatePackage(*PackageName);
+		UMaterial* Material = NewObject<UMaterial>(Package, FName(*AssetName), RF_Public | RF_Standalone | RF_Transactional);
+		Material->BlendMode = Group.Blend == EMantleAtlasBlend::Masked ? BLEND_Masked : Group.Blend == EMantleAtlasBlend::Translucent ? BLEND_Translucent : BLEND_Opaque;
+		Material->TwoSided = Group.bTwoSided;
+		Material->bUsedWithSkeletalMesh = true;
+		UMaterialEditorOnlyData* Inputs = Material->GetEditorOnlyData();
+		UMaterialExpressionTextureSampleParameter2D* Colour = AtlasAddTextureParameter(*Material, MantlePlaceMaterialParameters::BaseColor, BaseColor, 0);
+		Inputs->BaseColor.Connect(0, Colour);
+		if (Group.Blend == EMantleAtlasBlend::Masked)
+		{
+			Inputs->OpacityMask.Connect(4, Colour);
+		}
+		else if (Group.Blend == EMantleAtlasBlend::Translucent)
+		{
+			Inputs->Opacity.Connect(4, Colour);
+		}
+		Inputs->Normal.Connect(0, AtlasAddTextureParameter(*Material, MantlePlaceMaterialParameters::Normal, Normal, 1));
+		// ORM: occlusion, roughness, metallic in R, G, B.
+		UMaterialExpressionTextureSampleParameter2D* Masks = AtlasAddTextureParameter(*Material, MantlePlaceMaterialParameters::ORM, Orm, 2);
+		Inputs->AmbientOcclusion.Connect(1, Masks);
+		Inputs->Roughness.Connect(2, Masks);
+		Inputs->Metallic.Connect(3, Masks);
+		Material->PreEditChange(nullptr);
+		Material->PostEditChange();
+		FAssetRegistryModule::AssetCreated(Material);
+		Package->MarkPackageDirty();
+		return Material;
+	}
+
 	UMaterialInstanceConstant* AtlasCreateMaterial(const FString& Folder, const FString& BaseName, const FMantleAtlasGroup& Group,
-		UTexture2D* BaseColor, UTexture2D* Normal, UTexture2D* Orm, FString& OutError)
+		UTexture2D* BaseColor, UTexture2D* Normal, UTexture2D* Orm, FString& OutError, TArray<UObject*>* InOutMade = nullptr)
 	{
 		const EMantlePlaceAlphaMode Mode = Group.Blend == EMantleAtlasBlend::Masked ? EMantlePlaceAlphaMode::Mask
 			: Group.Blend == EMantleAtlasBlend::Translucent ? EMantlePlaceAlphaMode::Blend : EMantlePlaceAlphaMode::Opaque;
 		const FSoftObjectPath ParentPath = FMantlePlaceMaterials::PermutationPath(Mode, Group.bTwoSided);
-		UMaterialInterface* Parent = Cast<UMaterialInterface>(ParentPath.TryLoad());
+		UMaterialInterface* Parent = FPackageName::DoesPackageExist(ParentPath.GetLongPackageName()) ? Cast<UMaterialInterface>(ParentPath.TryLoad()) : nullptr;
 		if (!Parent)
 		{
-			OutError = FString::Printf(TEXT("Mantle's material %s is missing from the MantleCore plugin"), *ParentPath.GetAssetName());
-			return nullptr;
+			// Outside the Mantle game project: a parent of the bake's own, next to it.
+			FString ParentName = BaseName;
+			ParentName.RemoveFromStart(TEXT("MI_"));
+			UMaterial* Own = AtlasCreateParentMaterial(Folder, TEXT("M_") + ParentName, Group, BaseColor, Normal, Orm);
+			if (!Own)
+			{
+				OutError = FString::Printf(TEXT("the bake's material for %s could not be made"), *BaseName);
+				return nullptr;
+			}
+			if (InOutMade)
+			{
+				InOutMade->Add(Own);
+			}
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_ATLAS %s is not in this project: the bake's own parent %s"), *ParentPath.GetAssetName(), *Own->GetPathName());
+			Parent = Own;
 		}
 		FString PackageName, AssetName;
 		AtlasUniqueAssetName(Folder, BaseName, PackageName, AssetName);
@@ -2095,7 +2162,7 @@ bool FMantleAvatarAtlasFixer::ApplyToPart(FMantleConvertContext& Context, int32 
 		UTexture2D* Orm = AtlasCreateTexture(Context.OutputFolder, TEXT("T_") + Stem + TEXT("_ORM"), Images.Size, Images.Orm, false,
 			TC_Masks, TEXTUREGROUP_CharacterSpecular, false);
 		Made.Append({ BaseColor, Normal, Orm });
-		UMaterialInstanceConstant* Material = AtlasCreateMaterial(Context.OutputFolder, TEXT("MI_") + Stem, Rewrite.Group, BaseColor, Normal, Orm, OutError);
+		UMaterialInstanceConstant* Material = AtlasCreateMaterial(Context.OutputFolder, TEXT("MI_") + Stem, Rewrite.Group, BaseColor, Normal, Orm, OutError, &Made);
 		if (!Material)
 		{
 			AtlasDiscard(Made);
@@ -2360,7 +2427,7 @@ UMaterialInstanceConstant* FMantleAvatarAtlasFixer::CreateBakedMaterial(const FS
 	FMantleAtlasGroup Group;
 	Group.Blend = Blend;
 	Group.bTwoSided = bTwoSided;
-	UMaterialInstanceConstant* Material = AtlasCreateMaterial(Folder, TEXT("MI_") + Stem, Group, BaseColor, Normal, Orm, OutError);
+	UMaterialInstanceConstant* Material = AtlasCreateMaterial(Folder, TEXT("MI_") + Stem, Group, BaseColor, Normal, Orm, OutError, &InOutMade);
 	if (Material)
 	{
 		InOutMade.Add(Material);
