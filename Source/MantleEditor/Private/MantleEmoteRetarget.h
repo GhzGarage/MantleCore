@@ -25,8 +25,8 @@ struct FMantleAnimClipData;
  *
  * UIKRetargetBatchOperation::RunBatchRetarget is BlueprintCallable, so it is called by reflection (its UFunction, its
  * input struct's properties by name), the way the avatar preview reaches IK Rig's retarget node: MantleEditor takes no
- * module dependency on IKRigEditor. The target is the project's UEFN mannequin (FMantleCosmeticExport::FindUEFNMannequin),
- * the mesh the manual retarget path already needs. Game thread.
+ * module dependency on IKRigEditor. The target is the project's UEFN mannequin when it has one, else the one the plugin
+ * builds in memory from its own IK rig (FMantleBuiltInMannequin::UEFNMannequin), so no mannequin has to be added. Game thread.
  */
 struct FMantleEmoteRetarget
 {
@@ -80,7 +80,7 @@ struct FMantleEmoteRetarget
 	static USkeletalMesh* ChooseSourceMesh(UAnimSequence* Sequence, USkeletalMesh* PickedBody, FString* OutFrom = nullptr);
 
 	/**
-	 * RetargetAndSample from ChooseSourceMesh(Sequence, PickedBody) onto FMantleCosmeticExport::FindUEFNMannequin.
+	 * RetargetAndSample from ChooseSourceMesh(Sequence, PickedBody) onto FMantleBuiltInMannequin::UEFNMannequin.
 	 * OutNote says what was done, for the package's notes.
 	 */
 	static bool Sample(UAnimSequence* Sequence, const FString& SkeletonId, const FMantleAvatarContract& Contract, FMantleAnimClipData& OutClip,

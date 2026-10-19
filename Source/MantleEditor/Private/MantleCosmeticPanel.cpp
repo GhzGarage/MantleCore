@@ -4,6 +4,7 @@
 #include "MantleAssetStore.h"
 #include "MantleAvatarContract.h"
 #include "MantleAvatarStripFixer.h"
+#include "MantleBuiltInMannequin.h"
 #include "MantleCosmeticItem.h"
 #include "MantleCosmeticPreview.h"
 #include "MantleCosmeticPreviewRetarget.h"
@@ -2162,7 +2163,7 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakePreviewSection()
 				if (Draft.Class == EMantleCosmeticClass::Overlay) return LOCTEXT("OverlayPreviewHelp", "See the overlay on a converted MetaHuman body or face (the slot decides which), drawn with the same skin material players' clients use. This shows exactly the image that would upload. Nothing is uploaded.");
 				if (Draft.Class == EMantleCosmeticClass::Hair) return LOCTEXT("HairPreviewHelp", "Preview the published cards fitted to a source or catalog MetaHuman head. Scalp cards follow the body; brows, lashes and facial hair follow the face. Choose the source head the cards were authored on before checking fit.");
 				return Draft.Class == EMantleCosmeticClass::Avatar
-					? LOCTEXT("AvatarPreviewHelp", "See the avatar the way players will: posed by the same retargeter their game runs, copying the UEFN mannequin's standing idle. Nothing is uploaded. Move around it in the viewport as in the garment preview.")
+					? LOCTEXT("AvatarPreviewHelp", "See the avatar the way players will: posed by the same retargeter their game runs, copying the UEFN mannequin's pose. Nothing needs adding to the project: Mantle brings its own mannequin, and uses yours (with its standing idle) when the project has SKM_UEFN_Mannequin. Nothing is uploaded. Move around it in the viewport as in the garment preview.")
 					: LOCTEXT("PreviewHelp", "See the garment the way players will: fitted by the same code their game runs, on the body you made it on or any catalog avatar by its id (itm_u...). The body under the garment is hidden as in the game. Nothing is uploaded; catalog avatars are downloaded once and kept while the panel is open.");
 			})
 		]
@@ -2263,7 +2264,7 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakePreviewSection()
 				{
 					if (Draft.Class == EMantleCosmeticClass::Accessory) return LOCTEXT("AccessoryPreviewTooltip", "Show this rigid accessory on the chosen MetaHuman, with its published attachment correction.");
 					return Draft.Class == EMantleCosmeticClass::Avatar
-						? LOCTEXT("AvatarPreviewTooltip", "Show the avatar posed by its retargeter from the UEFN mannequin's idle, as players' clients pose it.")
+						? LOCTEXT("AvatarPreviewTooltip", "Show the avatar posed by its retargeter from the UEFN mannequin, as players' clients pose it. Works without a mannequin in the project; with SKM_UEFN_Mannequin and its idle it also plays the idle.")
 						: LOCTEXT("PreviewTooltip", "Fit the garment to the chosen body and show it. The fit runs in the background; the editor stays responsive.");
 				})
 				.OnClicked(this, &SMantleCosmeticPanel::OnPreview)
@@ -2729,13 +2730,15 @@ FReply SMantleCosmeticPanel::OnPreviewAvatar()
 		return FReply::Handled();
 	}
 
-	// #535: the plugin's retargeter, the project's UEFN mannequin as the driver, and an idle.
+	// #535: the plugin's retargeter, the UEFN mannequin as the driver (the project's, else the plugin's built-in one), and an idle.
 	FMantleAvatarPreviewInputs Inputs;
 	{
-		FScopedSlowTask Progress(1.0f, LOCTEXT("AvatarPreviewDriver", "Finding the UEFN mannequin that poses the avatar..."));
+		FScopedSlowTask Progress(1.0f, LOCTEXT("AvatarPreviewDriver", "Preparing the UEFN mannequin that poses the avatar..."));
 		Progress.MakeDialogDelayed(0.5f);
 		Progress.EnterProgressFrame(1.0f);
-		Inputs = FMantleAvatarPreviewInputs::Gather(Plan, FMantleCosmeticExport::FindUEFNMannequin(*Contract), FMantleAvatarPreviewInputs::DefaultIdleClipPath());
+		FString DriverError;
+		USkeletalMesh* Driver = FMantleBuiltInMannequin::UEFNMannequin(*Contract, &DriverError);
+		Inputs = FMantleAvatarPreviewInputs::Gather(Plan, Driver, FMantleAvatarPreviewInputs::DefaultIdleClipPath(), DriverError);
 	}
 	FMantleAvatarPreviewScene Stage;
 	Stage.Body = Body;

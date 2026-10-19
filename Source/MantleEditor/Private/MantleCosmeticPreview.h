@@ -96,8 +96,9 @@ struct FMantlePreviewPick
  * (UMantleBodyAnimInstance): a hidden UEFN mannequin driver plays a standing idle and the body copies its pose through
  * the skeleton's IK retargeter (Retarget Pose From Mesh). #535: the retargeter is the MantleCore plugin's own, the one
  * copy the client loads too (UMantleBodyAnimInstance::RetargeterPathForSkeleton; MantleCore cannot reference
- * client/Source, so the path is repeated here), so it works in any project. The driver is not shipped: the preview finds
- * the project's UEFN mannequin (FMantleCosmeticExport::FindUEFNMannequin, FMantleAvatarPreviewInputs).
+ * client/Source, so the path is repeated here), so it works in any project. The driver is the project's UEFN mannequin
+ * when it has one, else the one the plugin builds in memory from its own IK rig (FMantleBuiltInMannequin::UEFNMannequin,
+ * FMantleAvatarPreviewInputs): nothing to add to the project.
  */
 struct FMantleAvatarPreviewPlan
 {
@@ -127,8 +128,9 @@ struct FMantleAvatarPreviewPlan
 
 /**
  * #535: what the avatar preview found to pose a body with, and what it tells the creator. The plugin's retargeter, the
- * project's UEFN mannequin as the driver (given: FMantleCosmeticExport::FindUEFNMannequin finds it), and an idle: the
- * plugin's MAN1 clip when present, else the project's IdleAssetName on the driver's skeleton. Anything that keeps the body
+ * driver (given: FMantleBuiltInMannequin::UEFNMannequin, the project's UEFN mannequin else the plugin's built-in one), and
+ * an idle: the plugin's MAN1 clip when present, else the project's IdleAssetName on the driver's skeleton (never for the
+ * built-in driver, whose skeleton no project asset is on). Anything that keeps the body
  * in its reference pose is named in Missing; nothing here crashes on a missing asset. Game thread (loads assets).
  */
 struct FMantleAvatarPreviewInputs
@@ -149,8 +151,12 @@ struct FMantleAvatarPreviewInputs
 	/** Not fatal ("no idle, so the pose is the driver's reference pose"). */
 	TArray<FString> Notes;
 
-	/** Loads Plan's retargeter, takes InDriver as found (null: none), and reads the idle from IdleClipPath (a file; empty: none). */
-	static FMantleAvatarPreviewInputs Gather(const FMantleAvatarPreviewPlan& Plan, USkeletalMesh* InDriver, const FString& IdleClipPath);
+	/**
+	 * Loads Plan's retargeter, takes InDriver as found (null: none; DriverError then says why the built-in one could not
+	 * be made), and reads the idle from IdleClipPath (a file; empty: none).
+	 */
+	static FMantleAvatarPreviewInputs Gather(const FMantleAvatarPreviewPlan& Plan, USkeletalMesh* InDriver, const FString& IdleClipPath,
+		const FString& DriverError = FString());
 
 	/** The plugin's idle clip file: <MantleCore>/Resources/AvatarContract/<IdleClipFileName>; empty without the plugin. */
 	static FString DefaultIdleClipPath();
