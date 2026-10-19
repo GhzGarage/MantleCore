@@ -25,19 +25,12 @@ Run it again without `--sync` to check that every copy matches. The game repo's 
 Fab has no publisher API, so a release is a tag here plus one step by hand in the Fab portal.
 
 1. **Bump the version.** Set `VersionName` in `MantleCore.uplugin` (for example `0.2.0`) and merge that to `main`.
-2. **Check and compile.** Run the checks locally:
+2. **Dry run.** Start the Release workflow by hand (Actions > Release > Run workflow, or `gh workflow run release.yml --ref main`). It runs every check and BuildPlugin, and uploads the zip as a workflow artifact instead of making a release. To run only the checks locally:
 
    ```
    python .github/scripts/fab_release.py check
    ```
 
-   Then prove the plugin compiles on UE 5.8 (Fab Technical Requirements 4.3.6.2.b). CI can't do this yet because no UE 5.8 runner serves this repo, so run it on a machine with the engine:
-
-   ```
-   D:\EpicGames\UE_5.8\Engine\Build\BatchFiles\RunUAT.bat BuildPlugin -Plugin=<this folder>\MantleCore.uplugin -Package=<an empty folder outside this one> -TargetPlatforms=Win64
-   ```
-
-   It must end with `BUILD SUCCESSFUL`.
 3. **Tag.** Push a tag that matches the version, with a `v` in front:
 
    ```
@@ -45,9 +38,18 @@ Fab has no publisher API, so a release is a tag here plus one step by hand in th
    git push origin v0.2.0
    ```
 
-4. **Wait for the release.** The Release workflow checks the plugin, packages `MantleCore-<version>-UE5.8.zip` (the source under a top-level `MantleCore/` folder, without Binaries, Intermediate or Saved), checks the zip, and attaches it to a GitHub release for the tag. It fails without making a release if the tag doesn't match `VersionName`, a uplugin field is wrong (EngineVersion 5.8.0, Win64 only on every module, CreatedBy Joshua Eger), a source file lacks the copyright line, Content holds anything but IK rig and IK retargeter assets, or a third-party library lacks its LICENSE.
+4. **Wait for the release.** The Release workflow checks the plugin, packages `MantleCore-<version>-UE5.8.zip` (the source under a top-level `MantleCore/` folder, without Binaries, Intermediate or Saved), checks the zip, compiles it with `RunUAT BuildPlugin` on UE 5.8 (Fab Technical Requirements 4.3.6.2.b), and attaches it to a GitHub release for the tag. It fails without making a release if the tag doesn't match `VersionName`, a uplugin field is wrong (EngineVersion 5.8.0, Win64 only on every module, CreatedBy Joshua Eger), a source file lacks the copyright line, Content holds anything but IK rig and IK retargeter assets, a third-party library lacks its LICENSE, or BuildPlugin fails.
 5. **Paste the link into Fab.** In the Fab publishing portal, add a Project Version for UE 5.8, paste the link to the release's zip, and submit the update. Fab downloads the zip without signing in, so this works only once this repo is public. While the repo is private the zip stays on the release and isn't hosted anywhere else.
 
 After the first Fab submission, set `FabURL` in `MantleCore.uplugin` to the listing's address (Fab Technical Requirements 4.3.6.c); it stays out of the file until then.
 
-For a dry run, start the Release workflow by hand (Actions > Release > Run workflow, or `gh workflow run release.yml --ref <branch>`). It runs the same checks and uploads the zip as a workflow artifact instead of making a release.
+### The BuildPlugin runner
+
+BuildPlugin runs on our Windows build machine, on a second GitHub Actions runner registered to this repo only. The machine's other runner serves the game repo and is separate.
+
+- **Folder:** `C:\actions-runner-mantlecore`
+- **Service:** `actions.runner.GhzGarage-MantleCore.mantlecore-buildplugin` (runs as NETWORK SERVICE, starts with Windows)
+- **Label:** `mantlecore-buildplugin`
+- **Engine:** the Launcher (installed) UE 5.8 at `C:\Program Files\Epic Games\UE_5.8`, set in the repo variable `MANTLECORE_UE_ROOT`. The job fails if that folder isn't an installed 5.8 engine, because Fab compiles against an installed engine.
+
+Never trigger the Release workflow on `pull_request` once this repo is public: a fork's pull request could then run code on the build machine. Tags and manual runs need write access, so they're safe.
