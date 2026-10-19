@@ -51,15 +51,15 @@ namespace MantleFaceLayoutPrivate
 	}
 
 	template <typename T>
-	void ReorderArray(TArray<T>& Array, const TArray<int32>& InputOfReference, const int32 Stride)
+	void ReorderArray(TArray<T>& Array, const TArray<int32>& InputOfReference, const int32 OldCount, const int32 Stride)
 	{
 		const int32 N = InputOfReference.Num();
-		if (Array.Num() != N * Stride)
+		if (Array.Num() != OldCount * Stride)
 		{
 			return;
 		}
 		TArray<T> Out;
-		Out.SetNumUninitialized(Array.Num());
+		Out.SetNumUninitialized(N * Stride);
 		for (int32 Reference = 0; Reference < N; ++Reference)
 		{
 			for (int32 Slot = 0; Slot < Stride; ++Slot)
@@ -68,6 +68,88 @@ namespace MantleFaceLayoutPrivate
 			}
 		}
 		Array = MoveTemp(Out);
+	}
+
+	FIntPoint Quantize(const FVector2f& UV)
+	{
+		return FIntPoint(FMath::RoundToInt32(UV.X * FMantleFaceLayout::Quantization), FMath::RoundToInt32(UV.Y * FMantleFaceLayout::Quantization));
+	}
+
+	/** A face section with its surplus vertices taken out: the kept vertices (indices local to the section), their UVs and the triangles over them. */
+	struct FReducedSection
+	{
+		TArray<int32> Kept;
+		TArray<FVector2f> UVs;
+		TArray<uint32> Indices;
+		int32 Skipped = 0;
+	};
+
+	/**
+	 * Takes Primitive down to the layout section's vertex count. Surplus vertices are, in order of preference: unreferenced ones whose UV the layout
+	 * does not have that often, referenced ones with such a UV (merged into the kept vertex of the same UV nearest to them, triangles remapped), any
+	 * other unreferenced ones. Fails when that does not reach the count.
+	 */
+	bool ReduceSection(const FMantleGlbMesh& Mesh, const FMantleGlbPrimitive& Primitive, const FMantleFaceLayout& Layout, const FMantleFaceLayoutSection& Section,
+		FReducedSection& Out, FString& OutError)
+	{
+		Out = FReducedSection();
+		const int32 Count = Primitive.NumVertices;
+		TArray<FIntPoint> InputUV;
+		InputUV.SetNum(Count);
+		for (int32 Vertex = 0; Vertex < Count; ++Vertex) { InputUV[Vertex] = Quantize(Mesh.UVs[Primitive.FirstVertex + Vertex]); }
+		int32 Extra = Count - Section.NumVertices;
+		TBitArray<> Dropped(false, Count);
+		if (Extra > 0)
+		{
+			TBitArray<> Referenced(false, Count);
+			for (const uint32 Index : Primitive.Indices) { if (static_cast<int32>(Index) < Count) { Referenced[Index] = true; } }
+			TMap<FIntPoint, int32> Surplus;
+			for (int32 Vertex = 0; Vertex < Count; ++Vertex) { ++Surplus.FindOrAdd(InputUV[Vertex]); }
+			for (int32 Vertex = 0; Vertex < Section.NumVertices; ++Vertex) { --Surplus.FindOrAdd(Layout.QuantizedUVs[Section.FirstVertex + Vertex]); }
+			const auto HasSurplus = [&Surplus](const FIntPoint& UV) { const int32* Found = Surplus.Find(UV); return Found && *Found > 0; };
+			const auto Drop = [&](const int32 Vertex) { Dropped[Vertex] = true; --Surplus.FindOrAdd(InputUV[Vertex]); --Extra; };
+			for (int32 Vertex = Count - 1; Vertex >= 0 && Extra > 0; --Vertex) { if (!Referenced[Vertex] && HasSurplus(InputUV[Vertex])) { Drop(Vertex); } }
+			for (int32 Vertex = Count - 1; Vertex >= 0 && Extra > 0; --Vertex) { if (!Dropped[Vertex] && Referenced[Vertex] && HasSurplus(InputUV[Vertex])) { Drop(Vertex); } }
+			for (int32 Vertex = Count - 1; Vertex >= 0 && Extra > 0; --Vertex) { if (!Dropped[Vertex] && !Referenced[Vertex]) { Drop(Vertex); } }
+			if (Extra > 0)
+			{
+				return Fail(OutError, FString::Printf(TEXT("%d vertices more than the layout's %d and they cannot be told apart as spare (unused, or twins by UV)"), Count - Section.NumVertices, Section.NumVertices));
+			}
+		}
+		TArray<int32> NewIndex;
+		NewIndex.Init(INDEX_NONE, Count);
+		for (int32 Vertex = 0; Vertex < Count; ++Vertex)
+		{
+			if (!Dropped[Vertex])
+			{
+				NewIndex[Vertex] = Out.Kept.Num();
+				Out.Kept.Add(Vertex);
+				Out.UVs.Add(Mesh.UVs[Primitive.FirstVertex + Vertex]);
+			}
+		}
+		Out.Skipped = Count - Out.Kept.Num();
+		for (int32 Vertex = 0; Vertex < Count; ++Vertex)
+		{
+			if (!Dropped[Vertex]) { continue; }
+			int32 Twin = INDEX_NONE;
+			float Nearest = TNumericLimits<float>::Max();
+			for (const int32 Candidate : Out.Kept)
+			{
+				if (InputUV[Candidate] != InputUV[Vertex]) { continue; }
+				const float Distance = FVector3f::DistSquared(Mesh.Positions[Primitive.FirstVertex + Candidate], Mesh.Positions[Primitive.FirstVertex + Vertex]);
+				if (Distance < Nearest) { Nearest = Distance; Twin = Candidate; }
+			}
+			NewIndex[Vertex] = Twin == INDEX_NONE ? INDEX_NONE : NewIndex[Twin];
+		}
+		for (const uint32 Index : Primitive.Indices)
+		{
+			if (static_cast<int32>(Index) >= Count || NewIndex[Index] == INDEX_NONE)
+			{
+				return Fail(OutError, TEXT("a triangle uses a surplus vertex that has no twin with the same UV"));
+			}
+			Out.Indices.Add(static_cast<uint32>(NewIndex[Index]));
+		}
+		return true;
 	}
 }
 
@@ -229,9 +311,10 @@ bool FMantleFaceLayout::Reorder(FMantleGlbMesh& Mesh, FString& OutNote, FString&
 	using namespace MantleFaceLayoutPrivate;
 	OutNote.Reset();
 	const int32 N = QuantizedUVs.Num();
-	if (N == 0 || Mesh.Positions.Num() != N || Mesh.UVs.Num() != N)
+	const int32 OldCount = Mesh.Positions.Num();
+	if (N == 0 || OldCount < N || Mesh.UVs.Num() != OldCount)
 	{
-		return Fail(OutError, FString::Printf(TEXT("the face has %d vertices and the built face layout %d (face sections: %s; layout sections: %s)"), Mesh.Positions.Num(), N,
+		return Fail(OutError, FString::Printf(TEXT("the face has %d vertices and the built face layout %d (face sections: %s; layout sections: %s)"), OldCount, N,
 			*DescribeSections(Mesh), *DescribeSections(*this)));
 	}
 	if (Mesh.Primitives.Num() != Sections.Num())
@@ -239,77 +322,91 @@ bool FMantleFaceLayout::Reorder(FMantleGlbMesh& Mesh, FString& OutNote, FString&
 		return Fail(OutError, FString::Printf(TEXT("the face has %d sections and the built face layout %d (face: %s; layout: %s)"), Mesh.Primitives.Num(), Sections.Num(),
 			*DescribeSections(Mesh), *DescribeSections(*this)));
 	}
-	// Pair each layout section with a face section of the same size (the material name breaks a tie).
+	// Pair each layout section with a face section of the same triangle count and the same vertex count (or a few more: spare vertices are taken out);
+	// the names are not trusted, the UV match decides. Several candidates are tried best-fitting first.
 	TArray<int32> PrimitiveOfSection;
 	PrimitiveOfSection.Init(INDEX_NONE, Sections.Num());
 	TBitArray<> Used(false, Mesh.Primitives.Num());
-	for (int32 Section = 0; Section < Sections.Num(); ++Section)
-	{
-		int32 Chosen = INDEX_NONE;
-		for (int32 Primitive = 0; Primitive < Mesh.Primitives.Num(); ++Primitive)
-		{
-			const FMantleGlbPrimitive& Candidate = Mesh.Primitives[Primitive];
-			if (Used[Primitive] || Candidate.NumVertices != Sections[Section].NumVertices || Candidate.Indices.Num() != Sections[Section].NumTriangles * 3) { continue; }
-			const bool bSameName = Mesh.MaterialNames.IsValidIndex(Candidate.MaterialIndex) && Mesh.MaterialNames[Candidate.MaterialIndex].Equals(Sections[Section].Material, ESearchCase::IgnoreCase);
-			if (Chosen == INDEX_NONE || bSameName) { Chosen = Primitive; }
-			if (bSameName) { break; }
-		}
-		if (Chosen == INDEX_NONE)
-		{
-			return Fail(OutError, FString::Printf(TEXT("no face section matches the layout's section %s (%d vertices, %d triangles); face: %s; layout: %s"), *Sections[Section].Material,
-				Sections[Section].NumVertices, Sections[Section].NumTriangles, *DescribeSections(Mesh), *DescribeSections(*this)));
-		}
-		Used[Chosen] = true;
-		PrimitiveOfSection[Section] = Chosen;
-	}
-	// Inside each section: the vertices by UV (and neighbours), the triangles but for flipped diagonals.
 	TArray<int32> InputOfReference;
 	InputOfReference.Init(INDEX_NONE, N);
-	int32 Exact = 0, FlippedSections = 0, FlippedPairs = 0;
+	int32 Exact = 0, FlippedSections = 0, FlippedPairs = 0, Skipped = 0;
 	for (int32 Section = 0; Section < Sections.Num(); ++Section)
 	{
 		const FMantleFaceLayoutSection& Layout = Sections[Section];
-		const FMantleGlbPrimitive& Primitive = Mesh.Primitives[PrimitiveOfSection[Section]];
+		TArray<TPair<int32, int32>> Candidates; // (score, primitive)
+		for (int32 Primitive = 0; Primitive < Mesh.Primitives.Num(); ++Primitive)
+		{
+			const FMantleGlbPrimitive& Candidate = Mesh.Primitives[Primitive];
+			const int32 Spare = Candidate.NumVertices - Layout.NumVertices;
+			if (Used[Primitive] || Spare < 0 || Spare > 8 || Candidate.Indices.Num() != Layout.NumTriangles * 3) { continue; }
+			const bool bSameName = Mesh.MaterialNames.IsValidIndex(Candidate.MaterialIndex) && Mesh.MaterialNames[Candidate.MaterialIndex].Equals(Layout.Material, ESearchCase::IgnoreCase);
+			Candidates.Add(TPair<int32, int32>((Spare == 0 ? 100 : 50 - Spare) + (bSameName ? 1 : 0), Primitive));
+		}
+		Candidates.Sort([](const TPair<int32, int32>& A, const TPair<int32, int32>& B) { return A.Key > B.Key; });
+		if (Candidates.IsEmpty())
+		{
+			return Fail(OutError, FString::Printf(TEXT("no face section matches the layout's section %s (%d vertices, %d triangles); face: %s; layout: %s"), *Layout.Material,
+				Layout.NumVertices, Layout.NumTriangles, *DescribeSections(Mesh), *DescribeSections(*this)));
+		}
 		FMantleBodyCorrespondence Reference;
 		for (int32 Vertex = 0; Vertex < Layout.NumVertices; ++Vertex) { Reference.QuantizedUVs.Add(QuantizedUVs[Layout.FirstVertex + Vertex]); }
 		for (int32 Index = 0; Index < Layout.NumTriangles * 3; ++Index) { Reference.Indices.Add(Indices[Layout.FirstIndex + Index] - static_cast<uint32>(Layout.FirstVertex)); }
-		const TConstArrayView<FVector2f> UVs(Mesh.UVs.GetData() + Primitive.FirstVertex, Primitive.NumVertices);
-		TArray<int32> Local;
-		FString Error;
-		if (Reference.Match(UVs, Primitive.Indices, Local, Error))
+		FString Tried;
+		bool bMatched = false;
+		for (const TPair<int32, int32>& Candidate : Candidates)
 		{
-			++Exact;
-		}
-		else
-		{
-			FString Note;
-			int32 Pairs = 0;
-			FString FlipError;
-			if (!Reference.MatchFlippedDiagonals(UVs, Primitive.Indices, Local, Note, FlipError, MAX_int32, &Pairs))
+			const FMantleGlbPrimitive& Primitive = Mesh.Primitives[Candidate.Value];
+			FReducedSection Reduced;
+			FString Error;
+			if (!ReduceSection(Mesh, Primitive, *this, Layout, Reduced, Error))
 			{
-				return Fail(OutError, FString::Printf(TEXT("section %s: exact match: %s; flipped-diagonal match: %s"), *Layout.Material, *Error, *FlipError));
+				Tried += FString::Printf(TEXT("%s[face section %s]: %s. "), *Layout.Material, Mesh.MaterialNames.IsValidIndex(Primitive.MaterialIndex) ? *Mesh.MaterialNames[Primitive.MaterialIndex] : TEXT("?"), *Error);
+				continue;
 			}
-			++FlippedSections;
-			FlippedPairs += Pairs;
+			TArray<int32> Local;
+			bool bFlipped = false;
+			int32 Pairs = 0;
+			if (!Reference.Match(Reduced.UVs, Reduced.Indices, Local, Error))
+			{
+				FString Note;
+				FString FlipError;
+				if (!Reference.MatchFlippedDiagonals(Reduced.UVs, Reduced.Indices, Local, Note, FlipError, MAX_int32, &Pairs))
+				{
+					Tried += FString::Printf(TEXT("layout section %s vs face section %s: exact match: %s; flipped-diagonal match: %s. "), *Layout.Material,
+						Mesh.MaterialNames.IsValidIndex(Primitive.MaterialIndex) ? *Mesh.MaterialNames[Primitive.MaterialIndex] : TEXT("?"), *Error, *FlipError);
+					continue;
+				}
+				bFlipped = true;
+			}
+			bMatched = true;
+			Used[Candidate.Value] = true;
+			PrimitiveOfSection[Section] = Candidate.Value;
+			Skipped += Reduced.Skipped;
+			if (bFlipped) { ++FlippedSections; FlippedPairs += Pairs; } else { ++Exact; }
+			for (int32 Vertex = 0; Vertex < Layout.NumVertices; ++Vertex)
+			{
+				InputOfReference[Layout.FirstVertex + Vertex] = Primitive.FirstVertex + Reduced.Kept[Local[Vertex]];
+			}
+			break;
 		}
-		for (int32 Vertex = 0; Vertex < Layout.NumVertices; ++Vertex)
+		if (!bMatched)
 		{
-			InputOfReference[Layout.FirstVertex + Vertex] = Primitive.FirstVertex + Local[Vertex];
+			return Fail(OutError, Tried);
 		}
 	}
 	// Everything checked: now change the mesh.
-	ReorderArray(Mesh.Positions, InputOfReference, 1);
-	ReorderArray(Mesh.Normals, InputOfReference, 1);
-	ReorderArray(Mesh.Tangents, InputOfReference, 1);
-	ReorderArray(Mesh.UVs, InputOfReference, 1);
-	ReorderArray(Mesh.UV1s, InputOfReference, 1);
-	ReorderArray(Mesh.Colors, InputOfReference, 1);
-	ReorderArray(Mesh.HairRootUV, InputOfReference, 1);
-	ReorderArray(Mesh.HairCoordU, InputOfReference, 1);
+	ReorderArray(Mesh.Positions, InputOfReference, OldCount, 1);
+	ReorderArray(Mesh.Normals, InputOfReference, OldCount, 1);
+	ReorderArray(Mesh.Tangents, InputOfReference, OldCount, 1);
+	ReorderArray(Mesh.UVs, InputOfReference, OldCount, 1);
+	ReorderArray(Mesh.UV1s, InputOfReference, OldCount, 1);
+	ReorderArray(Mesh.Colors, InputOfReference, OldCount, 1);
+	ReorderArray(Mesh.HairRootUV, InputOfReference, OldCount, 1);
+	ReorderArray(Mesh.HairCoordU, InputOfReference, OldCount, 1);
 	if (Mesh.NumInfluences > 0)
 	{
-		ReorderArray(Mesh.InfluenceJoints, InputOfReference, Mesh.NumInfluences);
-		ReorderArray(Mesh.InfluenceWeights, InputOfReference, Mesh.NumInfluences);
+		ReorderArray(Mesh.InfluenceJoints, InputOfReference, OldCount, Mesh.NumInfluences);
+		ReorderArray(Mesh.InfluenceWeights, InputOfReference, OldCount, Mesh.NumInfluences);
 	}
 	TArray<FMantleGlbPrimitive> Rebuilt;
 	for (int32 Section = 0; Section < Sections.Num(); ++Section)
@@ -322,7 +419,7 @@ bool FMantleFaceLayout::Reorder(FMantleGlbMesh& Mesh, FString& OutNote, FString&
 		for (int32 Index = 0; Index < Layout.NumTriangles * 3; ++Index) { Primitive.Indices.Add(Indices[Layout.FirstIndex + Index] - static_cast<uint32>(Layout.FirstVertex)); }
 	}
 	Mesh.Primitives = MoveTemp(Rebuilt);
-	OutNote = FString::Printf(TEXT("face put in the built face layout (%s): %d sections, %d matched exactly, %d with %d flipped quad diagonals"), *Source, Sections.Num(), Exact, FlippedSections, FlippedPairs);
+	OutNote = FString::Printf(TEXT("face put in the built face layout (%s): %d sections, %d matched exactly, %d with %d flipped quad diagonals, %d surplus vertices skipped"), *Source, Sections.Num(), Exact, FlippedSections, FlippedPairs, Skipped);
 	OutError.Reset();
 	return true;
 }
