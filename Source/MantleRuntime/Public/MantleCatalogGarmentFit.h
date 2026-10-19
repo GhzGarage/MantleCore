@@ -87,12 +87,14 @@ struct MANTLERUNTIME_API FMantleCatalogGarmentFit
 	 * Garment fitted to WearerBody through Field (from the garment's source shape onto WearerBody's LOD0), rebound
 	 * to WearerBody's reference pose. Authored null: the warp path. WearerFace (#430, the wearer's face at its
 	 * FitLOD): on the wearer path, with an Authored that has its face clearance, the collar is restored to that
-	 * clearance on it. False (OutFitted unspecified), with the reason, when the chosen path fails; the wearer path
+	 * clearance on it; with WearerFaceBones (the face's bone table) the collar also takes the face's skin weights
+	 * (FMantleGarmentSkinTransfer::Transfer). False (OutFitted unspecified), with the reason, when the chosen path fails; the wearer path
 	 * never falls back to the warp on a failure.
 	 */
 	static bool Fit(const FMantleSkinnedMesh& Garment, const FMantleWarpField& Field, const FMantleSkinnedMesh& WearerBody,
 		const FMantleGarmentAuthoredClearance* Authored, FMantleSkinnedMesh& OutFitted, FString* OutError = nullptr,
-		FMantleCatalogFitResult* OutResult = nullptr, const FMantleSkinnedMeshLOD* WearerFace = nullptr);
+		FMantleCatalogFitResult* OutResult = nullptr, const FMantleSkinnedMeshLOD* WearerFace = nullptr,
+		TConstArrayView<FMantleSkinnedMeshBone> WearerFaceBones = {});
 
 	/**
 	 * The warp field from Source onto WearerBody's LOD0 positions (both the reference topology; the fitter refuses

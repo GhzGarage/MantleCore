@@ -169,13 +169,13 @@ namespace MantleGarmentSkinTransferPrivate
 }
 
 bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const TConstArrayView<FMantleSkinnedMeshBone> GarmentBones, const FMantleGarmentClearance& Authored,
-	const FMantleSkinnedMesh& Wearer, FMantleSkinTransferStats* OutStats, FString* OutError)
+	const FMantleSkinnedMesh& Wearer, const FMantleSkinTransferFace& Face, FMantleSkinTransferStats* OutStats, FString* OutError)
 {
 	using namespace MantleGarmentSkinTransferPrivate;
 
 	const double Start = MantleGarmentGeometry::NowMs();
 	const int32 N = Garment.NumVertices();
-	const int32 Slots = Garment.NumInfluences;
+	const int32 OldSlots = Garment.NumInfluences;
 	const FMantleSkinnedMeshLOD* WearerLOD = Wearer.LODs.Num() > 0 ? &Wearer.LODs[0] : nullptr;
 	const int32 NumWearerVertices = WearerLOD ? WearerLOD->NumVertices() : 0;
 	const int32 WearerSlots = WearerLOD ? WearerLOD->NumInfluences : 0;
@@ -185,7 +185,18 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 		|| GarmentBones.Num() == 0 || NumWearerBones == 0)
 	{
 		return MantleGarmentGeometry::RefuseFit(TEXT("skin transfer"), FString::Printf(TEXT("bad inputs (garment %d vertices, %d authored entries, wearer %d vertices vs the authoring body's %d, slots %d / %d, bones %d / %d)"),
-			N, Authored.Triangle.Num(), NumWearerVertices, Authored.NumSurfaceVertices, Slots, WearerSlots, GarmentBones.Num(), NumWearerBones), OutError);
+			N, Authored.Triangle.Num(), NumWearerVertices, Authored.NumSurfaceVertices, OldSlots, WearerSlots, GarmentBones.Num(), NumWearerBones), OutError);
+	}
+	const bool bFace = Face.IsSet();
+	const FMantleSkinnedMeshLOD* FaceLOD = bFace ? Face.Surface : nullptr;
+	const FMantleGarmentClearance* FaceClearance = bFace ? Face.Clearance : nullptr;
+	const int32 FaceSlots = FaceLOD ? FaceLOD->NumInfluences : 0;
+	if (bFace && (FaceSlots < 1 || FaceSlots > MAX_TOTAL_INFLUENCES || FaceLOD->InfluenceBones.Num() != FaceLOD->NumVertices() * FaceSlots
+		|| FaceLOD->InfluenceWeights.Num() != FaceLOD->NumVertices() * FaceSlots || FaceClearance->Triangle.Num() != N || FaceClearance->Barycentrics.Num() != N
+		|| FaceClearance->ClearanceCm.Num() != N || FaceClearance->NumSurfaceVertices != FaceLOD->NumVertices() || FaceClearance->SurfaceIndices.Num() != FaceLOD->Indices.Num()))
+	{
+		return MantleGarmentGeometry::RefuseFit(TEXT("skin transfer"), FString::Printf(TEXT("bad face inputs (face %d vertices, %d slots; face clearance %d entries over %d vertices for %d garment vertices)"),
+			FaceLOD->NumVertices(), FaceSlots, FaceClearance->Triangle.Num(), FaceClearance->NumSurfaceVertices, N), OutError);
 	}
 
 	// Wearer bone -> garment bone, by name unless the tables are the same (names in order).
@@ -194,75 +205,128 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 	{
 		bSameTable = Wearer.Bones[Bone].Name == GarmentBones[Bone].Name;
 	}
+	TMap<FName, int32> GarmentIndex;
+	GarmentIndex.Reserve(GarmentBones.Num());
+	for (int32 Bone = 0; Bone < GarmentBones.Num(); ++Bone)
+	{
+		GarmentIndex.Add(GarmentBones[Bone].Name, Bone);
+	}
 	TArray<int32> ToGarment;
 	ToGarment.Init(INDEX_NONE, NumWearerBones);
-	if (bSameTable)
+	for (int32 Bone = 0; Bone < NumWearerBones; ++Bone)
 	{
-		for (int32 Bone = 0; Bone < NumWearerBones; ++Bone)
-		{
-			ToGarment[Bone] = Bone;
-		}
+		const int32* Found = bSameTable ? nullptr : GarmentIndex.Find(Wearer.Bones[Bone].Name);
+		ToGarment[Bone] = bSameTable ? Bone : (Found ? *Found : INDEX_NONE);
 	}
-	else
+
+	// Face bone -> garment bone: by name, else the nearest face ancestor the garment has (the face's own
+	// neck joints ride on neck_01 / neck_02 / head, which the garment's table has).
+	TArray<int32> FaceToGarment;
+	FaceToGarment.Init(INDEX_NONE, bFace ? Face.Bones.Num() : 0);
+	for (int32 Bone = 0; Bone < FaceToGarment.Num(); ++Bone)
 	{
-		TMap<FName, int32> GarmentIndex;
-		GarmentIndex.Reserve(GarmentBones.Num());
-		for (int32 Bone = 0; Bone < GarmentBones.Num(); ++Bone)
+		for (int32 Ancestor = Bone, Steps = 0; Face.Bones.IsValidIndex(Ancestor) && Steps < Face.Bones.Num(); Ancestor = Face.Bones[Ancestor].ParentIndex, ++Steps)
 		{
-			GarmentIndex.Add(GarmentBones[Bone].Name, Bone);
-		}
-		for (int32 Bone = 0; Bone < NumWearerBones; ++Bone)
-		{
-			if (const int32* Found = GarmentIndex.Find(Wearer.Bones[Bone].Name))
+			if (const int32* Found = GarmentIndex.Find(Face.Bones[Ancestor].Name))
 			{
-				ToGarment[Bone] = *Found;
+				FaceToGarment[Bone] = *Found;
+				break;
 			}
 		}
 	}
 
+	// The slots grow to the skin's count (never below the garment's own): a one-slot garment takes the skin's blend whole.
+	const int32 Slots = FMath::Max(OldSlots, FMath::Min(FMath::Max(WearerSlots, FaceSlots), FMath::Min(MaxInfluences, static_cast<int32>(MAX_TOTAL_INFLUENCES))));
 	const int32 Keep = FMath::Min(Slots, MaxInfluences);
 	const TArray<uint16> OldBones = Garment.InfluenceBones;
 	const TArray<uint8> OldWeights = Garment.InfluenceWeights;
+	if (Slots != OldSlots)
+	{
+		Garment.NumInfluences = Slots;
+		Garment.InfluenceBones.SetNumZeroed(N * Slots);
+		Garment.InfluenceWeights.SetNumZeroed(N * Slots);
+		for (int32 Vertex = 0; Vertex < N; ++Vertex)
+		{
+			for (int32 Slot = 0; Slot < Slots; ++Slot)
+			{
+				Garment.InfluenceBones[Vertex * Slots + Slot] = Slot < OldSlots ? OldBones[Vertex * OldSlots + Slot] : static_cast<uint16>(0);
+				Garment.InfluenceWeights[Vertex * Slots + Slot] = Slot < OldSlots ? OldWeights[Vertex * OldSlots + Slot] : static_cast<uint8>(0);
+			}
+		}
+	}
 
 	enum : uint8 { OriginKept, OriginBody, OriginNearest };
 	TArray<uint8> Origin;
 	Origin.Init(OriginKept, N);
+	TArray<uint8> TookFace;
+	TookFace.Init(0, N);
 	TArray<int32> Dropped;
 	Dropped.SetNumZeroed(N);
 
-	// (1) Tracked vertices: blend the wearer's weights at the authored closest point. Each vertex writes only its own slots.
+	// Adds one skin vertex's influences scaled by Scale, through Map (skin bone -> garment bone); unmapped ones are counted.
+	auto AddSkin = [](FGarmentInfluenceBlend& Blend, const FMantleSkinnedMeshLOD& Skin, const int32 SkinVertex, const float Scale, const TArray<int32>& Map, int32& OutDropped)
+	{
+		const int32 SkinSlots = Skin.NumInfluences;
+		for (int32 Slot = 0; Slot < SkinSlots; ++Slot)
+		{
+			const uint8 SkinWeight = Skin.InfluenceWeights[SkinVertex * SkinSlots + Slot];
+			if (SkinWeight == 0)
+			{
+				continue;
+			}
+			const int32 SkinBone = Skin.InfluenceBones[SkinVertex * SkinSlots + Slot];
+			const int32 GarmentBone = Map.IsValidIndex(SkinBone) ? Map[SkinBone] : INDEX_NONE;
+			if (GarmentBone == INDEX_NONE)
+			{
+				++OutDropped;
+				continue;
+			}
+			AddInfluence(Blend, GarmentBone, Scale * static_cast<float>(SkinWeight) / static_cast<float>(FullWeight));
+		}
+	};
+
+	// (1) Tracked vertices: blend the skin's weights at the closest point, the body's at the authored one and,
+	// within the face's reach, the face's by its share (the collar sits over the face's neck, not the
+	// body's). Each vertex writes only its own slots.
 	ParallelFor(N, [&](const int32 Vertex)
 	{
 		const int32 T = Authored.Triangle[Vertex];
-		if (T == INDEX_NONE)
+		const int32 FT = FaceClearance ? FaceClearance->Triangle[Vertex] : INDEX_NONE;
+		float FaceShare = 0.0f;
+		if (FT != INDEX_NONE)
+		{
+			const float FaceCm = FMath::Abs(FaceClearance->ClearanceCm[Vertex]);
+			const float Fade = FMath::Clamp((FMantleGarmentClearance::FaceSearchCm - FaceCm) / FaceFadeCm, 0.0f, 1.0f);
+			const float BodyCm = FMath::Max(Authored.ClearanceCm.IsValidIndex(Vertex) ? FMath::Abs(Authored.ClearanceCm[Vertex]) : 0.0f, MinShareDistanceCm);
+			FaceShare = T == INDEX_NONE ? 1.0f : Fade * BodyCm / (BodyCm + FMath::Max(FaceCm, MinShareDistanceCm));
+		}
+		if (T == INDEX_NONE && FaceShare <= 0.0f)
 		{
 			return;
 		}
 		FGarmentInfluenceBlend Blend;
-		const FVector3f& W = Authored.Barycentrics[Vertex];
-		const float Bary[3] = { W.X, W.Y, W.Z };
-		for (int32 Corner = 0; Corner < 3; ++Corner)
+		if (T != INDEX_NONE && FaceShare < 1.0f)
 		{
-			if (Bary[Corner] <= 0.0f)
+			const FVector3f& W = Authored.Barycentrics[Vertex];
+			const float Bary[3] = { W.X, W.Y, W.Z };
+			for (int32 Corner = 0; Corner < 3; ++Corner)
 			{
-				continue;
+				if (Bary[Corner] > 0.0f)
+				{
+					AddSkin(Blend, *WearerLOD, static_cast<int32>(Authored.SurfaceIndices[T * 3 + Corner]), (1.0f - FaceShare) * Bary[Corner], ToGarment, Dropped[Vertex]);
+				}
 			}
-			const int32 BodyVertex = static_cast<int32>(Authored.SurfaceIndices[T * 3 + Corner]);
-			for (int32 Slot = 0; Slot < WearerSlots; ++Slot)
+		}
+		if (FaceShare > 0.0f)
+		{
+			const FVector3f& W = FaceClearance->Barycentrics[Vertex];
+			const float Bary[3] = { W.X, W.Y, W.Z };
+			for (int32 Corner = 0; Corner < 3; ++Corner)
 			{
-				const uint8 BodyWeight = WearerLOD->InfluenceWeights[BodyVertex * WearerSlots + Slot];
-				if (BodyWeight == 0)
+				if (Bary[Corner] > 0.0f)
 				{
-					continue;
+					AddSkin(Blend, *FaceLOD, static_cast<int32>(FaceClearance->SurfaceIndices[FT * 3 + Corner]), FaceShare * Bary[Corner], FaceToGarment, Dropped[Vertex]);
 				}
-				const int32 WearerBone = WearerLOD->InfluenceBones[BodyVertex * WearerSlots + Slot];
-				const int32 GarmentBone = ToGarment.IsValidIndex(WearerBone) ? ToGarment[WearerBone] : INDEX_NONE;
-				if (GarmentBone == INDEX_NONE)
-				{
-					++Dropped[Vertex];
-					continue;
-				}
-				AddInfluence(Blend, GarmentBone, Bary[Corner] * static_cast<float>(BodyWeight) / static_cast<float>(FullWeight));
 			}
 		}
 		const float Sum = SortAndTrim(Blend, Keep);
@@ -272,6 +336,7 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 		}
 		WriteQuantised(Blend, Sum, Slots, &Garment.InfluenceBones[Vertex * Slots], &Garment.InfluenceWeights[Vertex * Slots]);
 		Origin[Vertex] = OriginBody;
+		TookFace[Vertex] = FaceShare > 0.0f ? 1 : 0;
 	});
 
 	// (2) Untracked vertices (loose cloth past the clearance search): the new weights of the nearest
@@ -300,7 +365,7 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 		Nearest.Init(INDEX_NONE, N);
 		ParallelFor(N, [&](const int32 Vertex)
 		{
-			if (Authored.Triangle[Vertex] != INDEX_NONE)
+			if (Authored.Triangle[Vertex] != INDEX_NONE || Origin[Vertex] == OriginBody)
 			{
 				return;
 			}
@@ -369,13 +434,50 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 		}
 	}
 
-	// (3) Stats: per changed vertex the largest per-bone change and whether the dominant bone moved.
+	// (3) The slots cut to the most any vertex uses, each vertex's weights packed first in their order (the
+	// skin's 12 slots on a garment whose blends use 6 would only cost the GPU skin).
+	int32 Used = 1;
+	for (int32 Vertex = 0; Vertex < N; ++Vertex)
+	{
+		int32 VertexUsed = 0;
+		for (int32 Slot = 0; Slot < Slots; ++Slot)
+		{
+			VertexUsed += Garment.InfluenceWeights[Vertex * Slots + Slot] > 0 ? 1 : 0;
+		}
+		Used = FMath::Max(Used, VertexUsed);
+	}
+	if (Used < Slots)
+	{
+		TArray<uint16> Bones;
+		TArray<uint8> Weights;
+		Bones.SetNumZeroed(N * Used);
+		Weights.SetNumZeroed(N * Used);
+		for (int32 Vertex = 0; Vertex < N; ++Vertex)
+		{
+			int32 To = 0;
+			for (int32 Slot = 0; Slot < Slots; ++Slot)
+			{
+				if (Garment.InfluenceWeights[Vertex * Slots + Slot] > 0)
+				{
+					Bones[Vertex * Used + To] = Garment.InfluenceBones[Vertex * Slots + Slot];
+					Weights[Vertex * Used + To] = Garment.InfluenceWeights[Vertex * Slots + Slot];
+					++To;
+				}
+			}
+		}
+		Garment.NumInfluences = Used;
+		Garment.InfluenceBones = MoveTemp(Bones);
+		Garment.InfluenceWeights = MoveTemp(Weights);
+	}
+	const int32 NewSlots = Garment.NumInfluences;
+
+	// (4) Stats: per changed vertex the largest per-bone change and whether the dominant bone moved.
 	FMantleSkinTransferStats Stats;
 	double SumChange = 0.0;
 	FGarmentInfluenceList Old;
 	FGarmentInfluenceList New;
 	FMantleSkinnedMeshLOD OldLOD;
-	OldLOD.NumInfluences = Slots;
+	OldLOD.NumInfluences = OldSlots;
 	OldLOD.InfluenceBones = OldBones;
 	OldLOD.InfluenceWeights = OldWeights;
 	for (int32 Vertex = 0; Vertex < N; ++Vertex)
@@ -387,21 +489,23 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 			continue;
 		}
 		Stats.FromBody += Origin[Vertex] == OriginBody ? 1 : 0;
+		Stats.FromFace += TookFace[Vertex];
 		Stats.FromNearest += Origin[Vertex] == OriginNearest ? 1 : 0;
 		GatherInfluences(OldLOD, Vertex, Old);
 		GatherInfluences(Garment, Vertex, New);
 		const double Largest = LargestChange(Old, New);
 		SumChange += Largest;
 		Stats.MaxChange = FMath::Max(Stats.MaxChange, Largest);
-		Stats.DominantChanged += DominantBone(OldBones, OldWeights, Vertex * Slots, Slots) != DominantBone(Garment.InfluenceBones, Garment.InfluenceWeights, Vertex * Slots, Slots) ? 1 : 0;
+		Stats.DominantChanged += DominantBone(OldBones, OldWeights, Vertex * OldSlots, OldSlots) != DominantBone(Garment.InfluenceBones, Garment.InfluenceWeights, Vertex * NewSlots, NewSlots) ? 1 : 0;
 	}
 	const int32 Changed = Stats.FromBody + Stats.FromNearest;
 	Stats.bRan = true;
-	Stats.Influences = Keep;
+	Stats.SlotsBefore = OldSlots;
+	Stats.Influences = NewSlots;
 	Stats.MeanChange = Changed > 0 ? SumChange / Changed : 0.0;
 	Stats.Ms = MantleGarmentGeometry::NowMs() - Start;
-	UE_LOG(LogMantle, Verbose, TEXT("MANTLE_GARMENTFIT skin transfer: %d from the body, %d from the nearest tracked vertex, %d kept; top %d of %d slots, bone tables %s; change mean %.3f max %.3f, dominant changed %d, dropped %d; %.2f ms"),
-		Stats.FromBody, Stats.FromNearest, Stats.Kept, Keep, Slots, bSameTable ? TEXT("identical") : TEXT("mapped by name"), Stats.MeanChange, Stats.MaxChange,
+	UE_LOG(LogMantle, Verbose, TEXT("MANTLE_GARMENTFIT skin transfer: %d from the skin (%d with the face's weights), %d from the nearest tracked vertex, %d kept; slots %d -> %d, bone tables %s; change mean %.3f max %.3f, dominant changed %d, dropped %d; %.2f ms"),
+		Stats.FromBody, Stats.FromFace, Stats.FromNearest, Stats.Kept, OldSlots, NewSlots, bSameTable ? TEXT("identical") : TEXT("mapped by name"), Stats.MeanChange, Stats.MaxChange,
 		Stats.DominantChanged, Stats.DroppedInfluences, Stats.Ms);
 	if (OutStats)
 	{

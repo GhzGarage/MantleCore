@@ -58,7 +58,7 @@ bool FMantleCatalogGarmentFit::SharesSurface(const FMantleGarmentAuthoredClearan
 
 bool FMantleCatalogGarmentFit::Fit(const FMantleSkinnedMesh& Garment, const FMantleWarpField& Field, const FMantleSkinnedMesh& WearerBody,
 	const FMantleGarmentAuthoredClearance* Authored, FMantleSkinnedMesh& OutFitted, FString* OutError, FMantleCatalogFitResult* OutResult,
-	const FMantleSkinnedMeshLOD* WearerFace)
+	const FMantleSkinnedMeshLOD* WearerFace, const TConstArrayView<FMantleSkinnedMeshBone> WearerFaceBones)
 {
 	const double Start = FPlatformTime::Seconds();
 	FMantleCatalogFitResult Result;
@@ -80,9 +80,11 @@ bool FMantleCatalogGarmentFit::Fit(const FMantleSkinnedMesh& Garment, const FMan
 	if (Result.WarpReason.IsEmpty())
 	{
 		Result.Path = EMantleCatalogFitPath::Wearer;
-		// The wearer's face, for the collar's restore (FitToWearer runs it only when Authored has the face clearance too).
+		// The wearer's face, for the collar's restore (FitToWearer runs it only when Authored has the face clearance too)
+		// and, with its bones, for the collar's skin weights.
 		const FMantleSkinnedMeshLOD* Face = WearerFace && WearerFace->NumTriangles() > 0 ? WearerFace : nullptr;
-		bFitted = FMantleGarmentFitter::FitToWearer(Garment, *Authored, Field, WearerBody, Face, OutFitted, OutError, &Result.Report);
+		bFitted = FMantleGarmentFitter::FitToWearer(Garment, *Authored, Field, WearerBody, Face, OutFitted, OutError, &Result.Report,
+			Face ? WearerFaceBones : TConstArrayView<FMantleSkinnedMeshBone>());
 	}
 	else
 	{

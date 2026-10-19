@@ -558,12 +558,14 @@ namespace MantleGarmentFitterPrivate
 	 * and face clearance restores and the skin transfer and smoothing, against the wearer's LOD0, with
 	 * Authored holding this LOD's clearances in Body and Face. Fitted starts as a copy of Authored0 and
 	 * keeps the garment's bone table (the rebind is the caller's, once for every LOD). Seams are this
-	 * LOD's seams between sections (SeamWeld), which both restores push as one. Report gets this LOD's
+	 * LOD's seams between sections (SeamWeld), which both restores push as one. WearerFaceBones is the
+	 * face's bone table (empty: the skin transfer takes the body's weights only). Report gets this LOD's
 	 * numbers. FitToWearer has checked the sizes.
 	 */
 	bool FitLODToWearer(const FMantleSkinnedMesh& Garment, const FMantleSkinnedMeshLOD& Authored0, FMantleSkinnedMeshLOD& Fitted,
 		const FMantleGarmentAuthoredClearance& Authored, const FMantleWarpField& Field, const FMantleSkinnedMesh& WearerBody,
-		const FMantleSkinnedMeshLOD* WearerFace, const TConstArrayView<int32> Seams, FMantleGarmentFitReport& Report, FString* OutError)
+		const FMantleSkinnedMeshLOD* WearerFace, const TConstArrayView<FMantleSkinnedMeshBone> WearerFaceBones, const TConstArrayView<int32> Seams,
+		FMantleGarmentFitReport& Report, FString* OutError)
 	{
 		const int32 N = Authored0.NumVertices();
 		const TArray<FVector3f>& WearerPositions = WearerBody.LODs[0].Positions;
@@ -664,8 +666,20 @@ namespace MantleGarmentFitterPrivate
 
 		// 4. The wearer's skin weights at the authored correspondence (before the rebind: the transfer writes
 		// the garment's own bone indices, the rebind moves them onto the wearer's table), smoothed faded by
-		// the authored clearance.
-		if (!FMantleGarmentSkinTransfer::Transfer(Fitted, Garment.Bones, Authored.Body, WearerBody, &Report.Transfer, OutError))
+		// the authored clearance. The collar and the neck opening lie over the face's neck, which bends with
+		// neck_01 and neck_02 while the body's neck base stays on spine_04: within the face's reach they
+		// take the face's weights too (measured on the restored garment), or the collar stays with the
+		// chest and opens a gap at the back of the neck once the head tips forward.
+		FMantleGarmentClearance FaceNow;
+		FMantleSkinTransferFace TransferFace;
+		if (WearerFace && WearerFaceBones.Num() > 0 && FMantleGarmentClearance::Compute(Fitted.Positions, *WearerFace, FaceNow, FMantleGarmentClearance::FaceSearchCm))
+		{
+			FaceNow.UntrackBoundary(*WearerFace);
+			TransferFace.Surface = WearerFace;
+			TransferFace.Bones = WearerFaceBones;
+			TransferFace.Clearance = &FaceNow;
+		}
+		if (!FMantleGarmentSkinTransfer::Transfer(Fitted, Garment.Bones, Authored.Body, WearerBody, TransferFace, &Report.Transfer, OutError))
 		{
 			return false;
 		}
@@ -703,7 +717,7 @@ namespace MantleGarmentFitterPrivate
 
 bool FMantleGarmentFitter::FitToWearer(const FMantleSkinnedMesh& Garment, const FMantleGarmentAuthoredClearance& Authored, const FMantleWarpField& Field,
 	const FMantleSkinnedMesh& WearerBody, const FMantleSkinnedMeshLOD* WearerFace, FMantleSkinnedMesh& OutFitted,
-	FString* OutError, FMantleGarmentFitReport* OutReport)
+	FString* OutError, FMantleGarmentFitReport* OutReport, const TConstArrayView<FMantleSkinnedMeshBone> WearerFaceBones)
 {
 	using namespace MantleGarmentFitterPrivate;
 
@@ -768,7 +782,7 @@ bool FMantleGarmentFitter::FitToWearer(const FMantleSkinnedMesh& Garment, const 
 
 	// 1 to 4 on LOD0 (the report's numbers), then on each lower LOD through its own clearance.
 	OutFitted = Garment;
-	if (!FitLODToWearer(Garment, Authored0, OutFitted.LODs[0], Authored, Field, WearerBody, WearerFace, LODSeams[0], Report, OutError))
+	if (!FitLODToWearer(Garment, Authored0, OutFitted.LODs[0], Authored, Field, WearerBody, WearerFace, WearerFaceBones, LODSeams[0], Report, OutError))
 	{
 		return false;
 	}
@@ -780,7 +794,7 @@ bool FMantleGarmentFitter::FitToWearer(const FMantleSkinnedMesh& Garment, const 
 		const double LODStart = MantleGarmentGeometry::NowMs();
 		FMantleGarmentFitReport LODReport;
 		const FMantleGarmentAuthoredClearance LODAuthored = AuthoredClearanceOfLOD(Authored, LODIndex);
-		if (!FitLODToWearer(Garment, Garment.LODs[LODIndex], OutFitted.LODs[LODIndex], LODAuthored, Field, WearerBody, WearerFace, LODSeams[LODIndex], LODReport, OutError))
+		if (!FitLODToWearer(Garment, Garment.LODs[LODIndex], OutFitted.LODs[LODIndex], LODAuthored, Field, WearerBody, WearerFace, WearerFaceBones, LODSeams[LODIndex], LODReport, OutError))
 		{
 			UE_LOG(LogMantle, Error, TEXT("MANTLE_GARMENTFIT FAIL fit: LOD%d"), LODIndex);
 			return false;
@@ -815,9 +829,10 @@ bool FMantleGarmentFitter::FitToWearer(const FMantleSkinnedMesh& Garment, const 
 	Report.Rebind.MaxMoveCm = Report.MaxMoveCm;
 	Report.TotalMs = MantleGarmentGeometry::NowMs() - Start;
 	Report.Rebind.FitMs = Report.TotalMs;
-	UE_LOG(LogMantle, Log, TEXT("MANTLE_GARMENTFIT wearer verts=%d identity=%d warpMs=%.2f bodyRestore=[%s] leftToFace=%d faceWithin=%d faceTracked=%d faceRestore=[%s] faceStillBelow=%d transfer=%d/%d/%d smoothPoints=%d dominantPct=%.1f/%.1f flipsWarp=%d flipsAdded=%d lods=%d lowerFlipsAdded=%d lowerDominantPct=%.1f lowerMs=%.2f totalMs=%.2f"),
+	UE_LOG(LogMantle, Log, TEXT("MANTLE_GARMENTFIT wearer verts=%d identity=%d warpMs=%.2f bodyRestore=[%s] leftToFace=%d faceWithin=%d faceTracked=%d faceRestore=[%s] faceStillBelow=%d transfer=%d/%d/%d transferFace=%d slots=%d->%d smoothPoints=%d dominantPct=%.1f/%.1f flipsWarp=%d flipsAdded=%d lods=%d lowerFlipsAdded=%d lowerDominantPct=%.1f lowerMs=%.2f totalMs=%.2f"),
 		N, Field.bIdentity ? 1 : 0, Report.WarpMs, *Report.BodyRestore.ToString(), Report.LeftToFace, Report.FaceWithin, Report.FaceTracked,
-		*Report.FaceRestore.ToString(), Report.FaceStillBelow, Report.Transfer.FromBody, Report.Transfer.FromNearest, Report.Transfer.Kept, Report.Smooth.Points,
+		*Report.FaceRestore.ToString(), Report.FaceStillBelow, Report.Transfer.FromBody, Report.Transfer.FromNearest, Report.Transfer.Kept,
+		Report.Transfer.FromFace, Report.Transfer.SlotsBefore, Report.Transfer.Influences, Report.Smooth.Points,
 		Report.DominantMatchPct, Report.SmoothDominantMatchPct, Report.FlipsWarp.Flipped, Report.FlipsAddedByRestores,
 		Report.NumLODs, Report.LowerLODsFlipsAdded, Report.LowerLODsSmoothDominantMatchPct, Report.LowerLODsMs, Report.TotalMs);
 	if (OutReport)

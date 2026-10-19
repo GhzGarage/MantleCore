@@ -201,6 +201,12 @@ public:
 	static constexpr int32 DefaultPoints = 750;
 
 	/**
+	 * Part of the cosmetic cache's fit key, so fits made by an older FitToWearer are not reused. 2: the
+	 * collar takes the face's skin weights and the garment's slots grow to the skin's.
+	 */
+	static constexpr int32 WearerFitVersion = 2;
+
+	/**
 	 * Fills Shape.Weights with the engine's RBF weights over Shape.Positions using PointCount
 	 * interpolation points, chosen by the engine's farthest-point sampler (GroomBinding_RBFWeighting::
 	 * FPointsSampler, starting at vertex 0). False (weights left empty)
@@ -264,7 +270,9 @@ public:
 	 *      is for the outer layer only, so the folded collar's inner layer, authored inside the neck,
 	 *      stays inside);
 	 *   4. the wearer's skin weights at the authored closest point (FMantleGarmentSkinTransfer::Transfer),
-	 *      then smoothed faded by the authored clearance;
+	 *      blended with the face's within its reach when WearerFace and WearerFaceBones (the face's bone
+	 *      table) are given, the garment's slots grown to the skin's; then smoothed faded by the authored
+	 *      clearance;
 	 *   5. the rebind to WearerBody's bone table and reference pose.
 	 * The restores work per section, so the vertices that coincide as authored in two or more
 	 * sections (the seams between sections) are found once per fit, by position before the warp, and each
@@ -280,7 +288,7 @@ public:
 	 */
 	static bool FitToWearer(const FMantleSkinnedMesh& Garment, const FMantleGarmentAuthoredClearance& Authored, const FMantleWarpField& Field,
 		const FMantleSkinnedMesh& WearerBody, const FMantleSkinnedMeshLOD* WearerFace, FMantleSkinnedMesh& OutFitted,
-		FString* OutError = nullptr, FMantleGarmentFitReport* OutReport = nullptr);
+		FString* OutError = nullptr, FMantleGarmentFitReport* OutReport = nullptr, TConstArrayView<FMantleSkinnedMeshBone> WearerFaceBones = {});
 
 	/**
 	 * Garment warped by Field, every LOD, and rebound to Wearer (Rebind). Normals and tangents: the
