@@ -266,6 +266,39 @@ void FMantleFitBodies::Release(FMantleFitBody& Body)
 	Body.Character.Reset();
 }
 
+USkeletalMesh* FMantleFitBodies::PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog)
+{
+	const auto Counts = [](const USkeletalMesh* Mesh)
+	{
+		FString Text;
+		const FSkeletalMeshRenderData* RenderData = Mesh ? Mesh->GetResourceForRendering() : nullptr;
+		if (RenderData)
+		{
+			for (const FSkeletalMeshLODRenderData& LOD : RenderData->LODRenderData)
+			{
+				Text += (Text.IsEmpty() ? TEXT("") : TEXT("/")) + FString::FromInt(static_cast<int32>(LOD.StaticVertexBuffers.PositionVertexBuffer.GetNumVertices()));
+			}
+		}
+		return Text.IsEmpty() ? FString(TEXT("none")) : Text;
+	};
+	USkeletalMesh* Candidates[] = { Body.BodyMesh.Get(), Body.MergedHeadAndBodyMesh.Get() };
+	const TCHAR* Names[] = { TEXT("body mesh"), TEXT("merged head+body mesh") };
+	OutLog.Reset();
+	for (int32 Index = 0; Index < 2; ++Index)
+	{
+		const int32 LOD = Candidates[Index] ? FMantleCosmeticExport::FindReferenceLOD(Candidates[Index], Contract) : INDEX_NONE;
+		OutLog += FString::Printf(TEXT("%s%s LOD vertices %s"), OutLog.IsEmpty() ? TEXT("") : TEXT("; "), Names[Index], *Counts(Candidates[Index]));
+		if (LOD != INDEX_NONE)
+		{
+			OutLog += FString::Printf(TEXT(" (LOD %d has the reference topology)"), LOD);
+			UE_LOG(LogMantleFitBodies, Display, TEXT("MANTLE_FIT_BODIES %s: %s"), *Body.Id, *OutLog);
+			return Candidates[Index];
+		}
+	}
+	UE_LOG(LogMantleFitBodies, Warning, TEXT("MANTLE_FIT_BODIES %s: no LOD with the reference topology: %s"), *Body.Id, *OutLog);
+	return nullptr;
+}
+
 bool FMantleFitBodies::MakeSet(UObject* Outfit, const EMantleFitSex Requested, const FMantleAvatarContract& Contract,
 	TSharedPtr<FMantleFitBodySet>& OutSet, FString& OutError)
 {

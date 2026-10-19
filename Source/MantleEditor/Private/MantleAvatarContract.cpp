@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAvatarContract.h"
+#include "MantleFitBodies.h"
 
 #include "Dom/JsonObject.h"
 #include "Interfaces/IPluginManager.h"

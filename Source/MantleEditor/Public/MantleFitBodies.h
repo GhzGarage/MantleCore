@@ -83,6 +83,13 @@ struct MANTLEEDITOR_API FMantleFitBodies
 	static bool MakeSet(UObject* Outfit, EMantleFitSex Requested, const FMantleAvatarContract& Contract,
 		TSharedPtr<FMantleFitBodySet>& OutSet, FString& OutError);
 
+	/**
+	 * The mesh of this body to upload as the source body shape: the first of the editor's body mesh (all of Creator's LODs,
+	 * one of which is Mantle's 8568-vertex reference layout) and its merged head+body mesh that has a LOD with the reference
+	 * topology. Null when neither has; OutLog then lists each mesh's LOD vertex counts.
+	 */
+	static USkeletalMesh* PickShapeBody(const FMantleFitBody& Body, const FMantleAvatarContract& Contract, FString& OutLog);
+
 	/** LOD's vertex positions (component space, cm) from the render data, or the mesh description when there is no CPU copy. */
 	static bool ReadVertices(const USkeletalMesh* Mesh, int32 LODIndex, TArray<FVector3f>& OutPositions);
 

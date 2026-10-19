@@ -141,10 +141,20 @@ void FMantleEditorActions::ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& 
 		UE_LOG(LogTemp, Warning, TEXT("MANTLE_FIT_BODIES %s"), *Draft.FitBodiesStatus);
 		return;
 	}
+	TArray<FMantleOutfitAuthoringTarget> Targets;
 	for (const FMantleFitBody& Body : Set->Bodies)
 	{
-		Draft.OutfitTargets.Add({ Body.Id, Body.Character.Get(), Body.MergedHeadAndBodyMesh.Get(), Body.FaceMesh.Get(), true });
+		// The source body shape must have Mantle's reference body topology, which only some of Creator's meshes/LODs carry.
+		FString Lods;
+		USkeletalMesh* Shape = FMantleFitBodies::PickShapeBody(Body, *Contract, Lods);
+		if (!Shape)
+		{
+			Draft.FitBodiesStatus = FString::Printf(TEXT("Garment variants were not made: %s has no body with Mantle's reference topology (%s)."), *Body.Id, *Lods);
+			return;
+		}
+		Targets.Add({ Body.Id, Body.Character.Get(), Shape, Body.FaceMesh.Get(), true });
 	}
+	Draft.OutfitTargets = MoveTemp(Targets);
 	Draft.FitBodies = Set;
 	Draft.FitBodiesStatus = Set->Status;
 }
