@@ -5,6 +5,7 @@
 #include "Particles/ParticleSystemComponent.h"
 #include "MantleCrowdSpawner.h"
 #include "MantleEffect.h"
+#include "MantleEnvironmentExport.h"
 #include "MantlePhysicsProp.h"
 #include "MantlePlaceAssets.h"
 #include "MantlePlaceExporter.h"
@@ -1689,11 +1690,26 @@ FMantleValidationResult FMantlePlaceValidator::Validate(UWorld* World)
 		if (Type == EMantleEntityType::DirectionalLight && !bWarnedSun)
 		{
 			bWarnedSun = true;
-			Result.Issues.Add(FMantleValidationIssue{
-				EMantleIssueSeverity::Warning,
-				LabelOf(Actor),
-				TEXT("Mantle moves the sun; this light's pitch is not kept."),
-				TEXT("Its intensity, colour and heading (yaw) are kept; the day/night cycle sets its angle.") });
+			// The exporter keeps the pitch as a stopped clock only when the settings set no Clock Time or Time Scale, the light is
+			// not attached to another exported actor and the sun is at least 1 degree up (FMantleEnvironmentExport::SolveSunClock).
+			const AMantlePlaceSettingsActor* SunSettings = AMantlePlaceSettingsActor::Find(World);
+			const FMantleEnvironmentSettings SunEnvironment = SunSettings ? SunSettings->MakeEnvironmentSettings() : FMantleEnvironmentSettings();
+			FMantleSunClock SunClock;
+			const bool bClockSet = SunEnvironment.ClockTime.IsSet() || SunEnvironment.TimeScale.IsSet();
+			const bool bAttached = Actor->GetAttachParentActor() != nullptr;
+			const bool bPitchKept = !bClockSet && !bAttached
+				&& FMantleEnvironmentExport::SolveSunClock(-Actor->GetActorForwardVector(), Actor->GetActorRotation().Yaw, SunClock);
+			if (!bPitchKept)
+			{
+				Result.Issues.Add(FMantleValidationIssue{
+					EMantleIssueSeverity::Warning,
+					LabelOf(Actor),
+					bClockSet ? TEXT("Mantle Place Settings sets the clock, so this light's pitch is not kept.")
+						: bAttached ? TEXT("This light is attached to another actor, so its pitch is not kept.")
+						: TEXT("This sun is at or below the horizon, so its pitch is not kept."),
+					TEXT("Its intensity, colour and heading (yaw) are kept; Mantle's sky clock sets its angle. "
+						"To keep the pitch, leave Clock Time and Time Scale unset, keep the light unattached and at least 1 degree above the horizon.") });
+			}
 		}
 
 		CheckComponents(Actor, Type, Result);

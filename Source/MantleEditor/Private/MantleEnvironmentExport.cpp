@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleEnvironmentExport.h"
+#include "MantlePlaceSettingsActor.h"
 
 #include "MantleClientFeatures.h"
 #include "MantleCoverage.h"
@@ -860,10 +861,12 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 	// The weather. A level with a sky of its own (an atmosphere, clouds, a sky light or a sun) has one look, so the place's
 	// weather is held at what its clouds show (Clear, PartlyCloudy or Overcast), or Clear when it has none, never left to
 	// change on its own: the natural weather would rain on a level that never did. The creator chooses another in Mantle Place Settings.
+	// A level with Mantle Place Settings is the exception: its Weather is the creator's choice, so Natural there lets the weather change.
 	const bool bOwnSky = Clouds.Num() > 0 || Atmospheres.Num() > 0 || SkyLights.Num() > 0 || bHasSun;
 	TOptional<EMantleWeatherState> Held;
 	FString HeldReason;
 	const bool bWeatherSetByPlace = Environment.Weather.IsSet();
+	const bool bNaturalChosen = !bWeatherSetByPlace && World && AMantlePlaceSettingsActor::Find(World) != nullptr;
 	double CloudCoverage = DefaultCloudCoverage;
 	if (Clouds.Num() > 0)
 	{
@@ -884,6 +887,11 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 	else if (bOwnSky)
 	{
 		Held = EMantleWeatherState::Clear;
+	}
+	if (bNaturalChosen)
+	{
+		Held.Reset();
+		HeldReason.Reset();
 	}
 
 	bool bWeatherWritten = false;

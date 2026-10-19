@@ -32,12 +32,10 @@ public:
 	static constexpr double ToleranceCm = 0.5;
 
 	/**
-	 * #751, owner decision 2026-10-08: a CONVERTED avatar (the Convert route) may land within this of the target (cm); presets keep
-	 * ToleranceCm. The reason: the target is the UEFN driver's height (165.6 cm), and a 1 cm difference (0.6%) is invisible. It
-	 * touches no animation: characters scale about their feet (FMantleCharacterScale) and first person allows
-	 * FMantleCharacterScale::FirstPersonEyeToleranceCm (3 cm) of the driver eye.
+	 * A CONVERTED avatar (the Convert route) must land within this of the target (cm). It matches the backend, which refuses a
+	 * converted body further than 0.5 cm from 165.6 cm at publish (publication_mode.go), so what passes here also publishes.
 	 */
-	static constexpr double ConvertedToleranceCm = 1.0;
+	static constexpr double ConvertedToleranceCm = 0.5;
 
 	/** A build further than this from the target (cm) is rebuilt with a corrected Height constraint (tighter than ToleranceCm, so passes are centred, not just inside the edge). */
 	static constexpr double AimCm = 0.15;

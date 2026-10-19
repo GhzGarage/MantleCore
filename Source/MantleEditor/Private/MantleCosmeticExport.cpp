@@ -2653,7 +2653,7 @@ namespace MantleCosmeticExportPrivate
 		int32 Dropped = 0;
 		if (!FitToClassSkeleton(Out, Contract.AvatarFace, Contract, true, Dropped, OutError))
 		{
-			OutError = TEXT("the face: ") + OutError + TEXT(".");
+			OutError = FMantleCosmeticChecks::EndWithFullStop(TEXT("the face: ") + OutError);
 			return false;
 		}
 		return true;
@@ -5292,7 +5292,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 				int32 Dropped = 0;
 				if (!FitToClassSkeleton(Mesh, Class, Contract, false, Dropped, Error))
 				{
-					Issues.Add(FMantleCosmeticChecks::Error(Error + TEXT("."), TEXT("Clothing must be skinned to the MetaHuman body skeleton (metahuman_base_skel).")));
+					Issues.Add(FMantleCosmeticChecks::Error(FMantleCosmeticChecks::EndWithFullStop(Error), TEXT("Clothing must be skinned to the MetaHuman body skeleton (metahuman_base_skel).")));
 					return Package;
 				}
 				// The folded bones are in Dropped too; they get their own note (NoteFoldedBones).
@@ -6007,7 +6007,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			const EMantleJawSlot JawSlot = BodyFit.Jaw;
 			if (!Skeleton)
 			{
-				Issues.Add(FMantleCosmeticChecks::Error(Error + TEXT("."), JawSlot == EMantleJawSlot::Refused
+				Issues.Add(FMantleCosmeticChecks::Error(FMantleCosmeticChecks::EndWithFullStop(Error), JawSlot == EMantleJawSlot::Refused
 					? TEXT("Pick the bone that opens the mouth, one below head, in Jaw bone (optional), or pick none.")
 					: BodyFit.bSecondaryRefused
 					? TEXT("In Secondary motion, map each slot to the first bone of one chain below the slot's parent bone, each bone in one chain only, or pick None.")
@@ -6030,7 +6030,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 					: ShapeError.Contains(TEXT("has scale"), ESearchCase::CaseSensitive)
 					? TEXT("Apply the scale to the mesh and skeleton in your modelling tool (every bone at scale 1), then reimport.")
 					: TEXT("Pose the body in its skeleton's reference pose before exporting it: arms angled down and out, legs straight down, as the stock MetaHuman, UE5 Mannequin, UE4 Mannequin or UEFN Mannequin body stands. A T-pose or arms-down body is refused.");
-				Issues.Add(FMantleCosmeticChecks::Error(ShapeError + TEXT("."), ShapeHint));
+				Issues.Add(FMantleCosmeticChecks::Error(FMantleCosmeticChecks::EndWithFullStop(ShapeError), ShapeHint));
 			}
 			if (Skeleton->Id.Equals(TEXT("ue5mannequin"), ESearchCase::CaseSensitive))
 			{
