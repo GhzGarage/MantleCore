@@ -52,13 +52,18 @@ enum class EMantlePlacePlatform : uint8
 };
 
 /**
- * The weather a place starts in (#532), the place file's settings.environment.weather. Natural is
- * the key left out; the rest are EMantleWeatherState's members, in its order, one step up.
+ * The weather a place starts in (#532), the place file's settings.environment.weather. LevelSky and
+ * Natural both leave the key out; the rest are EMantleWeatherState's members, in its order, two steps up.
  */
 UENUM()
 enum class EMantlePlaceWeather : uint8
 {
-	/** The natural weather: mostly clear, changing on its own. */
+	/**
+	 * The level's own look: a level with a sky of its own (clouds, an atmosphere, a sky light or a sun) is held at
+	 * the weather its clouds show, or Clear; one without changes on its own.
+	 */
+	LevelSky UMETA(DisplayName = "Level's Sky"),
+	/** The natural weather: mostly clear, changing on its own (even on a level with its own sky). */
 	Natural,
 	Clear,
 	PartlyCloudy UMETA(DisplayName = "Partly Cloudy"),
@@ -235,11 +240,13 @@ public:
 	double TimeScale = 1.0;
 
 	/**
-	 * The weather players start in. Natural lets it change on its own; any other holds it there
-	 * until a script changes it.
+	 * The weather players start in. Level's Sky (the default) holds a level with a sky of its own at the weather its
+	 * clouds show, or Clear, and lets any other level change on its own; Natural lets it change on its own even then;
+	 * any other choice holds it there until a script changes it.
+	 * Saved by name and against the default, so an actor that never touched this loads as Level's Sky, as before.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Mantle|Environment")
-	EMantlePlaceWeather Weather = EMantlePlaceWeather::Natural;
+	EMantlePlaceWeather Weather = EMantlePlaceWeather::LevelSky;
 
 	/** A colour multiplied over the whole picture. White leaves it unchanged. */
 	UPROPERTY(EditAnywhere, Category = "Mantle|Environment", meta = (HideAlphaChannel))

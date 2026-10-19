@@ -183,6 +183,8 @@ struct MANTLEEDITOR_API FMantleCosmeticChecks
 	 */
 	static const TCHAR* UnsupportedSkeletonMessage;
 	static FString UnsupportedSkeleton(const FString& Detail);
+	/** Message with one full stop at the end: adds it only when it isn't already there. */
+	static FString EndWithFullStop(const FString& Message);
 
 	/**
 	 * #625 (owner, 2026-10-02): a body Convert made (a MetaHuman of Epic's build, FMantleAvatarConverter::IsConvertOutput)

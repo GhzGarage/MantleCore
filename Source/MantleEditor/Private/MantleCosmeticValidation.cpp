@@ -14,6 +14,11 @@ FString FMantleCosmeticChecks::UnsupportedSkeleton(const FString& Detail)
 	return UnsupportedSkeletonMessage;
 }
 
+FString FMantleCosmeticChecks::EndWithFullStop(const FString& Message)
+{
+	return Message.EndsWith(TEXT(".")) ? Message : Message + TEXT(".");
+}
+
 const TCHAR* FMantleCosmeticChecks::NotGarmentCompatibleMessage =
 	TEXT("not garment-compatible: export the MetaHuman with UE Optimized at Medium, High or Cinematic quality, without clothing");
 
