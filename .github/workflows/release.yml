@@ -60,14 +60,16 @@ jobs:
   # owner picks a way to give this repo a UE 5.8 runner, run the command from issue 950 step 4 by
   # hand before tagging. Once a runner is available: set its labels in runs-on, remove `if: false`,
   # and add `buildplugin` to the release job's `needs`.
+  # UE_ROOT must be an installed (Launcher) UE 5.8, the kind Fab compiles against: on an installed
+  # engine BuildPlugin always builds as Rocket. A source-built engine doesn't prove the same thing.
   buildplugin:
     name: BuildPlugin (UE 5.8, Win64)
     needs: package
     if: false
-    runs-on: [self-hosted, Windows, X64, mantle-builder-dedicated]
+    runs-on: [self-hosted, Windows, X64, mantlecore-buildplugin]
     timeout-minutes: 60
     env:
-      UE_ROOT: D:\EpicGames\UE_5.8
+      UE_ROOT: ${{ vars.MANTLECORE_UE_ROOT || 'D:\EpicGames\UE_5.8' }}
     steps:
       - name: Download the zip
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
