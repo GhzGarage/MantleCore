@@ -3,6 +3,7 @@
 
 #include "MantleAnimClipWriter.h"
 #include "MantleAvatarContract.h"
+#include "MantleBuiltInMannequin.h"
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticValidation.h"
 #include "MantleRuntime.h"
@@ -310,7 +311,7 @@ bool FMantleEmoteRetarget::RetargetAndSample(UAnimSequence* Sequence, const FStr
 	}
 	if (!TargetMesh)
 	{
-		OutError = FString::Printf(TEXT("%s is on the %s skeleton and emotes play on the UEFN mannequin, but this project has no UEFN mannequin to retarget it onto. Add SKM_UEFN_Mannequin (from the Game Animation Sample, or UEFN's mannequin) to the project and upload again."),
+		OutError = FString::Printf(TEXT("%s is on the %s skeleton and emotes play on the UEFN mannequin, but this project has none and the Mantle plugin could not make its own to retarget it onto (see the Output Log): reinstall the Mantle plugin, or add SKM_UEFN_Mannequin (from the Game Animation Sample) to the project, and upload again."),
 			*Sequence->GetName(), *SkeletonId);
 		return false;
 	}
@@ -325,9 +326,11 @@ bool FMantleEmoteRetarget::RetargetAndSample(UAnimSequence* Sequence, const FStr
 		OutError = FString::Printf(TEXT("%s is not on %s's skeleton, so it cannot be retargeted from."), *SourceMesh->GetName(), *Sequence->GetName());
 		return false;
 	}
+	// The plugin's built-in mannequin is made from the rig every emote retargeter targets, so it has every bone they
+	// drive; it lacks only the fixture's prop bones, which then get no track and stay in their reference pose.
 	const FMantleContractSkeleton* Uefn = Contract.FindSkeleton(Contract.EmoteSkeleton);
 	FString MissingBone;
-	if (!Uefn || !FMantleCosmeticExport::HasFixtureBones(TargetMesh->GetSkeleton(), *Uefn, &MissingBone))
+	if (!FMantleBuiltInMannequin::Is(TargetMesh) && (!Uefn || !FMantleCosmeticExport::HasFixtureBones(TargetMesh->GetSkeleton(), *Uefn, &MissingBone)))
 	{
 		OutError = FString::Printf(TEXT("%s is not a UEFN mannequin (its skeleton has no bone %s), so emotes cannot be retargeted onto it."),
 			*TargetMesh->GetName(), Uefn ? *MissingBone : TEXT("of the uefn fixture"));
@@ -468,7 +471,7 @@ bool FMantleEmoteRetarget::Sample(UAnimSequence* Sequence, const FString& Skelet
 {
 	FString SourceFrom;
 	USkeletalMesh* Source = ChooseSourceMesh(Sequence, PickedBody, &SourceFrom);
-	USkeletalMesh* Target = FMantleCosmeticExport::FindUEFNMannequin(Contract);
+	USkeletalMesh* Target = FMantleBuiltInMannequin::UEFNMannequin(Contract);
 	const double Start = FPlatformTime::Seconds();
 	if (!RetargetAndSample(Sequence, SkeletonId, Source, Target, Contract, OutClip, OutError))
 	{

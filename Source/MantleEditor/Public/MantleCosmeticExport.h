@@ -484,7 +484,8 @@ public:
 	 * #535: the project's UEFN mannequin, the mesh emotes are made on and the avatar preview's hidden driver: a skeletal
 	 * mesh whose skeleton (by the asset registry's Skeleton tag, CouldBeUEFNMannequin) is a UEFN mannequin skeleton and
 	 * has every bone of the contract's uefn fixture (virtual bones aside). SKM_UEFN_Mannequin first, then by package
-	 * path. Null when the project has none: the plugin never ships one.
+	 * path. Null when the project has none; callers then use the one the plugin builds in memory
+	 * (FMantleBuiltInMannequin::UEFNMannequin).
 	 */
 	static USkeletalMesh* FindUEFNMannequin(const FMantleAvatarContract& Contract);
 

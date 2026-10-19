@@ -11,6 +11,7 @@
 #include "MantleAssetStore.h"
 #include "MantleAvatarContract.h"
 #include "MantleBodyCoverage.h"
+#include "MantleBuiltInMannequin.h"
 #include "MantleBodyShape.h"
 #include "MantleBodyTopologyData.h"
 #include "MantleCatalogGarmentFit.h"
@@ -336,7 +337,8 @@ FString FMantleAvatarPreviewInputs::DefaultIdleClipPath()
 	return Directory.IsEmpty() ? FString() : FPaths::Combine(Directory, FMantleAvatarPreviewPlan::IdleClipFileName);
 }
 
-FMantleAvatarPreviewInputs FMantleAvatarPreviewInputs::Gather(const FMantleAvatarPreviewPlan& Plan, USkeletalMesh* InDriver, const FString& IdleClipPath)
+FMantleAvatarPreviewInputs FMantleAvatarPreviewInputs::Gather(const FMantleAvatarPreviewPlan& Plan, USkeletalMesh* InDriver, const FString& IdleClipPath,
+	const FString& DriverError)
 {
 	FMantleAvatarPreviewInputs Out;
 
@@ -355,12 +357,18 @@ FMantleAvatarPreviewInputs FMantleAvatarPreviewInputs::Gather(const FMantleAvata
 	}
 	Out.Retargeter = Loaded;
 
-	// The project's UEFN mannequin: never shipped with the plugin.
+	// The project's UEFN mannequin, else the one the plugin builds from its own IK rig (FMantleBuiltInMannequin).
 	Out.Driver = InDriver;
 	if (!InDriver)
 	{
-		Out.Missing.Add(TEXT("a UEFN mannequin in this project to copy the pose from (a skeletal mesh on SK_UEFN_Mannequin, such as SKM_UEFN_Mannequin from the Game Animation Sample; add it to see the avatar posed)"));
+		Out.Missing.Add(FString::Printf(TEXT("a UEFN mannequin to copy the pose from: this project has none and the Mantle plugin could not make its own (%s; reinstall the Mantle plugin)"),
+			DriverError.IsEmpty() ? TEXT("see the Output Log") : *DriverError));
 		return Out;
+	}
+	const bool bBuiltIn = FMantleBuiltInMannequin::Is(InDriver);
+	if (bBuiltIn)
+	{
+		Out.Notes.Add(TEXT("the pose comes from the Mantle plugin's own UEFN mannequin, as this project has none"));
 	}
 
 	// The idle: the plugin's clip, else the project's own.
@@ -375,10 +383,14 @@ FMantleAvatarPreviewInputs FMantleAvatarPreviewInputs::Gather(const FMantleAvata
 	}
 	if (!Out.IdleClip.IsValid())
 	{
-		Out.IdleAsset = MantleCosmeticPreviewPrivate::FindProjectIdle(InDriver);
+		// A project idle is on the project's mannequin skeleton, which the built-in mannequin's is not.
+		Out.IdleAsset = bBuiltIn ? nullptr : MantleCosmeticPreviewPrivate::FindProjectIdle(InDriver);
 		if (!Out.IdleAsset)
 		{
-			Out.Notes.Add(TEXT("there is no idle to play, so the pose is the UEFN mannequin's reference pose"));
+			Out.Notes.Add(bBuiltIn
+				? FString::Printf(TEXT("there is no idle to play, so the avatar holds the UEFN mannequin's A-pose (to see it idle, add SKM_UEFN_Mannequin and %s from the Game Animation Sample)"),
+					FMantleAvatarPreviewPlan::IdleAssetName)
+				: FString(TEXT("there is no idle to play, so the pose is the UEFN mannequin's reference pose")));
 		}
 	}
 	return Out;
