@@ -78,12 +78,14 @@ struct MANTLEEDITOR_API FMantleEditorActions
 	static FMantleCosmeticOutfitRows ApplyCosmeticOutfitDefaults(FMantleCosmeticDraft& Draft);
 
 	/**
-	 * Clothing from a MetaHuman Outfit with no fit sources yet: Mantle's standard fit bodies, Epic's Aera and Bo presets
-	 * converted into the project (the converter's copy /Game/MetaHumans/<Name>/Converted/<Name>/<Name> and its build), as OutfitTargets "aera" and
-	 * "bo", so every upload carries a size for slim and broad wearers. Each is added only when its character, converted
-	 * body and face are all in the project; a missing one is skipped.
+	 * Clothing from a MetaHuman Outfit with no fit sources yet: Mantle's standard fit bodies, made automatically in memory
+	 * from Epic's standard body types (Resources/GarmentFit/garment-fit.json, by default the medium-height underweight, normal and
+	 * overweight bodies of one sex; Draft.FitSex overrides the sex chosen from the Outfit's own sizes), as OutfitTargets named
+	 * for the type (f_med_nrw ...), so every upload carries a size for slim and broad wearers. Nothing is converted or saved and
+	 * no Epic sign-in is needed. The bodies are held by Draft.FitBodies (they live as long as any copy of the draft); when they
+	 * cannot be made Draft.FitBodiesStatus says why and the item uploads without variants. Contract null reads the shipped one.
 	 */
-	static void ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& Draft);
+	static void ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract = nullptr);
 
 	/**
 	 * #594, avatars: the jaw picker. On a body whose skeleton has the jaw slot (the UE5, UE4 or UEFN Mannequin, as

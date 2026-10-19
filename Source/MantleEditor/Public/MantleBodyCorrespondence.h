@@ -80,6 +80,16 @@ struct MANTLEEDITOR_API FMantleBodyCorrespondence
 	bool MatchDNABodyPolygons(TConstArrayView<FVector2f> RawUVs, TConstArrayView<TArray<uint32>> Faces,
 		TArray<int32>& OutLayoutOfReference, FString& OutError) const;
 
+	/**
+	 * A body with the reference UV layout whose triangulation differs from the reference only where Epic's Optimized build cut a quad
+	 * the other way (MetaHuman Creator's in-memory body, which has not been through that build). Vertices are matched by UV; a UV the
+	 * reference repeats is told apart by the UVs of its neighbours. Every reference triangle must then be an input triangle, except
+	 * flipped-diagonal pairs (two triangles sharing an edge, replaced by the two on the other diagonal), at most 8 of them.
+	 * OutInputOfReference is as Match's; OutNote says how many repeated UVs and flipped diagonals there were. No positions are read.
+	 */
+	bool MatchFlippedDiagonals(TConstArrayView<FVector2f> UVs, TConstArrayView<uint32> InputIndices,
+		TArray<int32>& OutInputOfReference, FString& OutNote, FString& OutError) const;
+
 	/** Body-export-only LOD0 merge proof. Original asset/streams are never changed.
 	 * Exact position/all UV channels/raw global skin/colour and every morph delta must agree.
 	 * Static normals/tangents may differ; lowest physical ID survives. Strict indexed Match

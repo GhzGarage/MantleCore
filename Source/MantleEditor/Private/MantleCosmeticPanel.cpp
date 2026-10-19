@@ -1167,6 +1167,8 @@ void SMantleCosmeticPanel::SetClass(EMantleCosmeticClass Class)
 	Draft.OutfitSourceSize.Reset();
 	Draft.OutfitAuthoringCharacter.Reset();
 	Draft.OutfitTargets.Reset();
+	Draft.FitBodies.Reset();
+	Draft.FitBodiesStatus.Reset();
 	ParametricSourceBodyHead.Reset();
 	AuthoredOutfitKeepAlive.Reset();
 	OutfitAuthoringStatus.Reset();
@@ -1275,8 +1277,9 @@ void SMantleCosmeticPanel::SetSource(UObject* Source)
 	Draft.SourceSection = INDEX_NONE;
 	Draft.SectionRoles.Reset();
 	Draft.OutfitTargets.Reset();
+	Draft.FitBodies.Reset();
 	// Clothing from an Outfit starts with Mantle's standard fit bodies, so it uploads in sizes without a creator step.
-	FMantleEditorActions::ApplyCosmeticFitTargetDefaults(Draft);
+	FMantleEditorActions::ApplyCosmeticFitTargetDefaults(Draft, FMantleAvatarContract::Get());
 	RefreshOutfitTargets();
 	if (FMantleParametricOutfit::IsSource(Source)) Draft.KeepSlots.Reset();
 	Package.Reset();
@@ -1962,7 +1965,7 @@ bool SMantleCosmeticPanel::BuildPackage()
 	}
 	if (Draft.Class == EMantleCosmeticClass::Garment && FMantleParametricOutfit::IsSource(Draft.Source.Get()) && Draft.OutfitTargets.IsEmpty())
 	{
-		const TArray<FMantleCosmeticIssue> Issues = { FMantleCosmeticChecks::Error(TEXT("Add at least one converted fit source in Parametric clothing before checking or uploading the Outfit.")) };
+		const TArray<FMantleCosmeticIssue> Issues = { FMantleCosmeticChecks::Error(FString(TEXT("Mantle could not make its standard fit bodies for this Outfit, so add at least one fit source in Parametric clothing before checking or uploading it. ")) + Draft.FitBodiesStatus) };
 		Package.Reset();
 		ShowIssues(Issues, {});
 		return false;
@@ -2391,7 +2394,7 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeParametricOutfitSection()
 			.Visibility_Lambda([this] { return FMantleParametricOutfit::IsSource(Draft.Source.Get()) ? EVisibility::Visible : EVisibility::Collapsed; })
 			+ SVerticalBox::Slot().AutoHeight()
 			[
-				SNew(STextBlock).AutoWrapText(true).Text(LOCTEXT("OutfitTargetsHelp", "Choose a Creator character and its converted body/face below, then add it as a fit source. Add representative body shapes, including the supported extremes. All sources upload as one clothing item; Epic chooses its authored size for each source."))
+				SNew(STextBlock).AutoWrapText(true).Text(LOCTEXT("OutfitTargetsHelp", "Mantle fits the clothing to Epic's standard body types automatically (listed below), so nothing needs converting. To add a body of your own, choose a Creator character and its converted body/face, then add it as a fit source. All sources upload as one clothing item; Epic chooses its authored size for each source."))
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4)
 			[

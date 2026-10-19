@@ -142,6 +142,10 @@ public:
 	 * @param Sections The sections to upload, as the panel's section ticks: material or material slot names separated
 	 * by commas (e.g. "MI_Coat,MI_Shirt" for the top of a mesh holding a whole outfit); "" keeps the panel's default.
 	 * Always pass it.
+	 * A MetaHuman Outfit uploads as clothing with garment variants made automatically: it is resized onto Epic's standard
+	 * body types (by default the medium-height underweight, normal and overweight bodies of one sex, named like
+	 * "f_med_nrw"), made in memory, so nothing needs converting and no Epic sign-in is needed. The sex is chosen from the
+	 * Outfit's own sizes; a note in "notes" says which and why.
 	 * @return JSON: {"ok", "asset", "class", "slot", "name", "canUpload" (no errors), "issues":
 	 * [{"severity": "error"|"warning"|"info", "message", "hint"}], "notes": [lines], "files":
 	 * [{"key", "label", "bytes"}]}, or a refusal (not_found, not_skeletal_mesh, unknown_slot,
@@ -156,7 +160,8 @@ public:
 	 * be processed, creates the item and follows it through screening. This call completes when
 	 * that ends. This is a public action: other players can see and wear the item.
 	 * This should ONLY be called after getting explicit direction or permission from the user,
-	 * for this specific upload. Refused, with nothing sent, when the creator is not signed in, the
+	 * for this specific upload. A MetaHuman Outfit uploads with garment variants fitted to Epic's standard body types,
+	 * made automatically (as CheckCosmetic says); no converted MetaHuman is needed. Refused, with nothing sent, when the creator is not signed in, the
 	 * check finds errors, or an upload started here is still running.
 	 * @param AssetPath The skeletal mesh or Outfit, as for CheckCosmetic.
 	 * @param Slot The item's slot, as for CheckCosmetic.

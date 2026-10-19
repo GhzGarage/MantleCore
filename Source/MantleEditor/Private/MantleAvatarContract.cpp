@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAvatarContract.h"
+#include "MantleFitBodies.h"
 
 #include "Dom/JsonObject.h"
 #include "Interfaces/IPluginManager.h"
@@ -207,6 +208,37 @@ bool FMantleAvatarContract::LoadFromDirectory(const FString& Directory, FMantleA
 		if (Rule.IsValid())
 		{
 			Out.CharacterScale = Rule;
+		}
+	}
+
+	// The standard body types garment variants are fitted to. Absent or unusable: the defaults in the header.
+	// Plugin-only (Resources/GarmentFit): limits.json is a copy of the mantle repo's, so this list is not in it.
+	TSharedPtr<FJsonObject> Fit;
+	FString FitError;
+	if (const FString FitPath = FPaths::Combine(Directory, TEXT(".."), TEXT("GarmentFit"), TEXT("garment-fit.json")); FPaths::FileExists(FitPath) && ReadJsonFile(FitPath, Fit, FitError) && Fit.IsValid())
+	{
+		const TArray<TSharedPtr<FJsonValue>>* TypeValues = nullptr;
+		if (Fit->TryGetArrayField(TEXT("bodyTypes"), TypeValues))
+		{
+			TArray<FString> Types;
+			for (const TSharedPtr<FJsonValue>& Value : *TypeValues)
+			{
+				FString Type;
+				if (Value.IsValid() && Value->TryGetString(Type))
+				{
+					Types.Add(Type);
+				}
+			}
+			Types = FMantleFitBodies::SanitizeBodyTypes(Types);
+			if (!Types.IsEmpty())
+			{
+				Out.GarmentFitBodyTypes = MoveTemp(Types);
+			}
+		}
+		double Margin = 0.0;
+		if (Fit->TryGetNumberField(TEXT("sexMarginCm"), Margin) && Margin >= 0.0)
+		{
+			Out.GarmentFitSexMarginCm = static_cast<float>(Margin);
 		}
 	}
 
