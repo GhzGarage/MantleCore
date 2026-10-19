@@ -152,7 +152,7 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	TArray<FMantleSecondaryMapping> SecondaryMotion;
 
 	/**
-	 * Avatars: publish a new version into this explicitly selected existing item instead of creating
+	 * Any class: publish a new version into this explicitly selected existing item instead of creating
 	 * one; empty creates a new item. The API checks the caller's ownership.
 	 */
 	FString PublishIntoItemId;

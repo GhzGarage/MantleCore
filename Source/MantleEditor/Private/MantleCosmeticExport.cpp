@@ -5164,14 +5164,8 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 
 	FMantleCosmeticChecks::CheckNameAndDescription(Draft.Name, Draft.Description, Issues);
 
-	// Existing item targets apply only to avatar versions; the panel itself creates new items.
+	// An existing item target publishes a new version into it, for any class; the API checks ownership and that the slot matches.
 	Package.TargetItemId = Draft.PublishIntoItemId.TrimStartAndEnd();
-	if (!Package.TargetItemId.IsEmpty() && Draft.Class != EMantleCosmeticClass::Avatar)
-	{
-		Issues.Add(FMantleCosmeticChecks::Error(FString::Printf(TEXT("%s cannot be updated as an avatar version because it is not an avatar item."),
-			*Package.TargetItemId), FString::Printf(TEXT("Choose \"%s\" under Publish as."), FMantleCosmeticChecks::PublishAsNewItemLabel)));
-		return Package;
-	}
 
 	if (Draft.Class == EMantleCosmeticClass::Overlay)
 	{

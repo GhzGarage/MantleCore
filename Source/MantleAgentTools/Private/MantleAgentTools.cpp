@@ -686,7 +686,7 @@ FString FMantleAgentTools::PreviewPlace(UWorld* World)
 }
 
 bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections,
-	FMantleCosmeticPackage& OutPackage, FString& OutObjectPath, FString& OutRefusal)
+	const FString& ItemId, FMantleCosmeticPackage& OutPackage, FString& OutObjectPath, FString& OutRefusal)
 {
 	FString ContractError;
 	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
@@ -771,6 +771,13 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 	}
 
 	FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(Class, Asset, ChosenSlot, Name, *Contract);
+	Draft.PublishIntoItemId = ItemId.TrimStartAndEnd();
+	if (!Draft.PublishIntoItemId.IsEmpty() && !Draft.PublishIntoItemId.StartsWith(TEXT("itm_")))
+	{
+		OutRefusal = Refusal(TEXT("bad_item_id"), FString::Printf(
+			TEXT("\"%s\" is not an item id. Pass the id of the item to update (itm_...), or \"\" to create a new item."), *ItemId));
+		return false;
+	}
 	TArray<FString> Wanted;
 	Sections.ParseIntoArray(Wanted, TEXT(","), true);
 	if (!Wanted.IsEmpty())
@@ -857,7 +864,7 @@ FString FMantleAgentTools::CheckCosmetic(const FString& AssetPath, const FString
 	FMantleCosmeticPackage Package;
 	FString ObjectPath;
 	FString Refused;
-	if (!BuildCosmeticPackage(AssetPath, Slot, Name, Sections, Package, ObjectPath, Refused))
+	if (!BuildCosmeticPackage(AssetPath, Slot, Name, Sections, FString(), Package, ObjectPath, Refused))
 	{
 		return Refused;
 	}
@@ -956,7 +963,7 @@ UToolCallAsyncResultString* FMantleAgentTools::PublishPlace(UWorld* World, const
 	return Result;
 }
 
-UToolCallAsyncResultString* FMantleAgentTools::UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections)
+UToolCallAsyncResultString* FMantleAgentTools::UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections, const FString& ItemId)
 {
 	using namespace MantleAgentToolsPrivate;
 	UToolCallAsyncResultString* Result = NewObject<UToolCallAsyncResultString>();
@@ -974,7 +981,7 @@ UToolCallAsyncResultString* FMantleAgentTools::UploadCosmetic(const FString& Ass
 	FMantleCosmeticPackage Package;
 	FString ObjectPath;
 	FString NotBuilt;
-	const bool bBuilt = BuildCosmeticPackage(AssetPath, Slot, Name, Sections, Package, ObjectPath, NotBuilt);
+	const bool bBuilt = BuildCosmeticPackage(AssetPath, Slot, Name, Sections, ItemId, Package, ObjectPath, NotBuilt);
 	if (!bBuilt)
 	{
 		Result->SetValue(NotBuilt);
@@ -1060,9 +1067,9 @@ FString UMantleToolset::CheckCosmetic(const FString& AssetPath, const FString& S
 	return FMantleAgentTools::CheckCosmetic(AssetPath, Slot, Name, Sections);
 }
 
-UToolCallAsyncResultString* UMantleToolset::UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections)
+UToolCallAsyncResultString* UMantleToolset::UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections, const FString& ItemId)
 {
-	return FMantleAgentTools::UploadCosmetic(AssetPath, Slot, Name, Sections);
+	return FMantleAgentTools::UploadCosmetic(AssetPath, Slot, Name, Sections, ItemId);
 }
 
 FString UMantleToolset::ConvertCosmetic(const FString& AssetPath, const FString& Slot, const bool bApply, const FString& TurnOff, const FString& Confirm)
