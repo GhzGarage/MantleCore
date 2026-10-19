@@ -166,10 +166,133 @@ namespace MantleGarmentSkinTransferPrivate
 		}
 		return Largest;
 	}
+
+	/** Face shares below half an 8-bit weight step are none. */
+	constexpr float MinFaceShare = 0.5f / static_cast<float>(FullWeight);
+
+	/**
+	 * Per garment vertex the face's share (0..1) and the vertex whose closest face point it samples the
+	 * face's weights at (INDEX_NONE: no share). The raw share, dB / (dB + dF) faded over the face's last
+	 * FaceFadeCm (1 where only the face tracks), is smoothed over the welded points' edges as S, the share
+	 * of the face-tracked points (0 elsewhere), and C, the face-tracked fraction; the share is S / max(C,
+	 * FaceShareMinCoverage), so the holes the face's untracked boundary leaves fill from their neighbours,
+	 * and the share fades out evenly where the face-tracked points thin out. A point the face does not
+	 * track samples the face at the nearest one (in edges) it does.
+	 */
+	void FaceShares(const FMantleSkinnedMeshLOD& Garment, const FMantleGarmentClearance& Authored, const FMantleGarmentClearance& Face, TArray<float>& OutShare, TArray<int32>& OutSource)
+	{
+		using namespace MantleGarmentGeometry;
+
+		const int32 N = Garment.NumVertices();
+		OutShare.Init(0.0f, N);
+		OutSource.Init(INDEX_NONE, N);
+		TArray<int32> Sections;
+		VertexSections(Garment, Sections);
+		TArray<int32> Weld;
+		const int32 NumPoints = WeldBySection(Garment.Positions, Sections, Weld);
+		FPointNeighbours Neighbours;
+		PointNeighbours(Garment.Indices, Weld, NumPoints, Neighbours);
+
+		// Per point the copies' mean raw share and face-tracked fraction, and a copy the face tracks.
+		TArray<float> Share;
+		Share.Init(0.0f, NumPoints);
+		TArray<float> Coverage;
+		Coverage.Init(0.0f, NumPoints);
+		TArray<int32> Copies;
+		Copies.Init(0, NumPoints);
+		TArray<int32> Source;
+		Source.Init(INDEX_NONE, NumPoints);
+		for (int32 Vertex = 0; Vertex < N; ++Vertex)
+		{
+			const int32 Point = Weld[Vertex];
+			++Copies[Point];
+			if (Face.Triangle[Vertex] == INDEX_NONE)
+			{
+				continue;
+			}
+			const float FaceCm = FMath::Abs(Face.ClearanceCm[Vertex]);
+			const float Fade = FMath::Clamp((FMantleGarmentClearance::FaceSearchCm - FaceCm) / FMantleGarmentSkinTransfer::FaceFadeCm, 0.0f, 1.0f);
+			const float BodyCm = FMath::Max(Authored.ClearanceCm.IsValidIndex(Vertex) ? FMath::Abs(Authored.ClearanceCm[Vertex]) : 0.0f, FMantleGarmentSkinTransfer::MinShareDistanceCm);
+			Share[Point] += Authored.Triangle[Vertex] == INDEX_NONE ? 1.0f : Fade * BodyCm / (BodyCm + FMath::Max(FaceCm, FMantleGarmentSkinTransfer::MinShareDistanceCm));
+			Coverage[Point] += 1.0f;
+			Source[Point] = Source[Point] == INDEX_NONE ? Vertex : Source[Point];
+		}
+		for (int32 Point = 0; Point < NumPoints; ++Point)
+		{
+			Share[Point] /= static_cast<float>(FMath::Max(Copies[Point], 1));
+			Coverage[Point] /= static_cast<float>(FMath::Max(Copies[Point], 1));
+		}
+
+		// Passes: half own, half the neighbours' mean, both fields.
+		TArray<float> NextShare;
+		NextShare.SetNumUninitialized(NumPoints);
+		TArray<float> NextCoverage;
+		NextCoverage.SetNumUninitialized(NumPoints);
+		for (int32 Pass = 0; Pass < FMantleGarmentSkinTransfer::FaceShareSmoothIters; ++Pass)
+		{
+			ParallelFor(NumPoints, [&Neighbours, &Share, &Coverage, &NextShare, &NextCoverage](const int32 Point)
+			{
+				const TArray<int32, TInlineAllocator<8>>& Around = Neighbours[Point];
+				float AroundShare = 0.0f;
+				float AroundCoverage = 0.0f;
+				for (const int32 Other : Around)
+				{
+					AroundShare += Share[Other];
+					AroundCoverage += Coverage[Other];
+				}
+				const float Inv = Around.Num() > 0 ? 0.5f / static_cast<float>(Around.Num()) : 0.0f;
+				const float Own = Around.Num() > 0 ? 0.5f : 1.0f;
+				NextShare[Point] = Own * Share[Point] + Inv * AroundShare;
+				NextCoverage[Point] = Own * Coverage[Point] + Inv * AroundCoverage;
+			});
+			Swap(Share, NextShare);
+			Swap(Coverage, NextCoverage);
+		}
+
+		// Points the face does not track take the face sample of the nearest one that it does, as far as the passes reach.
+		TArray<int32> Frontier;
+		for (int32 Point = 0; Point < NumPoints; ++Point)
+		{
+			if (Source[Point] != INDEX_NONE)
+			{
+				Frontier.Add(Point);
+			}
+		}
+		for (int32 Ring = 0; Ring < FMantleGarmentSkinTransfer::FaceShareSmoothIters && Frontier.Num() > 0; ++Ring)
+		{
+			TArray<int32> Next;
+			for (const int32 Point : Frontier)
+			{
+				for (const int32 Other : Neighbours[Point])
+				{
+					if (Source[Other] == INDEX_NONE)
+					{
+						Source[Other] = Source[Point];
+						Next.Add(Other);
+					}
+				}
+			}
+			Frontier = MoveTemp(Next);
+		}
+
+		for (int32 Vertex = 0; Vertex < N; ++Vertex)
+		{
+			const int32 Point = Weld[Vertex];
+			const bool bFaceTracked = Face.Triangle[Vertex] != INDEX_NONE;
+			// Only the face tracks it: there are no body weights to mix with. Neither does: the nearest tracked vertex's, later.
+			const float VertexShare = Authored.Triangle[Vertex] == INDEX_NONE ? (bFaceTracked ? 1.0f : 0.0f)
+				: FMath::Min(Share[Point] / FMath::Max(Coverage[Point], FMantleGarmentSkinTransfer::FaceShareMinCoverage), 1.0f);
+			if (VertexShare >= MinFaceShare && Source[Point] != INDEX_NONE)
+			{
+				OutShare[Vertex] = VertexShare;
+				OutSource[Vertex] = bFaceTracked ? Vertex : Source[Point];
+			}
+		}
+	}
 }
 
 bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const TConstArrayView<FMantleSkinnedMeshBone> GarmentBones, const FMantleGarmentClearance& Authored,
-	const FMantleSkinnedMesh& Wearer, const FMantleSkinTransferFace& Face, FMantleSkinTransferStats* OutStats, FString* OutError)
+	const FMantleSkinnedMesh& Wearer, const FMantleSkinTransferFace& Face, FMantleSkinTransferStats* OutStats, FString* OutError, TArray<float>* OutFaceShare)
 {
 	using namespace MantleGarmentSkinTransferPrivate;
 
@@ -285,21 +408,29 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 		}
 	};
 
-	// (1) Tracked vertices: blend the skin's weights at the closest point, the body's at the authored one and,
+	// (1) The face's share of each vertex, smoothed over the garment's mesh (FaceShares): from each vertex's
+	// own distances it jumps around a collar, and neighbours with different neck / chest mixes make the rim
+	// wavy once the neck bends.
+	TArray<float> FaceShareOf;
+	TArray<int32> FaceSampleOf;
+	if (bFace)
+	{
+		FaceShares(Garment, Authored, *FaceClearance, FaceShareOf, FaceSampleOf);
+	}
+	else
+	{
+		FaceShareOf.Init(0.0f, N);
+		FaceSampleOf.Init(INDEX_NONE, N);
+	}
+
+	// (2) Tracked vertices: blend the skin's weights at the closest point, the body's at the authored one and,
 	// within the face's reach, the face's by its share (the collar sits over the face's neck, not the
 	// body's). Each vertex writes only its own slots.
 	ParallelFor(N, [&](const int32 Vertex)
 	{
 		const int32 T = Authored.Triangle[Vertex];
-		const int32 FT = FaceClearance ? FaceClearance->Triangle[Vertex] : INDEX_NONE;
-		float FaceShare = 0.0f;
-		if (FT != INDEX_NONE)
-		{
-			const float FaceCm = FMath::Abs(FaceClearance->ClearanceCm[Vertex]);
-			const float Fade = FMath::Clamp((FMantleGarmentClearance::FaceSearchCm - FaceCm) / FaceFadeCm, 0.0f, 1.0f);
-			const float BodyCm = FMath::Max(Authored.ClearanceCm.IsValidIndex(Vertex) ? FMath::Abs(Authored.ClearanceCm[Vertex]) : 0.0f, MinShareDistanceCm);
-			FaceShare = T == INDEX_NONE ? 1.0f : Fade * BodyCm / (BodyCm + FMath::Max(FaceCm, MinShareDistanceCm));
-		}
+		const int32 FaceSample = FaceSampleOf[Vertex];
+		const float FaceShare = FaceSample != INDEX_NONE ? FaceShareOf[Vertex] : 0.0f;
 		if (T == INDEX_NONE && FaceShare <= 0.0f)
 		{
 			return;
@@ -319,7 +450,8 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 		}
 		if (FaceShare > 0.0f)
 		{
-			const FVector3f& W = FaceClearance->Barycentrics[Vertex];
+			const int32 FT = FaceClearance->Triangle[FaceSample];
+			const FVector3f& W = FaceClearance->Barycentrics[FaceSample];
 			const float Bary[3] = { W.X, W.Y, W.Z };
 			for (int32 Corner = 0; Corner < 3; ++Corner)
 			{
@@ -339,7 +471,7 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 		TookFace[Vertex] = FaceShare > 0.0f ? 1 : 0;
 	});
 
-	// (2) Untracked vertices (loose cloth past the clearance search): the new weights of the nearest
+	// (3) Untracked vertices (loose cloth past the clearance search): the new weights of the nearest
 	// tracked vertex (fitted positions), ring by ring in a grid, brute force past the last ring.
 	TArray<int32> Tracked;
 	for (int32 Vertex = 0; Vertex < N; ++Vertex)
@@ -434,7 +566,7 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 		}
 	}
 
-	// (3) The slots cut to the most any vertex uses, each vertex's weights packed first in their order (the
+	// (4) The slots cut to the most any vertex uses, each vertex's weights packed first in their order (the
 	// skin's 12 slots on a garment whose blends use 6 would only cost the GPU skin).
 	int32 Used = 1;
 	for (int32 Vertex = 0; Vertex < N; ++Vertex)
@@ -471,7 +603,7 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 	}
 	const int32 NewSlots = Garment.NumInfluences;
 
-	// (4) Stats: per changed vertex the largest per-bone change and whether the dominant bone moved.
+	// (5) Stats: per changed vertex the largest per-bone change and whether the dominant bone moved.
 	FMantleSkinTransferStats Stats;
 	double SumChange = 0.0;
 	FGarmentInfluenceList Old;
@@ -511,17 +643,27 @@ bool FMantleGarmentSkinTransfer::Transfer(FMantleSkinnedMeshLOD& Garment, const 
 	{
 		*OutStats = Stats;
 	}
+	if (OutFaceShare)
+	{
+		*OutFaceShare = MoveTemp(FaceShareOf);
+	}
 	return true;
 }
 
-void FMantleGarmentSkinTransfer::SmoothFactor(const FMantleGarmentClearance& Authored, const float TightCm, const float LooseCm, TArray<float>& Out)
+void FMantleGarmentSkinTransfer::SmoothFactor(const FMantleGarmentClearance& Authored, const float TightCm, const float LooseCm, TArray<float>& Out, const TArray<float>* FaceShare)
 {
 	const int32 N = Authored.ClearanceCm.Num();
 	Out.SetNumUninitialized(N);
 	const float Span = FMath::Max(LooseCm - TightCm, 1.0e-3f);
+	const bool bFaceShare = FaceShare && FaceShare->Num() == N;
 	for (int32 Vertex = 0; Vertex < N; ++Vertex)
 	{
 		Out[Vertex] = Authored.IsTracked(Vertex) ? FMath::Clamp((Authored.ClearanceCm[Vertex] - TightCm) / Span, 0.0f, 1.0f) : 1.0f;
+		if (bFaceShare)
+		{
+			// The collar: the face's and the body's weights meet under it, smoothed even where it lies on the skin.
+			Out[Vertex] = FMath::Max(Out[Vertex], FaceSmoothFactor * FMath::Clamp((*FaceShare)[Vertex] / FaceSmoothFullShare, 0.0f, 1.0f));
+		}
 	}
 }
 

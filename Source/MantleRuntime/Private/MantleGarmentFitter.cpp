@@ -669,7 +669,9 @@ namespace MantleGarmentFitterPrivate
 		// the authored clearance. The collar and the neck opening lie over the face's neck, which bends with
 		// neck_01 and neck_02 while the body's neck base stays on spine_04: within the face's reach they
 		// take the face's weights too (measured on the restored garment), or the collar stays with the
-		// chest and opens a gap at the back of the neck once the head tips forward.
+		// chest and opens a gap at the back of the neck once the head tips forward. The face's share is smooth
+		// around the collar and the smoothing covers the vertices that took it, even snug ones, or the rim goes
+		// wavy as the neck bends.
 		FMantleGarmentClearance FaceNow;
 		FMantleSkinTransferFace TransferFace;
 		if (WearerFace && WearerFaceBones.Num() > 0 && FMantleGarmentClearance::Compute(Fitted.Positions, *WearerFace, FaceNow, FMantleGarmentClearance::FaceSearchCm))
@@ -679,7 +681,8 @@ namespace MantleGarmentFitterPrivate
 			TransferFace.Bones = WearerFaceBones;
 			TransferFace.Clearance = &FaceNow;
 		}
-		if (!FMantleGarmentSkinTransfer::Transfer(Fitted, Garment.Bones, Authored.Body, WearerBody, TransferFace, &Report.Transfer, OutError))
+		TArray<float> FaceShare;
+		if (!FMantleGarmentSkinTransfer::Transfer(Fitted, Garment.Bones, Authored.Body, WearerBody, TransferFace, &Report.Transfer, OutError, &FaceShare))
 		{
 			return false;
 		}
@@ -690,7 +693,7 @@ namespace MantleGarmentFitterPrivate
 			Report.DominantMatchPct = 100.0 * Matches / Tracked;
 		}
 		TArray<float> Factor;
-		FMantleGarmentSkinTransfer::SmoothFactor(Authored.Body, FMantleGarmentSkinTransfer::DefaultSmoothTightCm, FMantleGarmentSkinTransfer::DefaultSmoothLooseCm, Factor);
+		FMantleGarmentSkinTransfer::SmoothFactor(Authored.Body, FMantleGarmentSkinTransfer::DefaultSmoothTightCm, FMantleGarmentSkinTransfer::DefaultSmoothLooseCm, Factor, &FaceShare);
 		if (!FMantleGarmentSkinTransfer::Smooth(Fitted, FMantleGarmentSkinTransfer::DefaultSmoothIters, &Factor, &Report.Smooth))
 		{
 			return MantleGarmentGeometry::RefuseFit(TEXT("fit"), TEXT("the transferred skin weights could not be smoothed"), OutError);

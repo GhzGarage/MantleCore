@@ -93,6 +93,16 @@ struct MANTLERUNTIME_API FMantleGarmentSkinTransfer
 	static constexpr float MinShareDistanceCm = 0.1f;
 	static constexpr float FaceFadeCm = 2.0f;
 
+	/**
+	 * The face's share is then smoothed over the garment's mesh (FaceShareSmoothIters passes over its edges) as an
+	 * average over the face-tracked points, divided by their smoothed fraction floored at FaceShareMinCoverage:
+	 * neighbouring collar vertices get about the same neck / chest mix (from each vertex's own distances it jumps
+	 * around the ring, and the face's untracked boundary leaves holes), and the share fades out evenly where the
+	 * face stops tracking. Shares under half an 8-bit weight step are 0.
+	 */
+	static constexpr int32 FaceShareSmoothIters = 6;
+	static constexpr float FaceShareMinCoverage = 0.5f;
+
 	/** Smoothing passes, and the authored clearances the smoothing fades between (none at or below Tight, full at or above Loose). */
 	static constexpr int32 DefaultSmoothIters = 3;
 	static constexpr int32 MaxSmoothIters = 50;
@@ -100,14 +110,23 @@ struct MANTLERUNTIME_API FMantleGarmentSkinTransfer
 	static constexpr float DefaultSmoothLooseCm = 3.0f;
 
 	/**
+	 * The smoothing factor's floor where a vertex took the face's weights: FaceSmoothFactor from a face share
+	 * of FaceSmoothFullShare up, scaled down below it. A snug collar is smoothed too (the face and the body
+	 * meet under it), the rest of the tight fabric still keeps the skin's exact weights.
+	 */
+	static constexpr float FaceSmoothFactor = 0.5f;
+	static constexpr float FaceSmoothFullShare = 0.25f;
+
+	/**
 	 * Garment (LOD with GarmentBones as its bone table) takes the wearer's weights at the authored
 	 * correspondence (Authored: the garment's clearance over its source body, whose vertex order Wearer's
 	 * LOD0 shares):
 	 *   - tracked vertex: the (bone, weight) lists of the three wearer vertices of its authored closest
 	 *     triangle blended with its barycentrics; with Face set and the vertex within its reach, blended
-	 *     with the face's three corners at its closest face point by the face's share (FaceFadeCm; only
-	 *     the face's when the body does not track it); the top N kept, renormalised and quantised to sum
-	 *     exactly 255;
+	 *     with the face's three corners at its closest face point by the face's smoothed share (FaceFadeCm,
+	 *     FaceShareSmoothIters; only the face's when the body does not track it; a vertex the face does not
+	 *     track but whose neighbours' share reaches it samples the face at the nearest face-tracked one);
+	 *     the top N kept, renormalised and quantised to sum exactly 255;
 	 *   - untracked vertex: its nearest tracked vertex's new weights (fitted positions); none at all: kept.
 	 * N is the skin's slot count (the body's, or the face's when larger), at most MaxInfluences, and never
 	 * below the garment's own: an unrigged garment (one slot) takes the skin's blend whole. The garment's
@@ -115,17 +134,20 @@ struct MANTLERUNTIME_API FMantleGarmentSkinTransfer
 	 * Wearer bones map to GarmentBones by name (identity when the tables match); face bones by name, or a
 	 * face bone the garment lacks (the face's FACIAL_ neck joints) to its nearest face ancestor the garment
 	 * has (neck_01, neck_02, head); influences with no such bone are dropped and counted. False (Garment
-	 * unchanged), with the reason in OutError, on mismatched inputs.
+	 * unchanged), with the reason in OutError, on mismatched inputs. OutFaceShare, when given, gets each
+	 * vertex's face share (0..1; all 0 without Face), for SmoothFactor.
 	 */
 	static bool Transfer(FMantleSkinnedMeshLOD& Garment, TConstArrayView<FMantleSkinnedMeshBone> GarmentBones, const FMantleGarmentClearance& Authored,
 		const FMantleSkinnedMesh& Wearer, const FMantleSkinTransferFace& Face = FMantleSkinTransferFace(), FMantleSkinTransferStats* OutStats = nullptr,
-		FString* OutError = nullptr);
+		FString* OutError = nullptr, TArray<float>* OutFaceShare = nullptr);
 
 	/**
 	 * The per-vertex smoothing factor from the authored clearance: 0 at or below TightCm (fabric lying
 	 * on the skin keeps the skin's exact weights), 1 at or above LooseCm, linear between; untracked vertices 1.
+	 * With FaceShare (Transfer's, one per vertex), floored at FaceSmoothFactor where the vertex took the
+	 * face's weights (FaceSmoothFullShare).
 	 */
-	static void SmoothFactor(const FMantleGarmentClearance& Authored, float TightCm, float LooseCm, TArray<float>& Out);
+	static void SmoothFactor(const FMantleGarmentClearance& Authored, float TightCm, float LooseCm, TArray<float>& Out, const TArray<float>* FaceShare = nullptr);
 
 	/**
 	 * Laplacian smoothing of the skin weights over the welded points' edge adjacency (split copies end
