@@ -27,7 +27,8 @@ struct FMantleAgentTools
 	 * BuildCosmeticPackage's, then check_failed with the check's issues when it finds errors), or
 	 * the upload it started, whose result completes with DescribeCosmeticUpload when that ends.
 	 */
-	static UToolCallAsyncResultString* UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections, const FString& ItemId);
+	static UToolCallAsyncResultString* UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections, const FString& ItemId,
+		const FString& FitSex);
 
 	/** FMantlePlaceValidator::Validate, as CheckPlace describes it. */
 	static FString CheckPlace(UWorld* World);
@@ -63,17 +64,17 @@ struct FMantleAgentTools
 	/**
 	 * The Cosmetics panel's package for a skeletal mesh (FMantleCosmeticExport::Build on
 	 * FMantleEditorActions::MakeCosmeticDraft). False with OutRefusal when there is none to build:
-	 * no contract, no such asset, not a skeletal mesh, or a slot no skeletal-mesh item takes.
-	 * OutObjectPath is the mesh's full object path.
+	 * no contract, no such asset, not a skeletal mesh, a slot no skeletal-mesh item takes, or a FitSex
+	 * other than "", auto, female or male. OutObjectPath is the mesh's full object path.
 	 */
 	static bool BuildCosmeticPackage(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections,
-		const FString& ItemId, FMantleCosmeticPackage& OutPackage, FString& OutObjectPath, FString& OutRefusal);
+		const FString& ItemId, const FString& FitSex, FMantleCosmeticPackage& OutPackage, FString& OutObjectPath, FString& OutRefusal);
 
 	/** MeasureHead, as the toolset describes it. */
 	static FString MeasureHead(const FString& BodyPath, const FString& FacePath);
 
 	/** CheckCosmetic: BuildCosmeticPackage, as CheckCosmetic describes it. */
-	static FString CheckCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections);
+	static FString CheckCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name, const FString& Sections, const FString& FitSex);
 
 	/** Why UploadCosmetic would not start, as a refusal object; empty when it may: signed in, configured, none of its own running. */
 	static FString CheckUploadCosmeticAllowed();

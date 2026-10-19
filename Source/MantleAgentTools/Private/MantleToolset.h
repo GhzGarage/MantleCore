@@ -144,15 +144,19 @@ public:
 	 * Always pass it.
 	 * A MetaHuman Outfit uploads as clothing with garment variants made automatically: it is resized onto Epic's standard
 	 * body types (by default the medium-height underweight, normal and overweight bodies of one sex, named like
-	 * "f_med_nrw"), made in memory, so nothing needs converting and no Epic sign-in is needed. The sex is chosen from the
-	 * Outfit's own sizes; a note in "notes" says which and why.
+	 * "f_med_nrw"), made in memory, so nothing needs converting and no Epic sign-in is needed. The sex follows FitSex;
+	 * with "" it is chosen from the Outfit's own sizes. A note in "notes" says which and why.
+	 * @param FitSex For a MetaHuman Outfit: the style of body the clothing was made on, as the panel's "Made for":
+	 * "female" (women's bodies, f_...), "male" (men's bodies, m_...), or "" / "auto" to let Mantle choose from the
+	 * Outfit's sizes. Ask the creator when you do not know; ignored for anything but clothing from an Outfit.
 	 * @return JSON: {"ok", "asset", "class", "slot", "name", "canUpload" (no errors), "issues":
 	 * [{"severity": "error"|"warning"|"info", "message", "hint"}], "notes": [lines], "files":
 	 * [{"key", "label", "bytes"}]}, or a refusal (not_found, not_skeletal_mesh, unknown_slot,
-	 * outfit_not_clothing, accessory_needs_outfit, unknown_section).
+	 * outfit_not_clothing, accessory_needs_outfit, unknown_section, unknown_fit_sex).
 	 */
 	UFUNCTION(meta = (AICallable))
-	static FString CheckCosmetic(const FString& AssetPath, const FString& Slot = TEXT(""), const FString& Name = TEXT(""), const FString& Sections = TEXT(""));
+	static FString CheckCosmetic(const FString& AssetPath, const FString& Slot = TEXT(""), const FString& Name = TEXT(""), const FString& Sections = TEXT(""),
+		const FString& FitSex = TEXT(""));
 
 	/**
 	 * Upload a cosmetic to Mantle as a new item, exactly as the Cosmetics panel's Upload to Mantle
@@ -169,12 +173,14 @@ public:
 	 * @param Sections The sections to upload, as for CheckCosmetic. Always pass it.
 	 * @param ItemId "" creates a new item. An id (itm_...) publishes a new version into that existing item instead,
 	 * which the signed-in creator must own; the slot must match the item's, and the new version is screened again.
+	 * @param FitSex For a MetaHuman Outfit, the body it was made on, as for CheckCosmetic: "female", "male", or "" / "auto".
 	 * @return JSON: {"ok", "itemId", "itemStatus", "moderationState", "mayClipInMotion",
 	 * "message", "files": [{"label", "state", "assetId", "alreadyOnMantle", "message"}]}, or a
 	 * refusal (with "issues" when the check found errors).
 	 */
 	UFUNCTION(meta = (AICallable))
-	static UToolCallAsyncResultString* UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name = TEXT(""), const FString& Sections = TEXT(""), const FString& ItemId = TEXT(""));
+	static UToolCallAsyncResultString* UploadCosmetic(const FString& AssetPath, const FString& Slot, const FString& Name = TEXT(""), const FString& Sections = TEXT(""), const FString& ItemId = TEXT(""),
+		const FString& FitSex = TEXT(""));
 
 	/**
 	 * Convert a character so it can be uploaded, as the Cosmetics panel's Convert does: lists what

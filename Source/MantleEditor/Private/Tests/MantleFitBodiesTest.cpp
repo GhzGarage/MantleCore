@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAvatarContract.h"
 #include "MantleBodyCorrespondence.h"
+#include "MantleEditorActions.h"
 #include "MantleFaceLayout.h"
 #include "MantleFitBodies.h"
 
@@ -76,6 +77,15 @@ bool FMantleFitBodiesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("no sizes is female"), FMantleFitBodies::ChooseSex({}, {}, 0.25f, Why) == EMantleFitSex::Female);
 	TestTrue(TEXT("one side unreadable is female"), FMantleFitBodies::ChooseSex({ -1.0f }, { 1.0f }, 0.25f, Why) == EMantleFitSex::Female);
 	TestFalse(TEXT("the choice comes with a reason"), Why.IsEmpty());
+
+	// The agent tools' FitSex: "", auto, female or male, in any case; anything else is refused.
+	EMantleFitSex Sex = EMantleFitSex::Male;
+	TestTrue(TEXT("\"\" is accepted"), FMantleEditorActions::ParseFitSex(TEXT(""), Sex) && Sex == EMantleFitSex::Auto);
+	TestTrue(TEXT("auto is accepted"), FMantleEditorActions::ParseFitSex(TEXT(" Auto "), Sex) && Sex == EMantleFitSex::Auto);
+	TestTrue(TEXT("female is accepted"), FMantleEditorActions::ParseFitSex(TEXT("female"), Sex) && Sex == EMantleFitSex::Female);
+	TestTrue(TEXT("male is accepted"), FMantleEditorActions::ParseFitSex(TEXT("MALE"), Sex) && Sex == EMantleFitSex::Male);
+	TestFalse(TEXT("f is refused"), FMantleEditorActions::ParseFitSex(TEXT("f"), Sex));
+	TestFalse(TEXT("women is refused"), FMantleEditorActions::ParseFitSex(TEXT("women"), Sex));
 	return true;
 }
 

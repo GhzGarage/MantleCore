@@ -10,6 +10,7 @@ class FMantlePlacePublishSession;
 class UObject;
 class UWorld;
 enum class EMantleCosmeticClass : uint8;
+enum class EMantleFitSex : uint8;
 struct FMantleCosmeticDraft;
 
 /**
@@ -51,10 +52,14 @@ struct MANTLEEDITOR_API FMantleEditorActions
 	/**
 	 * The draft Tools > Mantle > Cosmetics... holds once the creator has picked Class, Slot, Source
 	 * and Name, every other setting at the panel's default: a fresh draft with the Apply* defaults
-	 * below applied in the panel's order. An empty Name takes the asset's, as the panel does.
+	 * below applied in the panel's order. An empty Name takes the asset's, as the panel does. FitSex is the panel's
+	 * "Made for" choice (Auto by default), set before the fit bodies are made.
 	 */
 	static FMantleCosmeticDraft MakeCosmeticDraft(EMantleCosmeticClass Class, UObject* Source, const FString& Slot,
-		const FString& Name, const FMantleAvatarContract& Contract);
+		const FString& Name, const FMantleAvatarContract& Contract, EMantleFitSex FitSex);
+
+	/** The FitSex an agent tool names: "" or "auto" is Auto, "female" or "male" (any case, trimmed) that sex; false for anything else. */
+	static bool ParseFitSex(const FString& Text, EMantleFitSex& OutSex);
 
 	/**
 	 * A newly picked source (the panel's SetSource): the body a garment or hair was authored on,
@@ -86,6 +91,12 @@ struct MANTLEEDITOR_API FMantleEditorActions
 	 * cannot be made Draft.FitBodiesStatus says why and the item uploads without variants. Contract null reads the shipped one.
 	 */
 	static void ApplyCosmeticFitTargetDefaults(FMantleCosmeticDraft& Draft, const FMantleAvatarContract* Contract = nullptr);
+
+	/**
+	 * The panel's "Made for" choice changed: Draft.FitSex becomes Sex and the standard fit bodies are made again for it
+	 * (ApplyCosmeticFitTargetDefaults); fit sources the creator added are kept after them.
+	 */
+	static void SetCosmeticFitSex(FMantleCosmeticDraft& Draft, EMantleFitSex Sex, const FMantleAvatarContract* Contract = nullptr);
 
 	/**
 	 * #594, avatars: the jaw picker. On a body whose skeleton has the jaw slot (the UE5, UE4 or UEFN Mannequin, as
