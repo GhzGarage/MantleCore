@@ -67,6 +67,12 @@ struct MANTLEEDITOR_API FMantleGarmentOutfitResult
  */
 struct MANTLEEDITOR_API FMantleGarmentOutfit
 {
+	/**
+	 * Package metadata key on every Outfit Make writes (the garment it was made from). FMantleParametricOutfit::Prepare
+	 * pushes such an Outfit's resized sizes out of their body's skin too, as Make pushes the authored size.
+	 */
+	static const FName MadeFromGarmentKey;
+
 	/** A garment vertex further than this from every MetaHuman skin vertex is counted as far (FarVertices). */
 	static constexpr double NearCm = 10.0;
 

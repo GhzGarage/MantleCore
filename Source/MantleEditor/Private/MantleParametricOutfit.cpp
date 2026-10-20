@@ -6,6 +6,12 @@
 #include "MantleBodyCorrespondence.h"
 #include "MantleBodyTopologyData.h"
 #include "MantleCosmeticExport.h"
+#include "MantleAvatarRefitFixer.h"
+#include "MantleGarmentOutfit.h"
+#include "MantleNailSeating.h"
+#include "MeshDescription.h"
+#include "Rendering/SkeletalMeshLODModel.h"
+#include "Rendering/SkeletalMeshModel.h"
 #include "MantleHeadFit.h"
 #include "MantleGlbWriter.h"
 #include "StaticMeshAttributes.h"
@@ -694,6 +700,36 @@ namespace MantleParametricOutfitPrivate
 	 * An Outfit's render mesh is often far over a slot's budget (a Fab outfit was 25,846 triangles for a 6,000 slot):
 	 * reduce Garment's LOD 0 as the converter's Triangles fix does, aiming the kept sections at 95% of Limit.
 	 */
+	/** LOD 0 of a resized garment pushed out of Body's skin (its reference LOD, else LOD 0), as the refit pushes a garment out. */
+	bool PushResizedOutOfBody(USkeletalMesh& Garment, const USkeletalMesh& Body, const FMantleAvatarContract& Contract, FString& OutNote, FString& OutError)
+	{
+		const int32 BodyLOD = FMath::Max(0, FMantleCosmeticExport::FindReferenceLOD(&Body, Contract));
+		FMantleSkinnedMeshLOD Surface;
+		if (!FMantleNailSeating::ReadBodySurface(Body, BodyLOD, Surface, OutError)) { return false; }
+		Finish(&Garment);
+		FMeshDescription* Description = Garment.HasMeshDescription(0) ? Garment.GetMeshDescription(0) : nullptr;
+		if (!Description && Garment.GetImportedModel() && Garment.GetImportedModel()->LODModels.IsValidIndex(0))
+		{
+			FMeshDescription Converted;
+			Garment.GetImportedModel()->LODModels[0].GetMeshDescription(&Garment, 0, Converted);
+			Description = Garment.CreateMeshDescription(0, MoveTemp(Converted));
+		}
+		if (!Description) { OutError = TEXT("the resized garment has no geometry to push out of the body"); return false; }
+		FMantleRefitPushOut Pushed;
+		if (!FMantleAvatarRefit::PushOutOfBody(*Description, Surface, Pushed, OutError)) { return false; }
+		OutNote = Pushed.ToString();
+		if (Pushed.Moved > 0)
+		{
+			Garment.PreEditChange(nullptr);
+			USkeletalMesh::FCommitMeshDescriptionParams Params;
+			Params.bForceUpdate = true;
+			Garment.CommitMeshDescription(0, Params);
+			Garment.PostEditChange();
+			Finish(&Garment);
+		}
+		return true;
+	}
+
 	bool ReduceToLimit(USkeletalMesh* Garment, const TArray<int32>* Keep, const FString& Slot, const int32 Limit, int32& OutKept, int32& OutAfter, FString& OutError)
 	{
 		OutKept = FMantleCosmeticExport::CountTriangles(Garment, 0, Keep);
@@ -859,6 +895,15 @@ bool FMantleParametricOutfit::Prepare(const FMantleCosmeticDraft& Draft, const F
 		int32 Kept = 0, After = 0;
 		if (!ReduceToLimit(Resized, OutDraft.KeepSlots.GetPtrOrNull(), Draft.Slot, Contract.SkinnedMaxTriangles(Draft.Slot), Kept, After, OutError)) { return false; }
 		if (OutNote && After != Kept) { *OutNote = FString::Printf(TEXT("Reduced from %d to %d triangles to fit the %d limit."), Kept, After, Contract.SkinnedMaxTriangles(Draft.Slot)); }
+		// An Outfit made from a third-party garment (FMantleGarmentOutfit) was pushed out of its authored body's skin; the resize
+		// can sink it into a bigger body again, so each size is pushed out of its own body as well.
+		const FString* MadeFrom = Asset->GetPackage()->GetMetaData().FindValue(Asset, FMantleGarmentOutfit::MadeFromGarmentKey);
+		if (MadeFrom && Draft.AuthoringBody.IsValid())
+		{
+			FString PushNote;
+			if (!PushResizedOutOfBody(*Resized, *Draft.AuthoringBody.Get(), Contract, PushNote, OutError)) { return false; }
+			UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_OUTFIT_PUSH_OUT size=%s body=%s %s"), *Selected, *Draft.AuthoringBody->GetName(), *PushNote);
+		}
 		NumberRepeatedSlots(*Resized);
 		OutDraft.Source = Resized;
 		OutDraft.OutfitSourceSize = Selected;

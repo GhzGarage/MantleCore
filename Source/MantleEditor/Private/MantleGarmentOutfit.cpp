@@ -379,6 +379,8 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 	return Copy;
 }
 
+const FName FMantleGarmentOutfit::MadeFromGarmentKey(TEXT("MantleMadeFromGarment"));
+
 const TArray<TPair<FName, FName>>& FMantleGarmentOutfit::Limbs()
 {
 	static const TArray<TPair<FName, FName>> Pairs = {
@@ -983,6 +985,7 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 			continue;
 		}
 		FAssetRegistryModule::AssetCreated(Outfit);
+		Package->GetMetaData().SetValue(Outfit, MadeFromGarmentKey, *Garment->GetPathName());
 		if (!GarmentSave(Outfit))
 		{
 			Piece.Error = FString::Printf(TEXT("the Outfit was made but %s could not be saved"), *PackageName);
