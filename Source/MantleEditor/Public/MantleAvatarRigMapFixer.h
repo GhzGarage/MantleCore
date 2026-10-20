@@ -233,16 +233,34 @@ struct MANTLEEDITOR_API FMantleAvatarRigMap
 	 * Converts Bones by Mapping onto its target skeleton: the scale and axis correction (Bounds, the mesh's reference
 	 * bounds in its own space, sets the scale; invalid takes the bones' extent), the kept, dropped and inserted bones,
 	 * hierarchy checked (an optional mapping that disagrees with the skeleton's hierarchy is unmapped, a required one
-	 * refuses). False with the creator's message.
+	 * refuses). False with the creator's message. bCompleteChains also inserts every skeleton bone above a mapped one that
+	 * the rig lacks (neck_02, the metacarpals), not only the required ones: the upload checks a garment's bones against
+	 * their parents in the skeleton (FMantleCosmeticChecks::MatchSkeleton).
 	 */
 	static bool MakePlan(TConstArrayView<FMantleRigBone> Bones, const FMantleRigMapping& Mapping, const FMantleAvatarContract& Contract,
-		const FBox& Bounds, FMantleRigPlan& Out, FString& OutError);
+		const FBox& Bounds, FMantleRigPlan& Out, FString& OutError, bool bCompleteChains = false);
 
 	/**
 	 * The upload's identification on the plan's bones (FMantleCosmeticChecks::FitSkinToClass, avatar bodies, root
-	 * required, a bone weighted when a rig bone's weights go to it): true when it names the plan's target.
+	 * required, a bone weighted when a rig bone's weights go to it): true when it names the plan's target. bGarment checks
+	 * against the skinned garment class (the MetaHuman body skeleton) instead.
 	 */
-	static bool VerifyPlan(TConstArrayView<FMantleRigBone> Bones, const FMantleRigPlan& Plan, const FMantleAvatarContract& Contract, FString& OutError);
+	static bool VerifyPlan(TConstArrayView<FMantleRigBone> Bones, const FMantleRigPlan& Plan, const FMantleAvatarContract& Contract, FString& OutError,
+		bool bGarment = false);
+
+	/**
+	 * A clothing piece on the UE4 Mannequin hierarchy (every required bone of ue4mannequin by name, no spine_04 or
+	 * spine_05: the clavicles and neck hang from spine_03), which the upload never takes as clothing. The RigMap fixer
+	 * maps it onto the MetaHuman body skeleton (UE4MannequinOntoMetaHuman) so the Refit fixer can carry it onto the body.
+	 */
+	static bool IsUE4MannequinGarment(TConstArrayView<FMantleRigBone> Bones, const FMantleAvatarContract& Contract);
+
+	/**
+	 * Bones' UE4 Mannequin skeleton onto the MetaHuman body skeleton: each bone onto its namesake, but the spine by
+	 * height (spine_01 onto spine_02, spine_02 onto spine_04, spine_03, which carries the clavicles and neck, onto
+	 * spine_05). MakePlan with bCompleteChains inserts spine_01, spine_03, neck_02 and the metacarpals with no weights.
+	 */
+	static FMantleRigMapping UE4MannequinOntoMetaHuman(TConstArrayView<FMantleRigBone> Bones, const FMantleAvatarContract& Contract);
 
 	/**
 	 * Writes the converted mesh and a new skeleton for it under OutputFolder (never touching Source): every LOD with

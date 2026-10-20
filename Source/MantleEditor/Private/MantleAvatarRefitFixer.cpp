@@ -3,6 +3,7 @@
 #include "MantleAvatarContract.h"
 #include "MantleAvatarConverter.h"
 #include "MantleAvatarReposeFixer.h"
+#include "MantleAvatarRigMapFixer.h"
 #include "MantleBodyTopologyData.h"
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticValidation.h"
@@ -245,6 +246,32 @@ bool FMantleAvatarRefit::CheckBones(TConstArrayView<FName> GarmentBones, TConstA
 	return true;
 }
 
+TArray<FMantleFoldedBone> FMantleAvatarRefit::FoldBones(TConstArrayView<FName> Names, TConstArrayView<int32> Parents, TConstArrayView<FName> Weighted,
+	TConstArrayView<FName> BodyBones)
+{
+	TArray<FMantleFoldedBone> Out;
+	for (const FName& Bone : Weighted)
+	{
+		const int32 Index = Names.Find(Bone);
+		if (Index == INDEX_NONE || BodyBones.Contains(Bone))
+		{
+			continue;
+		}
+		// The nearest ancestor the body has; the step bound only guards a malformed table.
+		int32 Ancestor = Parents.IsValidIndex(Index) ? Parents[Index] : INDEX_NONE;
+		for (int32 Steps = 0; Ancestor != INDEX_NONE && Names.IsValidIndex(Ancestor) && Steps <= Names.Num(); ++Steps)
+		{
+			if (BodyBones.Contains(Names[Ancestor]))
+			{
+				Out.Add(FMantleFoldedBone{ Bone, Names[Ancestor] });
+				break;
+			}
+			Ancestor = Parents.IsValidIndex(Ancestor) ? Parents[Ancestor] : INDEX_NONE;
+		}
+	}
+	return Out;
+}
+
 TArray<FName> FMantleAvatarRefit::WeightedBones(const USkeletalMesh& Mesh)
 {
 	const FReferenceSkeleton& Reference = Mesh.GetRefSkeleton();
@@ -434,7 +461,19 @@ bool FMantleAvatarRefit::Plan(const USkeletalMesh& Garment, const USkeletalMesh*
 	{
 		RefitReadSkeleton(*SourceBody, SourceSkeleton);
 	}
-	if (!CheckBones(GarmentSkeleton.Names, WeightedBones(Garment), TargetSkeleton.Names, OutError, bOverlay))
+	// A weighted bone the body lacks (a breast or cloth helper) with an ancestor the body has is folded into it, as the
+	// upload folds it: it keeps its local transform under that ancestor below, so its vertices move as the ancestor's.
+	TArray<FName> Weighted = WeightedBones(Garment);
+	if (!bOverlay)
+	{
+		Out.Folded = FoldBones(GarmentSkeleton.Names, GarmentSkeleton.Parents, Weighted, TargetSkeleton.Names);
+		for (const FMantleFoldedBone& Folded : Out.Folded)
+		{
+			Weighted.Remove(Folded.Bone);
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_AVATAR_REFIT fold %s: %s -> %s"), *Garment.GetName(), *Folded.Bone.ToString(), *Folded.Into.ToString());
+		}
+	}
+	if (!CheckBones(GarmentSkeleton.Names, Weighted, TargetSkeleton.Names, OutError, bOverlay))
 	{
 		return false;
 	}
@@ -991,7 +1030,13 @@ void FMantleAvatarRefitFixer::AnalyzePart(const FMantleConvertContext& Context, 
 	FMantleRefitPlan Plan;
 	FString Error;
 	const FString SourceName = Bodies.Source ? Bodies.Source->GetName() : FString(TEXT("its own reference pose"));
-	if (!FMantleAvatarRefit::Plan(*Mesh, Bodies.Source, *Bodies.Target, /*bAllowDense*/ true, Plan, Error,
+	if (FMantleAvatarRigMap::IsUE4MannequinGarment(FMantleAvatarRigMap::ReadBones(Mesh), Contract))
+	{
+		// The RigMap fixer, before this one, maps it onto the MetaHuman body skeleton; it is planned again on that mesh.
+		Fix.Action = FString::Printf(TEXT("refits %s onto %s once its UE4 Mannequin rig is mapped onto the MetaHuman body skeleton: re-binds to its pose and warps the shape"),
+			*What, *Bodies.Target->GetName());
+	}
+	else if (!FMantleAvatarRefit::Plan(*Mesh, Bodies.Source, *Bodies.Target, /*bAllowDense*/ true, Plan, Error,
 		FMantleAvatarRefit::IsOverlaySlot(Part.Slot)))
 	{
 		Fix.Action = FString::Printf(TEXT("Can't refit it onto %s: %s."), *Bodies.Target->GetName(), *Error);
@@ -1161,6 +1206,16 @@ bool FMantleAvatarRefitFixer::Apply(const FMantleConvertFix& Fix, FMantleConvert
 	Context.Notes.Add(FString::Printf(TEXT("%s: refitted from %s onto %s as %s (%s correspondence, %d landmarks); the largest vertex move is %.1f cm."),
 		*Part.Name, Bodies.Source ? *Bodies.Source->GetName() : TEXT("its own reference pose"), *Bodies.Target->GetName(), *Refit->GetName(),
 		LexToString(Plan.Path), Plan.NumLandmarks, Moved));
+	if (Plan.Folded.Num() > 0)
+	{
+		TArray<FString> Folds;
+		for (const FMantleFoldedBone& Folded : Plan.Folded)
+		{
+			Folds.Add(FString::Printf(TEXT("%s -> %s"), *Folded.Bone.ToString(), *Folded.Into.ToString()));
+		}
+		Context.Notes.Add(FString::Printf(TEXT("%s: %d bone%s the body lacks moved with %s parent for the refit (%s); the upload merges them into it."),
+			*Part.Name, Folds.Num(), Folds.Num() == 1 ? TEXT("") : TEXT("s"), Folds.Num() == 1 ? TEXT("its") : TEXT("their"), *FString::Join(Folds, TEXT(", "))));
+	}
 	if (bSeat)
 	{
 		Context.Notes.Add(FString::Printf(TEXT("%s: %d of %d nails seated on %s, each %.2f cm above the skin (rigid moves, the largest %.2f cm)."),
