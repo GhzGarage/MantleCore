@@ -51,6 +51,8 @@ namespace MantleClientFeatures
 	inline const TCHAR* const Storage = TEXT("storage");
 	inline const TCHAR* const UIDocuments = TEXT("uiDocuments");
 	inline const TCHAR* const EnvironmentDefaults = TEXT("environmentDefaults");
+	/** settings.environment.skyLight and settings.environment.sun (#722): the place's sky light scale and a sun that never reaches it. */
+	inline const TCHAR* const EnvironmentLighting = TEXT("environmentLighting");
 	inline const TCHAR* const AvatarHeight = TEXT("avatarHeight");
 	inline const TCHAR* const SoundEmitterAutoplay = TEXT("soundEmitterAutoplay");
 	inline const TCHAR* const StaticMeshPhysics = TEXT("staticMeshPhysics");
@@ -71,7 +73,7 @@ namespace MantleClientFeatures
 		return {
 			InstancedMesh, CrowdSpawner, CrowdPointsOfInterest, SkeletalMesh, RectLight, Decal, LightShape, Terrain, TerrainGrass,
 			Vehicle, VehicleLinkage, VehicleParts, VehicleCarInteraction, VehicleContactPoints, VehicleHiddenSeat, VehicleFliers, VehicleHover, VehicleSeatKind, VehicleWeaponArc, Effect, EffectSprites, Constraint, Scatter, ReflectionProbes, Storage,
-			UIDocuments, EnvironmentDefaults, AvatarHeight, SoundEmitterAutoplay, StaticMeshPhysics, PhysicsMaterial, Surface, CarPaint,
+			UIDocuments, EnvironmentDefaults, EnvironmentLighting, AvatarHeight, SoundEmitterAutoplay, StaticMeshPhysics, PhysicsMaterial, Surface, CarPaint,
 			MaterialFidelity, MaterialAdditive, WeaponDocument
 		};
 	}

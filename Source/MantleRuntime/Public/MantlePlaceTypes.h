@@ -353,12 +353,23 @@ struct FMantleEnvironmentSettings
 	TOptional<FMantleExposureSettings> Exposure;
 	/** fog (#628): the height fog's look, applied to the fog Mantle spawns before the weather records its baselines. */
 	TOptional<FMantleFogSettings> Fog;
+	/**
+	 * skyLight.intensity (#722): a scale, 0 to 1, on Mantle's own sky light, which captures the open sky. An indoor level
+	 * lowers it so its walls are not lit by a sky the level does not show. Unset: 1, Mantle's own.
+	 */
+	TOptional<double> SkyLightIntensity;
+	/**
+	 * sun.direct (#722): false when the level's sun never reaches the places a player stands (a sealed room with its sun
+	 * baked), so the client does not light the place with it. Only false is written; true is Mantle's own.
+	 */
+	bool bNoDirectSun = false;
 
 	/** True when the file set none of the keys (an absent or empty block). */
 	bool IsEmpty() const
 	{
 		return !ClockTime.IsSet() && !TimeScale.IsSet() && !Weather.IsSet() && !ColorTint.IsSet() && !Saturation.IsSet()
-			&& !Bloom.IsSet() && !ColorGrading.IsSet() && !ColorGradingIntensity.IsSet() && !Exposure.IsSet() && !Fog.IsSet();
+			&& !Bloom.IsSet() && !ColorGrading.IsSet() && !ColorGradingIntensity.IsSet() && !Exposure.IsSet() && !Fog.IsSet()
+			&& !SkyLightIntensity.IsSet() && !bNoDirectSun;
 	}
 };
 
