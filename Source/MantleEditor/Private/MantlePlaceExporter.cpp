@@ -39,6 +39,7 @@
 #include "MantleWeaponSpawnPoint.h"
 #include "MantleScriptPoint.h"
 #include "MantleScriptPackages.h"
+#include "MantleSkyMesh.h"
 #include "Graph/MantleGraphCompiler.h"
 #include "Graph/MantleGraphTypes.h"
 #include "Graph/MantleScriptEdGraph.h"
@@ -1594,7 +1595,9 @@ bool FMantlePlaceExporter::IsProvidedByMantle(const AActor* Actor)
 	return Actor->IsA(ASkyAtmosphere::StaticClass())
 		|| Actor->IsA(ASkyLight::StaticClass())
 		|| Actor->IsA(AVolumetricCloud::StaticClass())
-		|| Actor->IsA(AExponentialHeightFog::StaticClass());
+		|| Actor->IsA(AExponentialHeightFog::StaticClass())
+		// #63: a level's own sky dome, a Static Mesh Actor placed on its own (a Blueprint's dome is left out as a part, in CollectPrefabParts).
+		|| FMantleSkyMesh::IsSkyMeshActor(Actor);
 }
 
 // ---- Blueprint prefabs (#468) ---------------------------------------------------------------------
@@ -2852,6 +2855,21 @@ void FMantlePlaceExporter::CollectPrefabParts(
 						*Fx->GetClass()->GetName(), *Fx->GetName()),
 					TEXT("Fine if players won't miss it. Otherwise use a Mantle Effect actor."),
 					/*bBlocksPublish*/ false, MantleCoverageCategory::Particles });
+			}
+			continue;
+		}
+
+		// #63: a sky dome mesh of a sky Blueprint (BP_Sky_Sphere, a Fab map's own) is left out: Mantle supplies its own sky.
+		if (const UStaticMeshComponent* SkyMesh = Scene && MantlePlaceExporterPrefab::PartType(Scene, Type) && Type == EMantleEntityType::StaticMesh
+				? Cast<UStaticMeshComponent>(Scene) : nullptr;
+			SkyMesh && FMantleSkyMesh::IsSkyMesh(SkyMesh))
+		{
+			if (OutUnsupported)
+			{
+				OutUnsupported->Add(FMantleUnpublishedPart{
+					FMantleSkyMesh::ComponentDetail(SkyMesh->GetName()),
+					TEXT("Nothing to do: Mantle's own sky shows in its place. The rest of the actor publishes."),
+					/*bBlocksPublish*/ false, MantleCoverageCategory::Sky });
 			}
 			continue;
 		}

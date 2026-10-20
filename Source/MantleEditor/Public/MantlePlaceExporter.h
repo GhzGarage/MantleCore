@@ -352,7 +352,8 @@ public:
 
 	/**
 	 * True for the four sky actors (SkyAtmosphere, SkyLight, VolumetricCloud,
-	 * ExponentialHeightFog) FMantleEnvironment spawns at runtime for every place. The exporter
+	 * ExponentialHeightFog) FMantleEnvironment spawns at runtime for every place, and for a
+	 * Static Mesh Actor that is a level's own sky dome (FMantleSkyMesh, #63). The exporter
 	 * skips them — Mantle supplies its own, so a creator's settings on these specific actors
 	 * are never published — and the validator reports each one as a warning rather than
 	 * silently absorbing it as engine infrastructure, so a level built from UE's Default
