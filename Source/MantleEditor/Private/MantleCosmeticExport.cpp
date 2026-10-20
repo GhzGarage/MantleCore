@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleCosmeticExport.h"
+#include "MantleAvatarRefitFixer.h"
 #include "MantleAnimClipWriter.h"
 #include "MantleAvatarContract.h"
 #include "MantleAvatarConverter.h"
@@ -5623,7 +5624,10 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			// share one shape per body and face), and a garment uploads it as the face it was authored with, so
 			// players' clients fit the collar around each wearer's neck. Optional: without one the collar is
 			// fitted from the body alone, as before, so a face that cannot be read is a warning, never an error.
-			USkeletalMesh* AuthoringFace = FindAuthoringFace(Draft, Body);
+			// Nails (#740) sit on the fingertips and have no collar: they upload without a face. A client takes a non-body
+			// wear piece that names a face for head-bound hair, and fitting nails to the head fails, so they never show.
+			const bool bFaceless = FMantleAvatarRefit::IsOverlaySlot(Draft.Slot);
+			USkeletalMesh* AuthoringFace = bFaceless ? nullptr : FindAuthoringFace(Draft, Body);
 			FMeshSource FaceMesh;
 			FMantleSkinnedMeshLOD FaceSurface;
 			bool bFace = false;
@@ -5674,6 +5678,10 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 						FString::Printf(TEXT("the face %s cannot go with it (%s), so collars are fitted from the body alone."), *AuthoringFace->GetName(), *FaceError),
 						TEXT("It can still be published; collars may sit off the neck of much thinner or heavier wearers.")));
 				}
+			}
+			else if (bFaceless)
+			{
+				Package.Notes.Add(TEXT("Nails upload without a face: they are fitted from the body alone."));
 			}
 			else if (!bHair)
 			{
