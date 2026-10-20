@@ -374,6 +374,29 @@ public:
 	static bool DescribeUnpublishedContent(const AActor* Actor, FString& OutWhat, FString& OutRemedy);
 
 	/**
+	 * An actor Export leaves out, and why (#818). Carries what a creator needs: what is wrong in plain words (following the
+	 * actor's label), the fix, the coverage category it is listed under, and whether it is a loss (a warning, Dropped) or only
+	 * a note (a Level Instance whose actors publish on their own, Info).
+	 */
+	struct FSkippedActor
+	{
+		FString What;
+		FString Remedy;
+		FString Category;
+		bool bLoss = true;
+	};
+
+	/**
+	 * Whether Export leaves Actor out instead of refusing it (#818, creator friendliness first): editor-only and cinematic
+	 * actors (camera rigs, level sequences, notes, target points, runtime virtual texture volumes), a Static Mesh Actor with no
+	 * mesh, a decal with no BaseColor texture, an Ambient Sound whose Sound Cue plays no sound wave, a particle actor whose
+	 * particles Mantle cannot carry, and a Level Instance (the actors of a loaded one publish on their own, as ordinary items).
+	 * IsEngineInfrastructure is true for all of them, DescribeUnpublishedContent returns the ones that are a loss, and the
+	 * coverage survey lists each (Dropped for a loss).
+	 */
+	static bool DescribeSkippedActor(const AActor* Actor, FSkippedActor& Out);
+
+	/**
 	 * The parts of Actor that can't publish as they are, each with its fix (#486). Unlike
 	 * DescribeUnpublishedContent, these are errors: the creator sees the content in the editor, it
 	 * would be missing from the place, and each has a fix in the editor. "Check this place" shows

@@ -79,6 +79,7 @@
 #include "Engine/Brush.h"
 #include "Engine/DecalActor.h"
 #include "Engine/DirectionalLight.h"
+#include "Engine/Level.h"
 #include "Engine/ExponentialHeightFog.h"
 #include "Engine/PointLight.h"
 #include "Engine/PostProcessVolume.h"
@@ -100,6 +101,8 @@
 #include "GameFramework/Volume.h"
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
+#include "LevelInstance/LevelInstanceInterface.h"
+#include "LevelInstance/LevelInstanceSubsystem.h"
 #include "MaterialDomain.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstance.h"
@@ -121,6 +124,7 @@
 #include "Sound/AmbientSound.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
+#include "Sound/SoundCue.h"
 #include "UObject/EnumProperty.h"
 #include "UObject/UnrealType.h"
 
@@ -800,7 +804,8 @@ namespace
 		TSet<FString>& ReferencedAssets,
 		MantlePlaceExporterUploads::FContext& Uploads)
 	{
-		const USoundBase* Sound = Audio ? Audio->Sound.Get() : nullptr;
+		// A Sound Cue uploads as the sound wave it publishes as (#818), the one ReadSound named.
+		const USoundBase* Sound = FMantlePlaceAssets::PublishedSound(Audio ? Audio->Sound.Get() : nullptr);
 		if (Sound && FMantleAssetLibrary::Get().IsKnown(Props.Sound))
 		{
 			ReferencedAssets.Add(Props.Sound);
@@ -1223,6 +1228,13 @@ namespace
 	}
 }
 
+// Named, not anonymous: MantleEditor builds as a unity build. Defined with ClassifyActor, which needs the prefab readers.
+namespace MantlePlaceExporterSkips
+{
+	/** Whether Actor is a placed particle actor (an Emitter, a Niagara Actor) that FMantleEffectExport::Translate carries at least one emitter of. */
+	bool IsTranslatableParticleActor(const AActor* Actor);
+}
+
 /**
  * Engine infrastructure rather than authored content — skipped silently.
  *
@@ -1280,6 +1292,14 @@ bool FMantlePlaceExporter::IsEngineInfrastructure(const AActor* Actor)
 	// A placed Plane reflection capture (#628) has no place form, so it is left out, with a Dropped line in the coverage
 	// report (FMantleActorDecompose::ReportIgnoredActor) rather than an error. A Box or Sphere one publishes as a
 	// ReflectionProbe (FMantleReflectionProbeExport).
+	// #818: content Export leaves out with a warning instead of refusing it (DescribeSkippedActor): camera rigs, level
+	// sequences, notes, target points, runtime virtual texture volumes, a mesh actor with no mesh, a decal with no texture,
+	// a Sound Cue that plays nothing, particles Mantle cannot carry, Level Instances.
+	FSkippedActor Skipped;
+	if (DescribeSkippedActor(Actor, Skipped))
+	{
+		return true;
+	}
 	return Actor->IsA(AInfo::StaticClass())
 		|| FMantleActorDecompose::IsUnpublishedReflectionCapture(Actor)
 		|| Actor->IsA(ABrush::StaticClass())
@@ -1336,6 +1356,18 @@ bool FMantlePlaceExporter::DescribeUnpublishedContent(const AActor* Actor, FStri
 	if (IsOrDerivesFromClassNamed(Class, TEXT("LandscapeProxy")))
 	{
 		return false;
+	}
+	// #818: left out with a warning, not refused. A Level Instance whose actors publish on their own is only a note.
+	FSkippedActor Skipped;
+	if (DescribeSkippedActor(Actor, Skipped))
+	{
+		if (!Skipped.bLoss)
+		{
+			return false;
+		}
+		OutWhat = Skipped.What;
+		OutRemedy = Skipped.Remedy;
+		return true;
 	}
 	if (Actor->ActorHasTag(FName(FMantleTerrainBuilder::TerrainActorTag)))
 	{
@@ -1620,10 +1652,17 @@ namespace MantlePlaceExporterPrefab
 		OutProps = FMantleSoundEmitterProps();
 		OutProblem.Reset();
 
-		const USoundBase* Sound = Audio ? Audio->Sound.Get() : nullptr;
-		if (!Sound)
+		const USoundBase* Placed = Audio ? Audio->Sound.Get() : nullptr;
+		if (!Placed)
 		{
 			OutProblem = TEXT("has no sound assigned.");
+			return false;
+		}
+		// #818: a Sound Cue is a graph players' clients don't run, so it publishes as the first sound wave it plays.
+		const USoundBase* Sound = FMantlePlaceAssets::PublishedSound(Placed);
+		if (!Sound)
+		{
+			OutProblem = FString::Printf(TEXT("uses Sound Cue '%s', which plays no sound wave Mantle can publish."), *Placed->GetName());
 			return false;
 		}
 
@@ -1655,7 +1694,7 @@ namespace MantlePlaceExporterPrefab
 		OutProps.Volume = FMath::Clamp(static_cast<double>(Audio->VolumeMultiplier), 0.0, 1.0);
 		// An AmbientSound has no looping switch of its own: the sound asset decides, in the
 		// editor as in UE, and the place file carries that decision to the builder.
-		OutProps.bLooping = Sound->IsLooping();
+		OutProps.bLooping = Placed->IsLooping();
 		// #459: Auto Activate off is the creator saying "a script starts this one" (UE's own
 		// meaning for an AmbientSound), carried to the builder as autoplay false.
 		OutProps.bAutoplay = Audio->bAutoActivate;
@@ -1912,10 +1951,187 @@ namespace MantlePlaceExporterPrefab
 	};
 }
 
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantlePlaceExporterSkips
+{
+	/** A class of actor that exists for the editor or a cinematic and shows players nothing. Matched by name, with its derived classes, so MantleEditor needs no module for it. */
+	struct FNonVisualClass
+	{
+		const TCHAR* ClassName;
+		const TCHAR* Kind;
+		const TCHAR* Category;
+	};
+
+	const FNonVisualClass* FindNonVisual(const AActor* Actor)
+	{
+		static const FNonVisualClass Classes[] = {
+			{ TEXT("CameraRig_Rail"), TEXT("a camera rig"), MantleCoverageCategory::OtherActors },
+			{ TEXT("CameraRig_Crane"), TEXT("a camera rig"), MantleCoverageCategory::OtherActors },
+			{ TEXT("LevelSequenceActor"), TEXT("a level sequence"), MantleCoverageCategory::OtherActors },
+			{ TEXT("TemplateSequenceActor"), TEXT("a template sequence"), MantleCoverageCategory::OtherActors },
+			{ TEXT("Note"), TEXT("a note"), MantleCoverageCategory::OtherActors },
+			{ TEXT("TargetPoint"), TEXT("a target point"), MantleCoverageCategory::OtherActors },
+			{ TEXT("NavLinkProxy"), TEXT("a navigation link"), MantleCoverageCategory::OtherActors },
+			{ TEXT("LevelBounds"), TEXT("a level bounds marker"), MantleCoverageCategory::OtherActors },
+			{ TEXT("LightmassPortal"), TEXT("a Lightmass portal"), MantleCoverageCategory::Lights },
+			{ TEXT("RuntimeVirtualTextureVolume"), TEXT("a runtime virtual texture volume"), MantleCoverageCategory::Volumes },
+		};
+		for (const FNonVisualClass& Entry : Classes)
+		{
+			if (IsOrDerivesFromClassNamed(Actor->GetClass(), Entry.ClassName))
+			{
+				return &Entry;
+			}
+		}
+		return nullptr;
+	}
+
+	/** A placed particle actor's system component: the root, as an Emitter's and a Niagara Actor's is. */
+	const UFXSystemComponent* ParticleRoot(const AActor* Actor)
+	{
+		const UFXSystemComponent* Fx = Cast<UFXSystemComponent>(Actor->GetRootComponent());
+		return Fx && !Fx->IsEditorOnly() && !Fx->HasAnyFlags(RF_Transient) ? Fx : nullptr;
+	}
+
+	bool IsTranslatableParticleActor(const AActor* Actor)
+	{
+		const UFXSystemComponent* Fx = ParticleRoot(Actor);
+		if (!Fx)
+		{
+			return false;
+		}
+		TArray<TSharedPtr<FJsonObject>> Emitters;
+		FMantleCoverage Discarded;
+		FMantleEffectExport::Translate(Fx, FString(), Discarded, Emitters);
+		return Emitters.Num() > 0;
+	}
+}
+
+bool FMantlePlaceExporter::DescribeSkippedActor(const AActor* Actor, FSkippedActor& Out)
+{
+	using namespace MantlePlaceExporterSkips;
+	Out = FSkippedActor();
+	if (!IsValid(Actor))
+	{
+		return false;
+	}
+	const UClass* Class = Actor->GetClass();
+
+	// Editor-only and cinematic actors: nothing a player sees or touches.
+	if (const FNonVisualClass* NonVisual = FindNonVisual(Actor))
+	{
+		Out.What = FString::Printf(TEXT("is %s (%s), which only matters in the editor, so it is left out of the place."), NonVisual->Kind, *Class->GetName());
+		Out.Remedy = TEXT("Nothing to change: the rest of the place publishes without it.");
+		Out.Category = NonVisual->Category;
+		return true;
+	}
+
+	// A Level Instance (a Packed Level Actor is not one: it publishes as instanced meshes). Its actors, when it is loaded in
+	// the editor, are in the world and publish on their own at their world transforms; only the wrapper is left out.
+	if (!IsOrDerivesFromClassNamed(Class, TEXT("PackedLevelActor")))
+	{
+		if (const ILevelInstanceInterface* Instance = Cast<ILevelInstanceInterface>(const_cast<AActor*>(Actor)))
+		{
+			const UWorld* World = Actor->GetWorld();
+			const ULevelInstanceSubsystem* Subsystem = World ? World->GetSubsystem<ULevelInstanceSubsystem>() : nullptr;
+			const ULevel* Level = Subsystem ? Subsystem->GetLevelInstanceLevel(Instance) : nullptr;
+			const FString Asset = Instance->GetWorldAsset().GetAssetName();
+			Out.Category = MantleCoverageCategory::SubLevels;
+			if (Level)
+			{
+				int32 Actors = 0;
+				for (const AActor* Inside : Level->Actors)
+				{
+					Actors += IsValid(Inside) ? 1 : 0;
+				}
+				Out.bLoss = false;
+				Out.What = FString::Printf(TEXT("is a Level Instance of '%s': its %d actors publish as ordinary items at their places in the level; the Level Instance itself is not kept."), *Asset, Actors);
+			}
+			else
+			{
+				Out.What = FString::Printf(TEXT("is a Level Instance of '%s' that isn't loaded in the editor, so what is inside it is left out of the place."), *Asset);
+				Out.Remedy = TEXT("Load it (right-click the Level Instance > Load) and publish again.");
+			}
+			return true;
+		}
+	}
+
+	// A Static Mesh Actor with no mesh shows nothing (unless it carries other parts, which make it a Group).
+	if (const AStaticMeshActor* MeshActor = Cast<AStaticMeshActor>(Actor))
+	{
+		const UStaticMeshComponent* Component = MeshActor->GetStaticMeshComponent();
+		if (Component && !Component->GetStaticMesh() && !MantlePlaceExporterPrefab::NeedsGroup(Actor))
+		{
+			Out.What = TEXT("has no mesh assigned, so there is nothing to show and it is left out of the place.");
+			Out.Remedy = TEXT("Pick a mesh for it to keep it.");
+			Out.Category = MantleCoverageCategory::StaticMeshes;
+			return true;
+		}
+		return false;
+	}
+
+	// A decal whose material gives Mantle no texture to draw, or that has no size to show it at.
+	if (Actor->IsA(ADecalActor::StaticClass()))
+	{
+		FMantleDecalProps Props;
+		UTexture* BaseColor = nullptr;
+		UTexture* Normal = nullptr;
+		FString Problem;
+		if (!ReadDecal(Actor, Props, BaseColor, Normal, Problem))
+		{
+			Out.What = Problem + TEXT(" It is left out of the place.");
+			Out.Remedy = TEXT("The rest of the place publishes without this decal.");
+			Out.Category = MantleCoverageCategory::Decals;
+			return true;
+		}
+		const FVector Scale = PublishedTransform(Actor).GetScale3D();
+		if (FMath::IsNearlyZero(Scale.X) || FMath::IsNearlyZero(Scale.Y) || FMath::IsNearlyZero(Scale.Z))
+		{
+			Out.What = FString::Printf(TEXT("has a scale of (%g, %g, %g), so it covers nothing and is left out of the place."), Scale.X, Scale.Y, Scale.Z);
+			Out.Remedy = TEXT("Give it a scale above zero on every axis to keep it.");
+			Out.Category = MantleCoverageCategory::Decals;
+			return true;
+		}
+		return false;
+	}
+
+	// An Ambient Sound whose Sound Cue plays no sound wave Mantle can publish. (One that plays a wave publishes as that wave.)
+	if (const AAmbientSound* Ambient = Cast<AAmbientSound>(Actor))
+	{
+		const UAudioComponent* Audio = Ambient->GetAudioComponent();
+		const USoundBase* Placed = Audio ? Audio->Sound.Get() : nullptr;
+		if (Placed && Placed->IsA<USoundCue>() && !FMantlePlaceAssets::PublishedSound(Placed))
+		{
+			Out.What = FString::Printf(TEXT("uses Sound Cue '%s', which plays no sound wave Mantle can publish, so it is left out of the place."), *Placed->GetName());
+			Out.Remedy = TEXT("Assign a sound wave imported from a WAV file to the Ambient Sound to keep it.");
+			Out.Category = MantleCoverageCategory::Sounds;
+			return true;
+		}
+		return false;
+	}
+
+	// A placed particle actor whose system Mantle cannot carry (every Niagara system today, and a Cascade one with nothing it maps).
+	if (const UFXSystemComponent* Fx = ParticleRoot(Actor))
+	{
+		if (!IsTranslatableParticleActor(Actor))
+		{
+			const bool bNiagara = IsOrDerivesFromClassNamed(Fx->GetClass(), TEXT("NiagaraComponent"));
+			Out.What = FString::Printf(TEXT("is a particle effect (%s) whose particles Mantle can't carry%s, so it is left out of the place."),
+				*Class->GetName(), bNiagara ? TEXT(" yet (a Niagara system)") : TEXT(""));
+			Out.Remedy = TEXT("Fine if players won't miss it. Otherwise use a Mantle Effect actor.");
+			Out.Category = MantleCoverageCategory::Particles;
+			return true;
+		}
+	}
+	return false;
+}
+
 bool FMantlePlaceExporter::ClassifyActor(const AActor* Actor, EMantleEntityType& OutType)
 {
 	// #628: a mesh actor made of several components (a Blueprint's mesh, doors, lights, particles) is a Group of parts.
 	if (MantlePlaceExporterPrefab::NeedsGroup(Actor)) { OutType = EMantleEntityType::Group;            return true; }
+	// #818: a placed particle actor (an Emitter, a Niagara Actor) is a Group of Effect parts, as a Blueprint's particle components are.
+	if (MantlePlaceExporterSkips::IsTranslatableParticleActor(Actor)) { OutType = EMantleEntityType::Group; return true; }
 	// #628: a Box or Sphere reflection capture, before the root checks (its preview boxes would read as trigger parts).
 	if (FMantleReflectionProbeExport::IsProbeActor(Actor)) { OutType = EMantleEntityType::ReflectionProbe; return true; }
 	if (Actor->IsA(AStaticMeshActor::StaticClass()))  { OutType = EMantleEntityType::StaticMesh;       return true; }
@@ -3329,6 +3545,8 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 	TArray<const AActor*> Exportable;
 	TMap<const AActor*, TArray<MantlePlaceExporterPrefab::FExportedPart>> PartsByActor;
 	TMap<const AActor*, FMantleMirrorResult> MirrorByActor;
+	// #818: decals published at the positive scale of the negative one they have.
+	TSet<const AActor*> UnmirroredDecals;
 	int32 EffectParts = 0;
 	int32 ReflectionProbes = 0;
 
@@ -3416,6 +3634,29 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 			MirrorByActor.Add(Actor, Mirror);
 			Result.Coverage.Add(MantleCoverageCategory::StaticMeshes, EMantleCoverageOutcome::Approximated, ExporterLabelOf(Actor),
 				TEXT("baked a mirrored copy of its mesh (a negative scale), placed at the positive scale."));
+		}
+
+		// #818: a decal with a negative scale publishes at the positive scale: Mantle places it unmirrored.
+		if (Type == EMantleEntityType::Decal && FMantleActorDecompose::HasNegativeAxis(PublishedTransform(Actor).GetScale3D()))
+		{
+			UnmirroredDecals.Add(Actor);
+			Result.Coverage.Add(MantleCoverageCategory::Decals, EMantleCoverageOutcome::Approximated, ExporterLabelOf(Actor),
+				TEXT("has a negative scale, so it is placed at the positive scale: its picture is not mirrored."));
+		}
+
+		// #818: a Sound Cue publishes as the sound wave it plays first.
+		if (Type == EMantleEntityType::SoundEmitter)
+		{
+			const UAudioComponent* Audio = CastChecked<AAmbientSound>(Actor)->GetAudioComponent();
+			if (Audio && Audio->Sound.Get() && Audio->Sound->IsA<USoundCue>())
+			{
+				if (const USoundBase* Wave = FMantlePlaceAssets::PublishedSound(Audio->Sound.Get()))
+				{
+					Result.Coverage.Add(MantleCoverageCategory::Sounds, EMantleCoverageOutcome::Approximated, ExporterLabelOf(Actor),
+						FString::Printf(TEXT("uses Sound Cue '%s', published as the one sound wave it plays first, '%s': the cue's mixing and randomness are not kept."),
+							*Audio->Sound->GetName(), *Wave->GetName()));
+				}
+			}
 		}
 
 		// A Blueprint prefab's parts (#468), each a child entity of the actor's Group. A hashed id
@@ -3506,6 +3747,10 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 		if (ActorMirror)
 		{
 			Entity.Transform.SetScale3D(ActorMirror->PositiveScale);
+		}
+		if (UnmirroredDecals.Contains(Actor))
+		{
+			Entity.Transform.SetScale3D(Entity.Transform.GetScale3D().GetAbs());
 		}
 		ExtractProperties(Actor, Entity.Type, Path, Entity, ReferencedAssets, Uploads, Result.Errors, ActorMirror ? ActorMirror->Mesh : nullptr);
 

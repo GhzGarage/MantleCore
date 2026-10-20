@@ -56,6 +56,9 @@
 #include "Materials/MaterialInterface.h"
 #include "Misc/Paths.h"
 #include "PhysicsEngine/BodySetup.h"
+#include "Sound/AmbientSound.h"
+#include "Sound/SoundBase.h"
+#include "Sound/SoundCue.h"
 #include "UObject/SoftObjectPath.h"
 
 namespace
@@ -426,6 +429,18 @@ namespace
 				Problem,
 				FString::Printf(TEXT("Your own sounds publish with your place: assign a sound wave imported from a WAV file (mono or stereo, %d to %d Hz, at most %g seconds), or delete this AmbientSound."),
 					Limits.MinSoundSampleRate, Limits.MaxSoundSampleRate, Limits.MaxSoundSeconds) });
+		}
+		else if (const AAmbientSound* Ambient = Cast<AAmbientSound>(Actor);
+			Ambient && Ambient->GetAudioComponent() && Ambient->GetAudioComponent()->Sound.Get() && Ambient->GetAudioComponent()->Sound->IsA<USoundCue>())
+		{
+			// #818: a Sound Cue publishes as the sound wave it plays first.
+			const USoundBase* Wave = FMantlePlaceAssets::PublishedSound(Ambient->GetAudioComponent()->Sound.Get());
+			Result.Issues.Add(FMantleValidationIssue{
+				EMantleIssueSeverity::Warning,
+				LabelOf(Actor),
+				FString::Printf(TEXT("uses Sound Cue '%s'. Mantle publishes sound waves, so it publishes as the one wave the cue plays first%s; the cue's mixing and randomness are not kept."),
+					*Ambient->GetAudioComponent()->Sound->GetName(), Wave ? *FString::Printf(TEXT(", '%s'"), *Wave->GetName()) : TEXT("")),
+				TEXT("Fine if that wave is the sound you want. Otherwise assign the sound wave you want to the Ambient Sound.") });
 		}
 	}
 
@@ -1041,6 +1056,16 @@ namespace
 			{
 				PublishedScale = Mirror.PositiveScale;
 			}
+		}
+		// #818: a decal with a negative scale publishes at the positive scale, unmirrored; a warning, not an error.
+		if (Type == EMantleEntityType::Decal && FMantleActorDecompose::HasNegativeAxis(PublishedScale))
+		{
+			Result.Issues.Add(FMantleValidationIssue{
+				EMantleIssueSeverity::Warning,
+				Label,
+				FString::Printf(TEXT("has a scale of %s; Mantle places a decal at the positive scale, so its picture is not mirrored."), *DescribeVector(PublishedScale)),
+				TEXT("Fine if the mirroring does not matter. Otherwise mirror the decal's texture and use a positive scale.") });
+			PublishedScale = PublishedScale.GetAbs();
 		}
 		ValidatorCheckScale(Label, FString(), PublishedScale, Result);
 

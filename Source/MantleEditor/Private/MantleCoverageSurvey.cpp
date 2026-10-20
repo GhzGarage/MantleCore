@@ -285,6 +285,15 @@ namespace MantleCoverageSurveyPrivate
 				continue;
 			}
 
+			// #818: left out instead of refused (camera rigs, a mesh actor with no mesh, a decal with no texture, a Level Instance...):
+			// a loss is Dropped; a Level Instance whose actors publish on their own is only a note.
+			FMantlePlaceExporter::FSkippedActor Skipped;
+			if (FMantlePlaceExporter::DescribeSkippedActor(Actor, Skipped))
+			{
+				Coverage.Add(Skipped.Category, Skipped.bLoss ? EOutcome::Dropped : EOutcome::Info, Label, Skipped.What);
+				continue;
+			}
+
 			// Placed on purpose, named by the validator with a remedy.
 			FString What;
 			FString Remedy;

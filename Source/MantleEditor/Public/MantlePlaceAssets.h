@@ -645,6 +645,13 @@ public:
 	 */
 	static bool CheckSoundRule(const USoundBase* Sound, const FMantlePlaceAssetLimits& Limits, FString& OutWhy, FString& OutFix);
 
+	/**
+	 * The sound a placed sound publishes as (#818): a Sound Cue is a graph players' clients don't run, so it publishes as the
+	 * first sound wave it plays that passes CheckSoundRule (else its first wave of any kind); any other sound is itself. Null
+	 * for a Sound Cue that plays no sound wave at all.
+	 */
+	static const USoundBase* PublishedSound(const USoundBase* Sound);
+
 	/** A sound wave's decoded size, what the place audio budget counts: frames x channels x 2 bytes, from its import metadata. */
 	static int64 SoundDecodedBytes(const USoundWave* Sound);
 
