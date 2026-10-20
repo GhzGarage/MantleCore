@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "MantleAvatarConvertFixer.h"
+#include "MantleCosmeticValidation.h"
 #include "MantleGarmentFitter.h"
 #include "MantleNailSeating.h"
 
@@ -44,6 +45,13 @@ struct MANTLEEDITOR_API FMantleRefitPlan
 
 	/** Garment bones the authoring body has, which take its pose. */
 	int32 NumShared = 0;
+
+	/**
+	 * Weighted garment bones the authoring body lacks (a breast or cloth helper), each with the nearest ancestor the body
+	 * has (FMantleAvatarRefit::FoldBones). Such a bone keeps its local transform under that ancestor, so its vertices
+	 * move exactly as the ancestor's would: its weights are the ancestor's for the refit, as the upload folds them.
+	 */
+	TArray<FMantleFoldedBone> Folded;
 
 	EMantleRefitCorrespondence Path = EMantleRefitCorrespondence::Identity;
 
@@ -126,6 +134,14 @@ public:
 	static bool CheckBones(TConstArrayView<FName> GarmentBones, TConstArrayView<FName> Weighted, TConstArrayView<FName> BodyBones, FString& OutError,
 		bool bOverlay = false);
 
+	/**
+	 * The weighted bones (Weighted, a subset of Names) BodyBones lacks that have an ancestor (Parents, one per Names
+	 * entry) BodyBones has, each with the nearest such ancestor: the bones the upload folds into their parents
+	 * (FMantleCosmeticChecks::FitSkinToSkeleton). A weighted bone with no such ancestor is not in the list. Pure (tested).
+	 */
+	static TArray<FMantleFoldedBone> FoldBones(TConstArrayView<FName> Names, TConstArrayView<int32> Parents, TConstArrayView<FName> Weighted,
+		TConstArrayView<FName> BodyBones);
+
 	/** The bones LOD 0 of Mesh gives weight to (its imported model), in reference skeleton order; every bone when it has none. */
 	static TArray<FName> WeightedBones(const USkeletalMesh& Mesh);
 
@@ -157,8 +173,9 @@ public:
 	 * imported LOD models). SourceBody is the body the garment was made on (the character's own); null when unknown,
 	 * and then the garment's own reference pose stands for it (joint landmarks only). bAllowDense false forces the
 	 * joint landmarks (tests). False with why when the skeleton rule fails or the field cannot be made; a move over
-	 * MaxMoveCm is not a failure here (Out.MaxMoveCm says it). bOverlay: the piece is an IsOverlaySlot one (CheckBones), and
-	 * it is carried on its bones (FMantleRefitPlan::bOnBones).
+	 * MaxMoveCm is not a failure here (Out.MaxMoveCm says it). A garment's weighted bones the body lacks are folded
+	 * (FoldBones, Out.Folded) before the skeleton rule. bOverlay: the piece is an IsOverlaySlot one (CheckBones, nothing
+	 * folded), and it is carried on its bones (FMantleRefitPlan::bOnBones).
 	 */
 	static bool Plan(const USkeletalMesh& Garment, const USkeletalMesh* SourceBody, const USkeletalMesh& Target, bool bAllowDense,
 		FMantleRefitPlan& Out, FString& OutError, bool bOverlay = false);

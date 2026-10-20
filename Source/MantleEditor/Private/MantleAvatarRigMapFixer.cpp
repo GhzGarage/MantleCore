@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAvatarRigMapFixer.h"
 #include "MantleAvatarContract.h"
+#include "MantleAvatarConverter.h"
 #include "MantleCosmeticValidation.h"
 #include "MantleGlbWriter.h"
 
@@ -552,6 +553,8 @@ namespace MantleAvatarRigMapPrivate
 	{
 		/** The part is an avatar body on no supported skeleton: the fixer has a line for it. */
 		bool bApplies = false;
+		/** A clothing piece on the UE4 Mannequin skeleton, mapped onto the MetaHuman body skeleton. */
+		bool bGarment = false;
 		bool bKnown = false;
 		bool bReady = false;
 		FString Error;
@@ -564,8 +567,31 @@ namespace MantleAvatarRigMapPrivate
 	{
 		FRigPartDecision Out;
 		const USkeletalMesh* Mesh = Part.Mesh.Get();
-		if (!Mesh || !Part.Slot.Equals(AvatarSlot, ESearchCase::CaseSensitive))
+		if (!Mesh)
 		{
+			return Out;
+		}
+		// Clothing on the UE4 Mannequin skeleton: mapped onto the MetaHuman body skeleton, for the Refit fixer to carry it
+		// onto the body. Every other garment is the Refit fixer's alone.
+		if (!Part.Slot.Equals(AvatarSlot, ESearchCase::CaseSensitive))
+		{
+			EMantleCosmeticClass Class = EMantleCosmeticClass::Avatar;
+			if (!FMantleAvatarConverter::ClassOfSlot(Part.Slot, Contract, Class) || Class != EMantleCosmeticClass::Garment)
+			{
+				return Out;
+			}
+			Out.Bones = FMantleAvatarRigMap::ReadBones(Mesh);
+			if (!FMantleAvatarRigMap::IsUE4MannequinGarment(Out.Bones, Contract))
+			{
+				return Out;
+			}
+			Out.bApplies = true;
+			Out.bGarment = true;
+			Out.bKnown = true;
+			Out.Mapping = FMantleAvatarRigMap::UE4MannequinOntoMetaHuman(Out.Bones, Contract);
+			// No bounds: a garment's own bounds cover only part of the body, so the bones' extent sets the scale.
+			Out.bReady = FMantleAvatarRigMap::MakePlan(Out.Bones, Out.Mapping, Contract, FBox(ForceInit), Out.Plan, Out.Error, /*bCompleteChains*/ true)
+				&& FMantleAvatarRigMap::VerifyPlan(Out.Bones, Out.Plan, Contract, Out.Error, /*bGarment*/ true);
 			return Out;
 		}
 		Out.Bones = FMantleAvatarRigMap::ReadBones(Mesh);
@@ -625,7 +651,10 @@ namespace MantleAvatarRigMapPrivate
 				Fix.PartIndex = PartIndex;
 				const FString Rig = Decision.bKnown && !Decision.Mapping.ProfileName.IsEmpty()
 					? FString::Printf(TEXT("%s rig"), *Decision.Mapping.ProfileName) : FString(TEXT("Unknown rig"));
-				Fix.Problem = FString::Printf(TEXT("%s: not skinned to a supported skeleton"), *Rig);
+				Fix.Problem = Decision.bGarment
+					? FString::Printf(TEXT("%s: on the UE4 Mannequin skeleton, and clothing must be on the MetaHuman body skeleton"),
+						*Context.Parts[PartIndex].Mesh->GetName())
+					: FString::Printf(TEXT("%s: not skinned to a supported skeleton"), *Rig);
 				const TArray<FName> Missing = Decision.Mapping.MissingBones();
 				if (Missing.Num() > 0)
 				{
@@ -682,7 +711,10 @@ namespace MantleAvatarRigMapPrivate
 				return false;
 			}
 			Part.Mesh = Converted;
-			Part.SkeletonId = Decision.Plan.TargetSkeletonId;
+			if (!Decision.bGarment)
+			{
+				Part.SkeletonId = Decision.Plan.TargetSkeletonId;
+			}
 			for (UObject* Asset : Created)
 			{
 				Context.CreatedAssets.Add(Asset);
@@ -1518,7 +1550,7 @@ FMantleRigMapping FMantleAvatarRigMap::Suggest(TConstArrayView<FMantleRigBone> B
 }
 
 bool FMantleAvatarRigMap::MakePlan(TConstArrayView<FMantleRigBone> Bones, const FMantleRigMapping& Mapping, const FMantleAvatarContract& Contract,
-	const FBox& Bounds, FMantleRigPlan& Out, FString& OutError)
+	const FBox& Bounds, FMantleRigPlan& Out, FString& OutError, const bool bCompleteChains)
 {
 	using namespace MantleAvatarRigMapPrivate;
 	Out = FMantleRigPlan();
@@ -1789,11 +1821,24 @@ bool FMantleAvatarRigMap::MakePlan(TConstArrayView<FMantleRigBone> Bones, const 
 		return static_cast<int32>(INDEX_NONE);
 	};
 
+	// bCompleteChains: every skeleton bone above a mapped one is inserted too, so each mapped bone's parent is its own.
+	TSet<FName> Insert = Required;
+	if (bCompleteChains)
+	{
+		for (const TPair<FName, int32>& Pair : SourceOfTarget)
+		{
+			for (FName Step = Target->ParentOf(Pair.Key); !Step.IsNone(); Step = Target->ParentOf(Step))
+			{
+				Insert.Add(Step);
+			}
+		}
+	}
+
 	// Required bones the rig lacks, parents first: between their skeleton parent and the bones that belong below them, or
 	// for a ball below the foot, forward and down at the toes.
 	for (const FName Bone : Target->Bones)
 	{
-		if (!Required.Contains(Bone) || Bone == Root || FindNode(Bone) != INDEX_NONE)
+		if (!Insert.Contains(Bone) || Bone == Root || FindNode(Bone) != INDEX_NONE)
 		{
 			continue;
 		}
@@ -1914,7 +1959,8 @@ bool FMantleAvatarRigMap::MakePlan(TConstArrayView<FMantleRigBone> Bones, const 
 	return true;
 }
 
-bool FMantleAvatarRigMap::VerifyPlan(TConstArrayView<FMantleRigBone> Bones, const FMantleRigPlan& Plan, const FMantleAvatarContract& Contract, FString& OutError)
+bool FMantleAvatarRigMap::VerifyPlan(TConstArrayView<FMantleRigBone> Bones, const FMantleRigPlan& Plan, const FMantleAvatarContract& Contract, FString& OutError,
+	const bool bGarment)
 {
 	FMantleGlbMesh Glb;
 	Glb.NumInfluences = 1;
@@ -1938,7 +1984,8 @@ bool FMantleAvatarRigMap::VerifyPlan(TConstArrayView<FMantleRigBone> Bones, cons
 	}
 	FMantleSkinFit Fit;
 	FString Error;
-	const FMantleContractSkeleton* Skeleton = FMantleCosmeticChecks::FitSkinToClass(Glb, Pose, Weighted, Contract.AvatarBody, Contract, true, Fit, Error);
+	const FMantleContractSkeleton* Skeleton = FMantleCosmeticChecks::FitSkinToClass(Glb, Pose, Weighted, bGarment ? Contract.SkinnedGarment : Contract.AvatarBody,
+		Contract, true, Fit, Error);
 	if (!Skeleton)
 	{
 		OutError = Error;
@@ -1951,6 +1998,62 @@ bool FMantleAvatarRigMap::VerifyPlan(TConstArrayView<FMantleRigBone> Bones, cons
 		return false;
 	}
 	return true;
+}
+
+bool FMantleAvatarRigMap::IsUE4MannequinGarment(TConstArrayView<FMantleRigBone> Bones, const FMantleAvatarContract& Contract)
+{
+	const TArray<FString>* Required = Contract.AvatarRequiredBones.Find(TEXT("ue4mannequin"));
+	if (!Required || Required->Num() == 0)
+	{
+		return false;
+	}
+	TSet<FName> Names;
+	for (const FMantleRigBone& Bone : Bones)
+	{
+		Names.Add(Bone.Name);
+	}
+	for (const FString& Bone : *Required)
+	{
+		if (!Names.Contains(FName(*Bone)))
+		{
+			return false;
+		}
+	}
+	return !Names.Contains(FName(TEXT("spine_04"))) && !Names.Contains(FName(TEXT("spine_05")));
+}
+
+FMantleRigMapping FMantleAvatarRigMap::UE4MannequinOntoMetaHuman(TConstArrayView<FMantleRigBone> Bones, const FMantleAvatarContract& Contract)
+{
+	using namespace MantleAvatarRigMapPrivate;
+	FMantleRigMapping Out;
+	Out.ProfileId = TEXT("ue4mannequin");
+	Out.ProfileName = SkeletonDisplayName(TEXT("ue4mannequin"));
+	Out.TargetSkeletonId = TEXT("metahuman");
+	const FMantleContractSkeleton* Target = Contract.FindSkeleton(Out.TargetSkeletonId);
+	if (!Target)
+	{
+		return Out;
+	}
+	TSet<FName> Required;
+	for (const FString& Bone : RigRequiredWithoutRoot(Contract, Out.TargetSkeletonId))
+	{
+		Required.Add(FName(*Bone));
+	}
+	// Three spine bones over the MetaHuman's five, by height: the chest one carries the clavicles and the neck.
+	const TMap<FName, FName> Spine = {
+		{ FName(TEXT("spine_01")), FName(TEXT("spine_02")) },
+		{ FName(TEXT("spine_02")), FName(TEXT("spine_04")) },
+		{ FName(TEXT("spine_03")), FName(TEXT("spine_05")) } };
+	for (const FMantleRigBone& Bone : Bones)
+	{
+		const FName* Onto = Spine.Find(Bone.Name);
+		const FName Name = Onto ? *Onto : Bone.Name;
+		if (Target->Find(Name) != INDEX_NONE && Name != Target->Root())
+		{
+			Out.Set(Name, Bone.Name, Required.Contains(Name));
+		}
+	}
+	return Out;
 }
 
 USkeletalMesh* FMantleAvatarRigMap::ApplyPlan(USkeletalMesh* Source, const FMantleRigPlan& Plan, const FString& OutputFolder,

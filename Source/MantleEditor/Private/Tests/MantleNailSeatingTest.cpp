@@ -179,6 +179,16 @@ bool FMantleNailSlotRulesTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("the overlay rule skips the garment's spine, not the body's"),
 		FMantleAvatarRefit::CheckBones(HandBones, Weighted, ShortBody, Error, /*bOverlay*/ true));
 
+	// A garment's weighted bone the body lacks folds into its nearest ancestor the body has; one with none does not.
+	const TArray<FName> ShirtBones = { FName(TEXT("pelvis")), FName(TEXT("spine_04")), FName(TEXT("breast_l")), FName(TEXT("breast_tip_l")),
+		FName(TEXT("loose_helper")) };
+	const TArray<int32> ShirtParents = { INDEX_NONE, 0, 1, 2, INDEX_NONE };
+	const TArray<FName> ShirtWeighted = { FName(TEXT("spine_04")), FName(TEXT("breast_tip_l")), FName(TEXT("loose_helper")) };
+	const TArray<FMantleFoldedBone> Folded = FMantleAvatarRefit::FoldBones(ShirtBones, ShirtParents, ShirtWeighted, BodyBones);
+	TestEqual(TEXT("one bone folds"), Folded.Num(), 1);
+	TestTrue(TEXT("past an unweighted extra, into the body's bone"),
+		Folded.Num() == 1 && Folded[0].Bone == FName(TEXT("breast_tip_l")) && Folded[0].Into == FName(TEXT("spine_04")));
+
 	// Nails follow their finger bones, however far the source arm was posed: the whole-piece move cap is not theirs.
 	FMantleRefitPlan Plan;
 	Plan.MaxMoveCm = FMantleAvatarRefit::MaxMoveCm + 20.0;
