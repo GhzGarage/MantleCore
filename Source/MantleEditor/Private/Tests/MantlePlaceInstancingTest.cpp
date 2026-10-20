@@ -588,10 +588,11 @@ bool FMantleCheckCommandTest::RunTest(const FString& Parameters)
 	Report.Instances = 61000;
 	Report.GroupedActors = 5;
 	Report.ThinnedInstances = 0;
+	Report.DrawDistances = 12;
 
 	TestFalse(TEXT("an error means not ready"), Report.IsReady());
 	TestEqual(TEXT("the line"), FMantleCheck::DoneLine(Report),
-		FString(TEXT("MANTLE_CHECK_DONE ready=0 errors=1 warnings=2 placeBytes=7340032 instances=61000 grouped=5 thinned=0")));
+		FString(TEXT("MANTLE_CHECK_DONE ready=0 errors=1 warnings=2 placeBytes=7340032 instances=61000 grouped=5 thinned=0 drawDistances=12")));
 	const TArray<FString> Lines = FMantleCheck::IssueLines(Report);
 	if (TestEqual(TEXT("one line for each finding"), Lines.Num(), 3))
 	{

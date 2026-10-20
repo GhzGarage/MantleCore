@@ -20,6 +20,9 @@ struct MANTLEEDITOR_API FMantleCheckReport
 	int64 PlaceBytes = 0;
 	int64 Instances = 0;
 
+	/** Mesh entities and instance sets that got a drawDistance (GhzGarage/mantle#630). */
+	int32 DrawDistances = 0;
+
 	/** Static mesh actors folded into instance sets, and instances removed by -Thin=auto. */
 	int32 GroupedActors = 0;
 	int64 ThinnedInstances = 0;

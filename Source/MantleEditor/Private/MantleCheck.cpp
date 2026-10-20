@@ -117,6 +117,7 @@ FMantleCheckReport FMantleCheck::Evaluate(UWorld* World, const bool bThin)
 		}
 		Report.PlaceBytes = Exported.PlaceBytes;
 		Report.Instances = Exported.InstanceTotal;
+		Report.DrawDistances = Exported.DrawDistanceEntities;
 		Report.GroupedActors = Exported.Grouping.Actors;
 		Report.ThinnedInstances = Exported.Thinning.bApplied ? Exported.Thinning.Removed() : 0;
 		if (Exported.ThinPreview.RemovesAnything() && Exported.ThinPreview.bFits)
@@ -136,9 +137,9 @@ FMantleCheckReport FMantleCheck::Evaluate(UWorld* World, const bool bThin)
 
 FString FMantleCheck::DoneLine(const FMantleCheckReport& Report)
 {
-	return FString::Printf(TEXT("MANTLE_CHECK_DONE ready=%d errors=%d warnings=%d placeBytes=%lld instances=%lld grouped=%d thinned=%lld"),
+	return FString::Printf(TEXT("MANTLE_CHECK_DONE ready=%d errors=%d warnings=%d placeBytes=%lld instances=%lld grouped=%d thinned=%lld drawDistances=%d"),
 		Report.IsReady() ? 1 : 0, Report.NumErrors(), Report.NumWarnings(), Report.PlaceBytes, Report.Instances, Report.GroupedActors,
-		Report.ThinnedInstances);
+		Report.ThinnedInstances, Report.DrawDistances);
 }
 
 TArray<FString> FMantleCheck::IssueLines(const FMantleCheckReport& Report)
@@ -243,7 +244,7 @@ namespace MantleCheckPrivate
 		TEXT("Mantle.Check [-Export=<folder>] [-Thin=auto] -- runs Publish's check and export on the open level without publishing or ")
 		TEXT("contacting the server. Loads every World Partition cell as Publish does. -Export writes place.json and check.txt to the folder; ")
 		TEXT("-Thin=auto thins foliage and instances evenly when the place is over a limit (never otherwise). Logs one line per finding ")
-		TEXT("(MANTLE_CHECK_ERROR / MANTLE_CHECK_WARNING) and ends with MANTLE_CHECK_DONE ready= errors= warnings= placeBytes= instances=."),
+		TEXT("(MANTLE_CHECK_ERROR / MANTLE_CHECK_WARNING) and ends with MANTLE_CHECK_DONE ready= errors= warnings= placeBytes= instances= ... drawDistances= (the meshes and instance sets given a draw distance)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{
 			FMantleCheck::Run(World, FMantleCheck::ParseArgs(Args));
