@@ -69,4 +69,32 @@ bool FMantleHeadFitHatSocketTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHeadFitIgnoresEarsTest,
+	"Mantle.Editor.HeadFit.IgnoresEars",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHeadFitIgnoresEarsTest::RunTest(const FString& Parameters)
+{
+	// MetaHuman's ear bones, on both sides, are ears (MetaGoblin's ears made its hat 1.57 times too wide).
+	for (const TCHAR* Bone : { TEXT("FACIAL_L_Ear"), TEXT("FACIAL_R_Ear"), TEXT("FACIAL_L_Ear1"), TEXT("FACIAL_R_Ear4"), TEXT("facial_l_ear2") })
+	{
+		TestTrue(FString::Printf(TEXT("%s is an ear"), Bone), FMantleHeadFit::IsEarBone(FName(Bone)));
+	}
+	// Names that only contain the letters are not.
+	for (const TCHAR* Bone : { TEXT("head"), TEXT("FACIAL_C_Forehead"), TEXT("FACIAL_L_ForeheadMid"), TEXT("FACIAL_L_Earring"), TEXT("FACIAL_L_Nearside"),
+		TEXT("FACIAL_R_EyesackUpper"), TEXT("FACIAL_C_Skull") })
+	{
+		TestFalse(FString::Printf(TEXT("%s is not an ear"), Bone), FMantleHeadFit::IsEarBone(FName(Bone)));
+	}
+
+	// A vertex is cranium when it is mostly on the head and barely on an ear.
+	TestTrue(TEXT("all on the head, none on an ear: cranium"), FMantleHeadFit::IsCranium(1.0f, 0.0f));
+	TestTrue(TEXT("a trace of ear weight (a seam by the ear) still counts"), FMantleHeadFit::IsCranium(1.0f, 0.02f));
+	TestFalse(TEXT("an ear vertex does not count"), FMantleHeadFit::IsCranium(1.0f, 1.0f));
+	TestFalse(TEXT("a vertex shared with an ear does not count"), FMantleHeadFit::IsCranium(1.0f, 0.3f));
+	TestFalse(TEXT("a neck vertex does not count"), FMantleHeadFit::IsCranium(0.3f, 0.0f));
+	return true;
+}
+
 #endif
