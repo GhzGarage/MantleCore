@@ -7,7 +7,7 @@
 // the front and from the back, into <Directory>/<Outfit>_<size id>_{front,back}.png. Nothing is saved or uploaded. Logs
 // MANTLE_RENDER_FITS lines.
 // With an accessory slot it makes the rigid piece as CheckCosmetic does (FMantleParametricOutfit::PrepareRigid) and renders
-// the catalog thumbnail itself (AccessorySubject, <Outfit>_<slot>_thumbnail.png) and the piece worn on the body it was made on,
+// the catalog thumbnail itself (AccessorySubject, <Outfit>_<slot>_thumbnail.png, and from behind, _thumbnail_back.png) and the piece worn on the body it was made on,
 // hung from that body's slot socket as an avatar wears it (<Outfit>_<slot>_worn_{front,back}.png).
 #include "MantleAvatarContract.h"
 #include "MantleCosmeticExport.h"
@@ -19,6 +19,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
 #include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
@@ -51,10 +52,20 @@ namespace MantleDevRenderOutfitFitsPrivate
 			return;
 		}
 		UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s rigid bounds=%s: %s"), *Slot, *Rigid->GetBoundingBox().ToString(), *Note);
-		// The catalog thumbnail, as the upload renders it.
-		const FString Thumbnail = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_thumbnail.png"), *Outfit->GetName(), *Slot));
-		const bool bThumbnail = Save(FMantleCosmeticThumbnail::AccessorySubject(Rigid, Prepared.AccessoryWorn), Size, Thumbnail, Error);
-		UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s thumbnail %s %s"), *Slot, bThumbnail ? *Thumbnail : TEXT("FAILED"), bThumbnail ? TEXT("") : *Error);
+		for (const FStaticMaterial& Material : Rigid->GetStaticMaterials())
+		{
+			UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s material %s two-sided=%d"), *Slot,
+				Material.MaterialInterface ? *Material.MaterialInterface->GetPathName() : TEXT("none"), Material.MaterialInterface && Material.MaterialInterface->IsTwoSided() ? 1 : 0);
+		}
+		// The catalog thumbnail, as the upload renders it, and the same from behind.
+		for (const TCHAR* View : { TEXT("thumbnail"), TEXT("thumbnail_back") })
+		{
+			FMantleThumbnailSubject Shot = FMantleCosmeticThumbnail::AccessorySubject(Rigid, Prepared.AccessoryWorn);
+			if (FCString::Strcmp(View, TEXT("thumbnail_back")) == 0) { Shot.View.Yaw += 180.0f; }
+			const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), *Slot, View));
+			const bool bWritten = Save(Shot, Size, File, Error);
+			UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s %s %s"), *Slot, View, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Error);
+		}
 
 		// Worn: the size's body parts in their reference pose, the piece on the slot socket of the first that has its bone.
 		TArray<FMantleOutfitSourceSize> Sizes;
