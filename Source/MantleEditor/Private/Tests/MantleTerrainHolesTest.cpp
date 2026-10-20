@@ -75,7 +75,7 @@ bool FMantleTerrainHolesAreFilledTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("with no error"), CountIssues(Issues, EMantleIssueSeverity::Error, TEXT("")), 0);
 	TestEqual(TEXT("and a warning that the holes are filled"), CountIssues(Issues, EMantleIssueSeverity::Warning, TEXT("holes")), 1);
 	TestEqual(TEXT("which says how many samples (3 of 16)"), CountIssues(Issues, EMantleIssueSeverity::Warning, TEXT("3 of its 16 samples")), 1);
-	TestEqual(TEXT("and an approximated terrain line in the coverage report"), Coverage.Count(MantleCoverageCategory::Terrain, EMantleCoverageOutcome::Approximated), 1);
+	TestEqual(TEXT("and an approximated terrain line in the coverage report"), static_cast<int64>(Coverage.Count(MantleCoverageCategory::Terrain, EMantleCoverageOutcome::Approximated)), static_cast<int64>(1));
 
 	// The published data is the landscape's own heights and weights: nothing is rewritten to fill the hole.
 	const FMantleHeightfield Field = FMantleTerrainExport::MakeHeightfield(Source);
@@ -90,7 +90,7 @@ bool FMantleTerrainHolesAreFilledTest::RunTest(const FString& Parameters)
 	FMantleCoverage Clean;
 	TestTrue(TEXT("a landscape without holes is chosen"), FMantleTerrainExport::ChooseLayers(nullptr, Source, TEXT("Landscape"), Layers, Issues, &Clean));
 	TestEqual(TEXT("with no hole warning"), CountIssues(Issues, EMantleIssueSeverity::Warning, TEXT("holes")), 0);
-	TestEqual(TEXT("and no terrain line"), Clean.Count(MantleCoverageCategory::Terrain, EMantleCoverageOutcome::Approximated), 0);
+	TestEqual(TEXT("and no terrain line"), static_cast<int64>(Clean.Count(MantleCoverageCategory::Terrain, EMantleCoverageOutcome::Approximated)), static_cast<int64>(0));
 	return true;
 }
 
@@ -116,7 +116,7 @@ bool FMantleTerrainUnpaintedGetsDefaultLayerTest::RunTest(const FString& Paramet
 	}
 	TestEqual(TEXT("no error"), CountIssues(Issues, EMantleIssueSeverity::Error, TEXT("")), 0);
 	TestEqual(TEXT("a warning that says it is drawn plain grey"), CountIssues(Issues, EMantleIssueSeverity::Warning, TEXT("plain grey")), 1);
-	TestEqual(TEXT("and an approximated layer line"), Coverage.Count(MantleCoverageCategory::TerrainLayers, EMantleCoverageOutcome::Approximated), 1);
+	TestEqual(TEXT("and an approximated layer line"), static_cast<int64>(Coverage.Count(MantleCoverageCategory::TerrainLayers, EMantleCoverageOutcome::Approximated)), static_cast<int64>(1));
 
 	// With the landscape's material read, the first look it states is the ground.
 	FMantleTerrainSource Read = MakeFlatSource({});
