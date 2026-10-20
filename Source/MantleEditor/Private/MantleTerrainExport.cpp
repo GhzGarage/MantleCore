@@ -68,6 +68,7 @@ namespace MantleTerrainExportPrivate
 		const double Height = Source.Heights[Y * Source.Width + X] * Source.HeightScale + Source.HeightOffset;
 		FMantleSurfaceSample Sample;
 		Sample.WorldPosition = Source.Transform.TransformPosition(FVector(X * Source.SpacingX, Y * Source.SpacingY, Height));
+		Sample.LandscapeSample = FVector2D(Source.FirstSample.X + X, Source.FirstSample.Y + Y);
 		const FQuat Rotation = Source.Transform.GetRotation();
 		Sample.Normal = Rotation.RotateVector(FVector(-SlopeX, -SlopeY, 1.0).GetSafeNormal());
 		Sample.Tangent = Rotation.RotateVector(FVector(1.0, 0.0, SlopeX).GetSafeNormal());
@@ -266,6 +267,7 @@ bool FMantleTerrainExport::ReadLandscape(const AActor* Actor, FMantleTerrainSour
 
 	Out.Width = MaxX - MinX + 1;
 	Out.Height = MaxY - MinY + 1;
+	Out.FirstSample = FIntPoint(MinX, MinY);
 	Out.SpacingX = Scale.X;
 	Out.SpacingY = Scale.Y;
 	Out.HeightScale = HeightScale;

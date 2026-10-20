@@ -73,6 +73,9 @@ struct MANTLEEDITOR_API FMantleSurfaceSample
 {
 	FVector WorldPosition = FVector::ZeroVector;
 
+	/** Where it is on the landscape's own grid, in samples (the unit of the landscape's UV): what Landscape Layer Coords and Texture Coordinate 0 are built from. */
+	FVector2D LandscapeSample = FVector2D::ZeroVector;
+
 	/** The surface normal, and the tangent and binormal of the frame a tangent-space vector is turned into world space with (all unit length). */
 	FVector Normal = FVector::UpVector;
 	FVector Tangent = FVector::ForwardVector;

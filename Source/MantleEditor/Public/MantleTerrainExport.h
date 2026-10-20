@@ -63,6 +63,9 @@ struct MANTLEEDITOR_API FMantleTerrainSource
 	/** The average base colour of each layer's look, by layer name, where known (#628): which kept layer a folded one goes into. */
 	TMap<FName, FLinearColor> LayerColours;
 
+	/** The landscape sample (in its own grid) that sample (0, 0) is: what a mask's landscape UV is counted from. */
+	FIntPoint FirstSample = FIntPoint::ZeroValue;
+
 	/** Where sample (0, 0) is and how the landscape is turned: the Terrain entity's transform (scale 1). */
 	FTransform Transform = FTransform::Identity;
 };

@@ -1374,7 +1374,48 @@ namespace MantleLandscapeMaterialReaderPrivate
 		Dot,
 		Mask,
 		Append,
-		TangentToWorld
+		TangentToWorld,
+		LandscapeUv,
+		Texture
+	};
+
+	/** The pixels of a mask texture's source (mip 0), kept so a mask can sample it at the UVs its graph gives: 8 bits a channel, bilinear, wrapped as the texture says. */
+	struct FLmTexture
+	{
+		int32 SizeX = 0;
+		int32 SizeY = 0;
+		bool bSrgb = false;
+		bool bClampX = false;
+		bool bClampY = false;
+		TArray<FColor> Pixels;
+
+		FLinearColor Texel(int32 X, int32 Y) const
+		{
+			X = bClampX ? FMath::Clamp(X, 0, SizeX - 1) : ((X % SizeX) + SizeX) % SizeX;
+			Y = bClampY ? FMath::Clamp(Y, 0, SizeY - 1) : ((Y % SizeY) + SizeY) % SizeY;
+			const FColor Pixel = Pixels[static_cast<int64>(Y) * SizeX + X];
+			return bSrgb ? FLinearColor::FromSRGBColor(Pixel) : FLinearColor(Pixel.R / 255.0f, Pixel.G / 255.0f, Pixel.B / 255.0f, Pixel.A / 255.0f);
+		}
+
+		/** The bilinear sample at (U, V), with texel centres at (i + 0.5) / size and V counted down from the top row, as a texture sample reads it. */
+		void Sample(const double U, const double V, double* OutRgba) const
+		{
+			const double X = U * SizeX - 0.5;
+			const double Y = V * SizeY - 0.5;
+			const double FloorX = FMath::FloorToDouble(X);
+			const double FloorY = FMath::FloorToDouble(Y);
+			const float FractionX = static_cast<float>(X - FloorX);
+			const float FractionY = static_cast<float>(Y - FloorY);
+			const int32 X0 = static_cast<int32>(FloorX);
+			const int32 Y0 = static_cast<int32>(FloorY);
+			const FLinearColor Top = FMath::Lerp(Texel(X0, Y0), Texel(X0 + 1, Y0), FractionX);
+			const FLinearColor Bottom = FMath::Lerp(Texel(X0, Y0 + 1), Texel(X0 + 1, Y0 + 1), FractionX);
+			const FLinearColor Result = FMath::Lerp(Top, Bottom, FractionY);
+			OutRgba[0] = Result.R;
+			OutRgba[1] = Result.G;
+			OutRgba[2] = Result.B;
+			OutRgba[3] = Result.A;
+		}
 	};
 
 	/** One operation: its result is register (its index in the list), built from the registers A, B and C. */
@@ -1395,6 +1436,9 @@ namespace MantleLandscapeMaterialReaderPrivate
 		int32 B = INDEX_NONE;
 		int32 C = INDEX_NONE;
 		FLmValue Value = {};
+
+		/** Texture: the pixels A (a UV) samples. */
+		TSharedPtr<const FLmTexture> Texture;
 	};
 
 	double LmComp(const FLmValue& Value, const uint8 Width, const int32 Index)
@@ -1534,6 +1578,21 @@ namespace MantleLandscapeMaterialReaderPrivate
 			Out.V[2] = World.Z;
 			break;
 		}
+		case ELmOp::LandscapeUv:
+			// Value: the scale of U and V, then their offsets.
+			Out.V[0] = Sample->LandscapeSample.X * Op.Value.V[0] + Op.Value.V[2];
+			Out.V[1] = Sample->LandscapeSample.Y * Op.Value.V[1] + Op.Value.V[3];
+			break;
+		case ELmOp::Texture:
+			if (Op.Texture.IsValid())
+			{
+				Op.Texture->Sample(A.V[0], A.V[1], Out.V);
+			}
+			else
+			{
+				Out = FLmValue();
+			}
+			break;
 		}
 	}
 }
@@ -1697,6 +1756,12 @@ namespace MantleLandscapeMaterialReaderPrivate
 		TMap<FLmVisitKey, int32> Done;
 		int32 Depth = 0;
 
+		/** Above 0 while the coordinates of a texture sample are compiled: the landscape's own UVs are only a value there. */
+		int32 UvDepth = 0;
+
+		/** The pixels of each mask texture read so far (null for one that could not be), so a texture sampled twice is read once. */
+		TMap<const UTexture*, TSharedPtr<const FLmTexture>> Textures;
+
 		int32 Fail(const FString& Reason)
 		{
 			if (Why.IsEmpty())
@@ -1709,7 +1774,7 @@ namespace MantleLandscapeMaterialReaderPrivate
 		/** Adds Op; one whose operands are all constants is worked out now and added as a constant. */
 		int32 Emit(const FLmOp& Op)
 		{
-			const bool bReadsSample = Op.Kind == ELmOp::WorldPosition || Op.Kind == ELmOp::Normal || Op.Kind == ELmOp::TangentToWorld;
+			const bool bReadsSample = Op.Kind == ELmOp::WorldPosition || Op.Kind == ELmOp::Normal || Op.Kind == ELmOp::TangentToWorld || Op.Kind == ELmOp::LandscapeUv;
 			auto IsConstant = [this](const int32 Reg) { return Reg < 0 || Ops[Reg].Kind == ELmOp::Const; };
 			if (Op.Kind != ELmOp::Const && !bReadsSample && IsConstant(Op.A) && IsConstant(Op.B) && IsConstant(Op.C))
 			{
@@ -1810,6 +1875,90 @@ namespace MantleLandscapeMaterialReaderPrivate
 			Op.Kind = Kind;
 			Op.A = A;
 			Op.Width = Op.WidthA = Ops[A].Width;
+			return Emit(Op);
+		}
+
+		int32 LandscapeUv(const double ScaleU, const double ScaleV, const double OffsetU, const double OffsetV)
+		{
+			FLmOp Op;
+			Op.Kind = ELmOp::LandscapeUv;
+			Op.Width = 2;
+			Op.Value.V[0] = ScaleU;
+			Op.Value.V[1] = ScaleV;
+			Op.Value.V[2] = OffsetU;
+			Op.Value.V[3] = OffsetV;
+			return Emit(Op);
+		}
+
+		/** The source pixels of Texture at mip 0, 8 bits a channel; null when it has none to read or they are too many. */
+		TSharedPtr<const FLmTexture> TexturePixels(UTexture* Texture)
+		{
+			if (const TSharedPtr<const FLmTexture>* Known = Textures.Find(Texture))
+			{
+				return *Known;
+			}
+			TSharedPtr<const FLmTexture> Result;
+			FImage Image;
+			if (Texture->Source.IsValid() && Texture->Source.GetNumBlocks() <= 1 && Texture->Source.GetNumSlices() <= 1 && Texture->Source.GetMipImage(Image, 0)
+				&& Image.SizeX > 0 && Image.SizeY > 0 && static_cast<int64>(Image.SizeX) * Image.SizeY <= (64 << 20))
+			{
+				const bool bHdr = ERawImageFormat::IsHDR(Image.Format);
+				FImage Bgra;
+				Image.CopyTo(Bgra, ERawImageFormat::BGRA8, bHdr ? EGammaSpace::sRGB : Image.GammaSpace);
+				const TArrayView64<FColor> Pixels = Bgra.AsBGRA8();
+				if (Pixels.Num() == static_cast<int64>(Bgra.SizeX) * Bgra.SizeY)
+				{
+					TSharedRef<FLmTexture> Data = MakeShared<FLmTexture>();
+					Data->SizeX = Bgra.SizeX;
+					Data->SizeY = Bgra.SizeY;
+					// A float source was put in sRGB bytes above, which decode back to what it held.
+					Data->bSrgb = bHdr || Texture->SRGB;
+					Data->bClampX = Texture->GetTextureAddressX() == TA_Clamp;
+					Data->bClampY = Texture->GetTextureAddressY() == TA_Clamp;
+					Data->Pixels.Append(Pixels.GetData(), static_cast<int32>(Pixels.Num()));
+					Result = Data;
+				}
+			}
+			Textures.Add(Texture, Result);
+			return Result;
+		}
+
+		/** A mask's texture sample at the UVs the graph gives it (world position, landscape coordinates, and what is built from them). INDEX_NONE, with Why as it was, when the UVs or the pixels cannot be read. */
+		int32 CompileTextureSample(const FLmRef& Node, const UMaterialExpressionTextureSample* Sample, UTexture* Texture)
+		{
+			const TSharedPtr<const FLmTexture> Pixels = TexturePixels(Texture);
+			if (!Pixels.IsValid())
+			{
+				return INDEX_NONE;
+			}
+			const FString SavedWhy = Why;
+			int32 Uv = INDEX_NONE;
+			if (Sample->Coordinates.Expression)
+			{
+				++UvDepth;
+				Uv = CompileInput(Sample->Coordinates, Node.Frame, false, 0.0f);
+				--UvDepth;
+			}
+			else if (Sample->ConstCoordinate == 0)
+			{
+				Uv = LandscapeUv(1.0, 1.0, 0.0, 0.0);
+			}
+			Why = SavedWhy;
+			if (Uv == INDEX_NONE || Ops[Uv].Width < 2)
+			{
+				return INDEX_NONE;
+			}
+			if (Ops[Uv].Width > 2)
+			{
+				const uint8 Pick[4] = { 0, 1, 0, 0 };
+				Uv = EmitMask(Uv, Pick, 2);
+			}
+			FLmOp Op;
+			Op.Kind = ELmOp::Texture;
+			Op.Width = 4;
+			Op.WidthA = 2;
+			Op.A = Uv;
+			Op.Texture = Pixels;
 			return Emit(Op);
 		}
 
@@ -1919,12 +2068,38 @@ namespace MantleLandscapeMaterialReaderPrivate
 				{
 					return Fail(TEXT("samples a texture it cannot read in one of its masks"));
 				}
+				// At the UVs the graph gives, when it does and the pixels can be read: the noise that breaks up a mask's edge is kept.
+				const int32 Sampled = CompileTextureSample(Node, Sample, Texture);
+				if (Sampled != INDEX_NONE)
+				{
+					return Sampled;
+				}
 				if (!FMantleLandscapeMaterialReader::AverageColour(Texture, Average))
 				{
 					return Fail(FString::Printf(TEXT("samples the texture '%s' in one of its masks, which has no source pixels to take an average of"), *Texture->GetName()));
 				}
 				Notes.AddUnique(FString::Printf(TEXT("edge noise from the texture '%s' in a mask is taken as the texture's average: the noise is not kept."), *Texture->GetName()));
 				return Constant(4, Average.R, Average.G, Average.B, Average.A);
+			}
+			if (UvDepth > 0)
+			{
+				if (const UMaterialExpressionLandscapeLayerCoords* Coords = Cast<UMaterialExpressionLandscapeLayerCoords>(Expression))
+				{
+					if (Coords->CustomUVType != LCCT_None || (Coords->MappingType != TCMT_Auto && Coords->MappingType != TCMT_XY) || Coords->MappingRotation != 0.0f)
+					{
+						return Fail(TEXT("uses landscape coordinates other than the top-down ones"));
+					}
+					const double Scale = 1.0 / (Coords->MappingScale == 0.0f ? 1.0 : static_cast<double>(FMath::Abs(Coords->MappingScale)));
+					return LandscapeUv(Scale, Scale, Coords->MappingPanU, Coords->MappingPanV);
+				}
+				if (const UMaterialExpressionTextureCoordinate* TexCoord = Cast<UMaterialExpressionTextureCoordinate>(Expression))
+				{
+					if (TexCoord->CoordinateIndex != 0)
+					{
+						return Fail(TEXT("uses a texture coordinate set other than the first"));
+					}
+					return LandscapeUv(TexCoord->UTiling, TexCoord->VTiling, 0.0, 0.0);
+				}
 			}
 			if (const UMaterialExpressionTransform* Transform = Cast<UMaterialExpressionTransform>(Expression))
 			{
