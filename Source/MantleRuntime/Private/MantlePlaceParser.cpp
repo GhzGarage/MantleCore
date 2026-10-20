@@ -975,6 +975,42 @@ namespace
 		Out = Parsed;
 	}
 
+	/** settings.environment.skyLight: the scale of Mantle's own sky light (#722), and settings.environment.sun: whether the sun reaches the place. */
+	void ReadEnvironmentLighting(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Environment, const FString& EnvironmentPath,
+		FMantleEnvironmentSettings& Out)
+	{
+		if (Environment->HasField(TEXT("skyLight")))
+		{
+			const FString SkyPath = Join(EnvironmentPath, TEXT("skyLight"));
+			const TSharedPtr<FJsonObject>* SkyLight = nullptr;
+			if (!Environment->TryGetObjectField(TEXT("skyLight"), SkyLight))
+			{
+				Ctx.Fail(SkyPath, TEXT("must be an object"));
+			}
+			else
+			{
+				RequireNoUnknownKeys(Ctx, *SkyLight, { TEXT("intensity") }, SkyPath);
+				ReadEnvironmentNumber(Ctx, *SkyLight, TEXT("intensity"), SkyPath, 0.0, 1.0, Out.SkyLightIntensity);
+			}
+		}
+		if (Environment->HasField(TEXT("sun")))
+		{
+			const FString SunPath = Join(EnvironmentPath, TEXT("sun"));
+			const TSharedPtr<FJsonObject>* Sun = nullptr;
+			if (!Environment->TryGetObjectField(TEXT("sun"), Sun))
+			{
+				Ctx.Fail(SunPath, TEXT("must be an object"));
+			}
+			else
+			{
+				RequireNoUnknownKeys(Ctx, *Sun, { TEXT("direct") }, SunPath);
+				bool bDirect = true;
+				ReadStrictOptionalBool(Ctx, *Sun, TEXT("direct"), SunPath, bDirect);
+				Out.bNoDirectSun = !bDirect;
+			}
+		}
+	}
+
 	/**
 	 * settings.environment: the place's default look, each key optional, in the script API's
 	 * ranges (MantleEnvironmentDefaults) as the schema, validate.py and the backend hold them.
@@ -995,10 +1031,12 @@ namespace
 		RequireNoUnknownKeys(
 			Ctx, *Environment,
 			{ TEXT("clockTime"), TEXT("timeScale"), TEXT("weather"), TEXT("colorTint"), TEXT("saturation"),
-			  TEXT("bloom"), TEXT("colorGrading"), TEXT("colorGradingIntensity"), TEXT("exposure"), TEXT("fog") },
+			  TEXT("bloom"), TEXT("colorGrading"), TEXT("colorGradingIntensity"), TEXT("exposure"), TEXT("fog"),
+			  TEXT("skyLight"), TEXT("sun") },
 			EnvironmentPath);
 		ReadEnvironmentExposure(Ctx, *Environment, EnvironmentPath, Out.Exposure);
 		ReadEnvironmentFog(Ctx, *Environment, EnvironmentPath, Out.Fog);
+		ReadEnvironmentLighting(Ctx, *Environment, EnvironmentPath, Out);
 
 		// 24 is the same hour as 0, as Environment.ClockTime wraps it.
 		ReadEnvironmentNumber(Ctx, *Environment, TEXT("clockTime"), EnvironmentPath, 0.0, 24.0, Out.ClockTime);
