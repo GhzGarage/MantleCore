@@ -118,6 +118,14 @@ FMantleEnvironmentSettings AMantlePlaceSettingsActor::MakeEnvironmentSettings() 
 	{
 		Out.Weather = static_cast<EMantleWeatherState>(static_cast<uint8>(Weather) - 2);
 	}
+	if (bSetSkyLightIntensity)
+	{
+		Out.SkyLightIntensity = Clamped(SkyLightIntensity, 0.0, 1.0, 1.0);
+	}
+	if (DirectSun == EMantlePlaceDirectSun::Never)
+	{
+		Out.bNoDirectSun = true;
+	}
 	const uint32 Tint = (static_cast<uint32>(ColorTint.R) << 16) | (static_cast<uint32>(ColorTint.G) << 8) | ColorTint.B;
 	if (Tint != 0xFFFFFF)
 	{
@@ -152,6 +160,9 @@ void AMantlePlaceSettingsActor::SetEnvironmentFrom(const FMantleEnvironmentSetti
 	Weather = Environment.Weather.IsSet()
 		? static_cast<EMantlePlaceWeather>(static_cast<uint8>(*Environment.Weather) + 2)
 		: EMantlePlaceWeather::Natural;
+	bSetSkyLightIntensity = Environment.SkyLightIntensity.IsSet();
+	SkyLightIntensity = Environment.SkyLightIntensity.Get(1.0);
+	DirectSun = Environment.bNoDirectSun ? EMantlePlaceDirectSun::Never : EMantlePlaceDirectSun::Automatic;
 	const uint32 Tint = Environment.ColorTint.Get(0xFFFFFF);
 	ColorTint = FColor(static_cast<uint8>((Tint >> 16) & 0xFF), static_cast<uint8>((Tint >> 8) & 0xFF), static_cast<uint8>(Tint & 0xFF), 255);
 	Saturation = Environment.Saturation.Get(1.0);

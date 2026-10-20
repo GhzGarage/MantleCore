@@ -1,9 +1,11 @@
 // Copyright Joshua Eger. All Rights Reserved.
+#include "MantleClientFeatures.h"
 #include "MantleCoverage.h"
 #include "MantleEnvironment.h"
 #include "MantleEnvironmentDefaults.h"
 #include "MantleEnvironmentExport.h"
 #include "MantlePlaceExporter.h"
+#include "MantlePlaceParser.h"
 #include "MantlePlaceSettingsActor.h"
 #include "MantleSkyClock.h"
 #include "MantleTargetFeatures.h"
@@ -12,13 +14,24 @@
 #include "Components/ExponentialHeightFogComponent.h"
 #include "Components/SkyAtmosphereComponent.h"
 #include "Components/SkyLightComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Components/VolumetricCloudComponent.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/ExponentialHeightFog.h"
 #include "Engine/PostProcessVolume.h"
 #include "Engine/SkyLight.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
+#include "Engine/TextureCube.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Dom/JsonObject.h"
 #include "Misc/AutomationTest.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+
+#include <limits>
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -796,6 +809,320 @@ bool FMantleEnvironmentNaturalWeatherExportTest::RunTest(const FString& Paramete
 	FMantleEnvironmentExport::Apply(Test.World, IdByActor, Place, Coverage);
 	TestFalse(TEXT("with Natural no weather is written"), Place.Settings.Environment.Weather.IsSet());
 	TestTrue(TEXT("and the report says Natural was chosen"), DetailsOf(Coverage, MantleCoverageCategory::Sky, EOutcome::Approximated).Contains(TEXT("chooses Natural")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleEnvironmentSkyLightScaleTest,
+	"Mantle.Editor.EnvironmentExport.SkyLightScale",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleEnvironmentSkyLightScaleTest::RunTest(const FString& Parameters)
+{
+	// #722: the scale on Mantle's sky light is the level's sky light's brightness over Mantle's sky at the clock's hour.
+	const double Noon = FMantleEnvironmentExport::MantleSkyMeanLuminance(12.0);
+	TestNearlyEqual(TEXT("Mantle's sky at noon is the client's measured 0.0761"), Noon, 0.0761, 1.0e-9);
+	const double Midnight = FMantleEnvironmentExport::MantleSkyMeanLuminance(0.0);
+	const double Morning = FMantleEnvironmentExport::MantleSkyMeanLuminance(9.0);
+	TestTrue(TEXT("Mantle's sky is brightest at noon"), Noon > Morning && Morning > Midnight);
+	TestTrue(TEXT("and never dark, the moon and stars are left"), Midnight > 0.0);
+
+	TestEqual(TEXT("a sky light as bright as Mantle's sky is Mantle's own"), FMantleEnvironmentExport::SkyLightScaleFor(Noon, 12.0), 1.0);
+	TestEqual(TEXT("a brighter one is held at 1"), FMantleEnvironmentExport::SkyLightScaleFor(Noon * 10.0, 12.0), 1.0);
+	TestNearlyEqual(TEXT("a dim one is its share of Mantle's sky"), FMantleEnvironmentExport::SkyLightScaleFor(Noon * 0.05, 12.0), 0.05, 1.0e-9);
+	TestTrue(TEXT("the same room is a bigger share of a darker sky"),
+		FMantleEnvironmentExport::SkyLightScaleFor(Midnight * 0.5, 0.0) > FMantleEnvironmentExport::SkyLightScaleFor(Midnight * 0.5, 12.0));
+	TestEqual(TEXT("a black capture is no sky light"), FMantleEnvironmentExport::SkyLightScaleFor(0.0, 12.0), 0.0);
+	TestEqual(TEXT("and a bad number is none"), FMantleEnvironmentExport::SkyLightScaleFor(std::numeric_limits<double>::quiet_NaN(), 12.0), 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleEnvironmentCubemapMeanTest,
+	"Mantle.Editor.EnvironmentExport.CubemapMean",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleEnvironmentCubemapMeanTest::RunTest(const FString& Parameters)
+{
+	// #722: a specified cubemap's brightness, read from its source data. Small generated cubemaps, 4 texels a side.
+	constexpr int32 Size = 4;
+	constexpr int32 Texels = Size * Size * 6;
+	TestTrue(TEXT("no cubemap is unreadable"), FMantleEnvironmentExport::CubemapMeanLuminance(nullptr, false) < 0.0);
+
+	// A float cubemap of one grey: its mean is that grey, whatever the weights.
+	UTextureCube* Float = NewObject<UTextureCube>(GetTransientPackage());
+	if (!TestNotNull(TEXT("a cubemap"), Float))
+	{
+		return false;
+	}
+	TArray<float> FloatTexels;
+	for (int32 Texel = 0; Texel < Texels; ++Texel)
+	{
+		FloatTexels.Append({ 0.5f, 0.5f, 0.5f, 1.0f });
+	}
+	Float->Source.Init(Size, Size, 6, 1, TSF_RGBA32F, reinterpret_cast<const uint8*>(FloatTexels.GetData()));
+	TestNearlyEqual(TEXT("a float cubemap of 0.5 has mean 0.5"), FMantleEnvironmentExport::CubemapMeanLuminance(Float, false), 0.5, 1.0e-4);
+	TestNearlyEqual(TEXT("with a black lower hemisphere it has a quarter of it"), FMantleEnvironmentExport::CubemapMeanLuminance(Float, true), 0.25, 1.0e-3);
+
+	// An LDR cubemap: sRGB 188 is about 0.5 linear; read as linear it is 188 / 255.
+	UTextureCube* Ldr = NewObject<UTextureCube>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an LDR cubemap"), Ldr))
+	{
+		return false;
+	}
+	TArray<uint8> LdrTexels;
+	for (int32 Texel = 0; Texel < Texels; ++Texel)
+	{
+		LdrTexels.Append({ 188, 188, 188, 255 });
+	}
+	Ldr->Source.Init(Size, Size, 6, 1, TSF_BGRA8, LdrTexels.GetData());
+	Ldr->SRGB = true;
+	TestNearlyEqual(TEXT("an sRGB cubemap is converted to linear"), FMantleEnvironmentExport::CubemapMeanLuminance(Ldr, false), 0.503, 0.01);
+	Ldr->SRGB = false;
+	TestNearlyEqual(TEXT("a linear one is not"), FMantleEnvironmentExport::CubemapMeanLuminance(Ldr, false), 188.0 / 255.0, 0.01);
+
+	// Not six faces: unreadable.
+	UTextureCube* Flat = NewObject<UTextureCube>(GetTransientPackage());
+	Flat->Source.Init(Size, Size, 1, 1, TSF_BGRA8, LdrTexels.GetData());
+	TestTrue(TEXT("a source without six faces is unreadable"), FMantleEnvironmentExport::CubemapMeanLuminance(Flat, false) < 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleEnvironmentSkyLightExportTest,
+	"Mantle.Editor.EnvironmentExport.SkyLightReport",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleEnvironmentSkyLightExportTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleEnvironmentExportTestPrivate;
+	FTestWorld Test;
+	ASkyLight* SkyLight = Test.World ? Test.Spawn<ASkyLight>(TEXT("Ambient")) : nullptr;
+	if (!TestNotNull(TEXT("a sky light"), SkyLight))
+	{
+		return false;
+	}
+	TMap<const AActor*, FString> IdByActor;
+	{
+		FMantlePlace Place;
+		FMantleCoverage Coverage;
+		FMantleEnvironmentExport::Apply(Test.World, IdByActor, Place, Coverage);
+		TestFalse(TEXT("a sky light that has not captured writes no strength"), Place.Settings.Environment.SkyLightIntensity.IsSet());
+		const FString Dropped = DetailsOf(Coverage, MantleCoverageCategory::Sky, EOutcome::Dropped);
+		TestTrue(TEXT("and the report says why"), Dropped.Contains(TEXT("could not be captured")));
+		TestFalse(TEXT("and no longer that the place has no setting for it"), Dropped.Contains(TEXT("no setting")));
+	}
+
+	// A real-time-capture sky light has an empty map on the game thread: it is captured once from a transient copy or, where
+	// nothing can render, reported as not captured. Either way the creator's light is not changed and no copy is left spawned.
+	{
+		SkyLight->GetLightComponent()->bRealTimeCapture = true;
+		FMantlePlace Place;
+		FMantleCoverage Coverage;
+		FMantleEnvironmentExport::Apply(Test.World, IdByActor, Place, Coverage);
+		TestTrue(TEXT("the creator's sky light is still real-time"), SkyLight->GetLightComponent()->bRealTimeCapture);
+		int32 SkyLights = 0;
+		for (TActorIterator<ASkyLight> It(Test.World); It; ++It)
+		{
+			++SkyLights;
+		}
+		TestEqual(TEXT("and no copy is left in the level"), SkyLights, 1);
+		SkyLight->GetLightComponent()->bRealTimeCapture = false;
+	}
+
+	// A target client that does not read the lighting keys is told so, and nothing is written.
+	FMantleTargetFeatures Old = FMantleTargetFeatures::All();
+	Old.Names.Remove(MantleClientFeatures::EnvironmentLighting);
+	const FMantleTargetFeaturesScope Scope(Old);
+	FMantlePlace OldPlace;
+	FMantleCoverage OldCoverage;
+	FMantleEnvironmentExport::Apply(Test.World, IdByActor, OldPlace, OldCoverage);
+	TestFalse(TEXT("an older client gets no sky light key"), OldPlace.Settings.Environment.SkyLightIntensity.IsSet());
+	TestTrue(TEXT("and the report says it needs a newer one"),
+		DetailsOf(OldCoverage, MantleCoverageCategory::Sky, EOutcome::Dropped).Contains(FMantleTargetFeatures::NeedsNewerClient));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleEnvironmentCastsShadowTest,
+	"Mantle.Editor.EnvironmentExport.CastsShadowInPlace",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleEnvironmentCastsShadowTest::RunTest(const FString& Parameters)
+{
+	UStaticMeshComponent* Mesh = NewObject<UStaticMeshComponent>(GetTransientPackage());
+	if (!TestNotNull(TEXT("a mesh component"), Mesh))
+	{
+		return false;
+	}
+	TestFalse(TEXT("no component casts nothing"), FMantleEnvironmentExport::CastsShadowInPlace(nullptr));
+	TestTrue(TEXT("a mesh at the engine's defaults casts a shadow"), FMantleEnvironmentExport::CastsShadowInPlace(Mesh));
+	Mesh->bCastDynamicShadow = false;
+	TestTrue(TEXT("one that casts the baked light's static shadow alone still does in a place, which has no baked light"),
+		FMantleEnvironmentExport::CastsShadowInPlace(Mesh));
+	Mesh->bCastStaticShadow = false;
+	TestFalse(TEXT("one with neither does not"), FMantleEnvironmentExport::CastsShadowInPlace(Mesh));
+	Mesh->bCastDynamicShadow = true;
+	Mesh->CastShadow = false;
+	TestFalse(TEXT("and Cast Shadow off is none whatever the others say"), FMantleEnvironmentExport::CastsShadowInPlace(Mesh));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleEnvironmentSunShadeTest,
+	"Mantle.Editor.EnvironmentExport.DirectSun",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleEnvironmentSunShadeTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleEnvironmentExportTestPrivate;
+	FTestWorld Test;
+	UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (!TestNotNull(TEXT("a test world"), Test.World) || !TestNotNull(TEXT("the engine's cube"), Cube))
+	{
+		return false;
+	}
+	const FVector TowardSun = FVector(0.3, 0.2, 0.9).GetSafeNormal();
+	const TArray<FVector> Points = { FVector::ZeroVector, FVector(300.0, 0.0, 0.0) };
+	TestFalse(TEXT("under open sky the sun reaches the points"), FMantleEnvironmentExport::IsShadedFromSun(Test.World, TowardSun, Points));
+	TestFalse(TEXT("and with no points there is nothing to shade"), FMantleEnvironmentExport::IsShadedFromSun(Test.World, TowardSun, TArray<FVector>()));
+
+	// A flat roof, a hundred metres wide, six metres up.
+	AStaticMeshActor* Roof = Test.World->SpawnActor<AStaticMeshActor>(FVector(0.0, 0.0, 600.0), FRotator::ZeroRotator);
+	if (!TestNotNull(TEXT("a roof"), Roof))
+	{
+		return false;
+	}
+	Roof->SetMobility(EComponentMobility::Movable);
+	UStaticMeshComponent* RoofMesh = Roof->GetStaticMeshComponent();
+	RoofMesh->SetStaticMesh(Cube);
+	Roof->SetActorScale3D(FVector(400.0, 400.0, 1.0));
+	RoofMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	RoofMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	TestTrue(TEXT("a shadow-casting roof shades them"), FMantleEnvironmentExport::IsShadedFromSun(Test.World, TowardSun, Points));
+	TestFalse(TEXT("unless one of the points is outside it"),
+		FMantleEnvironmentExport::IsShadedFromSun(Test.World, TowardSun, { FVector::ZeroVector, FVector(900000.0, 0.0, 0.0) }));
+
+	RoofMesh->SetCastShadow(false);
+	TestFalse(TEXT("a roof that casts no shadow in the place lets the sun in, so the sun is kept"),
+		FMantleEnvironmentExport::IsShadedFromSun(Test.World, TowardSun, Points));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleEnvironmentLightingKeysTest,
+	"Mantle.Editor.EnvironmentExport.LightingKeys",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleEnvironmentLightingKeysTest::RunTest(const FString& Parameters)
+{
+	// The place settings actor's choices (#722): the strength it sets, and Never for the sun.
+	AMantlePlaceSettingsActor* Settings = NewObject<AMantlePlaceSettingsActor>(GetTransientPackage());
+	if (!TestNotNull(TEXT("a settings actor"), Settings))
+	{
+		return false;
+	}
+	TestTrue(TEXT("an untouched actor leaves both unset"),
+		!Settings->MakeEnvironmentSettings().SkyLightIntensity.IsSet() && !Settings->MakeEnvironmentSettings().bNoDirectSun);
+	Settings->bSetSkyLightIntensity = true;
+	Settings->SkyLightIntensity = 0.25;
+	Settings->DirectSun = EMantlePlaceDirectSun::Never;
+	const FMantleEnvironmentSettings Chosen = Settings->MakeEnvironmentSettings();
+	TestTrue(TEXT("a strength is carried"), Chosen.SkyLightIntensity.IsSet() && *Chosen.SkyLightIntensity == 0.25);
+	TestTrue(TEXT("and Never is no direct sun"), Chosen.bNoDirectSun);
+	Settings->SkyLightIntensity = 5.0;
+	TestEqual(TEXT("a strength past 1 is held to it"), *Settings->MakeEnvironmentSettings().SkyLightIntensity, 1.0);
+	Settings->DirectSun = EMantlePlaceDirectSun::Always;
+	TestFalse(TEXT("Always leaves the key out"), Settings->MakeEnvironmentSettings().bNoDirectSun);
+	Settings->SetEnvironmentFrom(Chosen);
+	TestTrue(TEXT("a place file's values import into the actor"),
+		Settings->bSetSkyLightIntensity && Settings->SkyLightIntensity == 0.25 && Settings->DirectSun == EMantlePlaceDirectSun::Never);
+	Settings->SetEnvironmentFrom(FMantleEnvironmentSettings());
+	TestTrue(TEXT("and a file without them imports as unset and Automatic"),
+		!Settings->bSetSkyLightIntensity && Settings->DirectSun == EMantlePlaceDirectSun::Automatic);
+
+	// The keys written, and read back by the parser.
+	FMantlePlace Place;
+	Place.SchemaVersion = MANTLE_PLACE_SCHEMA_VERSION;
+	Place.PlaceId = TEXT("plc_lighting_keys");
+	Place.Revision.Number = 1;
+	Place.Revision.State = EMantleRevisionState::Draft;
+	Place.Metadata.Name = TEXT("Lighting keys");
+	Place.Metadata.AuthorId = TEXT("usr_test");
+	// The place file is read as JSON, not as text: how it is spaced is the writer's business.
+	auto EnvironmentOf = [](const FString& Text) -> TSharedPtr<FJsonObject>
+	{
+		TSharedPtr<FJsonObject> Root;
+		if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) && Root.IsValid())
+		{
+			const TSharedPtr<FJsonObject>* Settings = nullptr;
+			const TSharedPtr<FJsonObject>* Environment = nullptr;
+			if (Root->TryGetObjectField(TEXT("settings"), Settings) && (*Settings)->TryGetObjectField(TEXT("environment"), Environment))
+			{
+				return *Environment;
+			}
+		}
+		return nullptr;
+	};
+
+	const FString Plain = FMantlePlaceExporter::ToJson(Place);
+	const TSharedPtr<FJsonObject> PlainEnvironment = EnvironmentOf(Plain);
+	TestFalse(TEXT("a place that sets neither writes neither"),
+		PlainEnvironment.IsValid() && (PlainEnvironment->HasField(TEXT("skyLight")) || PlainEnvironment->HasField(TEXT("sun"))));
+
+	Place.Settings.Environment = Chosen;
+	const FString Json = FMantlePlaceExporter::ToJson(Place);
+	const TSharedPtr<FJsonObject> Environment = EnvironmentOf(Json);
+	if (!TestTrue(TEXT("a place that sets both writes an environment block"), Environment.IsValid()))
+	{
+		return false;
+	}
+	const TSharedPtr<FJsonObject>* SkyLight = nullptr;
+	if (TestTrue(TEXT("with skyLight"), Environment->TryGetObjectField(TEXT("skyLight"), SkyLight)))
+	{
+		TestEqual(TEXT("and its intensity"), (*SkyLight)->GetNumberField(TEXT("intensity")), 0.25);
+	}
+	const TSharedPtr<FJsonObject>* Sun = nullptr;
+	if (TestTrue(TEXT("and sun"), Environment->TryGetObjectField(TEXT("sun"), Sun)))
+	{
+		TestTrue(TEXT("with direct false"), (*Sun)->HasTypedField<EJson::Boolean>(TEXT("direct")) && !(*Sun)->GetBoolField(TEXT("direct")));
+	}
+	auto InEnvironment = [](const FMantleParseError& Error) { return Error.Path.StartsWith(TEXT("/settings/environment")); };
+	const FMantleParseResult Parsed = FMantlePlaceParser::ParseFromString(Json);
+	TestFalse(TEXT("the parser has no complaint about the environment block"), Parsed.Errors.ContainsByPredicate(InEnvironment));
+	TestTrue(TEXT("it reads the strength back"), Parsed.Place.Settings.Environment.SkyLightIntensity.IsSet() && *Parsed.Place.Settings.Environment.SkyLightIntensity == 0.25);
+	TestTrue(TEXT("and the sun"), Parsed.Place.Settings.Environment.bNoDirectSun);
+
+	// Refused: a scale past 1, a sun that is not a bool and a key the block does not know. Each edits the parsed file and writes it again.
+	auto Refused = [&Json](const TFunctionRef<void(const TSharedPtr<FJsonObject>& Environment)>& Edit)
+	{
+		TSharedPtr<FJsonObject> Root;
+		FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Root);
+		const TSharedPtr<FJsonObject>* Settings = nullptr;
+		const TSharedPtr<FJsonObject>* Env = nullptr;
+		Root->TryGetObjectField(TEXT("settings"), Settings);
+		(*Settings)->TryGetObjectField(TEXT("environment"), Env);
+		Edit(*Env);
+		FString Edited;
+		FJsonSerializer::Serialize(Root.ToSharedRef(), TJsonWriterFactory<>::Create(&Edited));
+		return FMantlePlaceParser::ParseFromString(Edited).Errors.ContainsByPredicate([](const FMantleParseError& Error)
+		{
+			return Error.Path.StartsWith(TEXT("/settings/environment"));
+		});
+	};
+	TestTrue(TEXT("an intensity of 1.5 is refused"), Refused([](const TSharedPtr<FJsonObject>& Env)
+	{
+		Env->GetObjectField(TEXT("skyLight"))->SetNumberField(TEXT("intensity"), 1.5);
+	}));
+	TestTrue(TEXT("a direct of \"no\" is refused"), Refused([](const TSharedPtr<FJsonObject>& Env)
+	{
+		Env->GetObjectField(TEXT("sun"))->SetStringField(TEXT("direct"), TEXT("no"));
+	}));
+	TestTrue(TEXT("an unknown key is refused"), Refused([](const TSharedPtr<FJsonObject>& Env)
+	{
+		Env->GetObjectField(TEXT("skyLight"))->SetNumberField(TEXT("colour"), 1.0);
+	}));
+	TestFalse(TEXT("and the unedited file is not"), Refused([](const TSharedPtr<FJsonObject>&) {}));
 	return true;
 }
 

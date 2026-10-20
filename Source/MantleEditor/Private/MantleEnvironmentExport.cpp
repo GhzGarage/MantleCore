@@ -13,6 +13,7 @@
 
 #include "Components/DirectionalLightComponent.h"
 #include "Components/ExponentialHeightFogComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkyAtmosphereComponent.h"
 #include "Components/SkyLightComponent.h"
@@ -22,10 +23,16 @@
 #include "Engine/PostProcessVolume.h"
 #include "Engine/Scene.h"
 #include "Engine/SkyLight.h"
+#include "Engine/TextureCube.h"
+#include "CollisionQueryParams.h"
+#include "Misc/App.h"
+#include "RenderingThread.h"
+#include "SceneInterface.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInterface.h"
+#include "Math/SHMath.h"
 #include "UObject/UnrealType.h"
 
 // Named, not anonymous: MantleEditor builds as a unity build.
@@ -42,6 +49,26 @@ namespace MantleEnvironmentExportPrivate
 
 	/** The cloud material's coverage when it has none to read: the engine's default cloud material's. */
 	constexpr double DefaultCloudCoverage = -0.2;
+
+	/**
+	 * Mantle's sky light's mean luminance at noon, in the units SkyLightMeanLuminance reads: the average radiance of a sky light
+	 * capturing Mantle's open sky, at its full intensity. Measured in the client (#722) over 9 captures (0.07600 to 0.07607, clear
+	 * weather, clock at 12, time scale 0) with this same formula: the irradiance map's integral luminance / 4 pi x Intensity x
+	 * Indirect Lighting Intensity x the light colour's luminance.
+	 */
+	constexpr double MantleSkyMeanLuminanceAtNoon = 0.0761;
+
+	/** Mantle's sky's mean luminance at night, as a share of noon's: the moon and the stars. */
+	constexpr double MantleSkyNightShare = 0.02;
+
+	/** A scale this close to 1 is Mantle's own sky light, so it is not written. */
+	constexpr double SkyLightScaleUnchanged = 0.995;
+
+	/** How far above a spawn point the sun's way is traced from, in cm: about a player's eye. */
+	constexpr double SunProbeHeight = 150.0;
+
+	/** How far the sun's way is traced, in cm: past any level's roof. */
+	constexpr double SunProbeDistance = 500000.0;
 
 	/** The names a bucket lists, at most this many a sentence. */
 	constexpr int32 MaxNamesListed = 6;
@@ -259,6 +286,218 @@ namespace MantleEnvironmentExportPrivate
 		}
 		Coverage.Add(Cat::Lights, EOutcome::Approximated, Sun->Name,
 			FString::Printf(TEXT("Mantle drives the sun's angle; its %s are kept, and %s."), *FString::Join(Carried, TEXT(", ")), *Angle));
+	}
+
+	/**
+	 * A one-off capture of Source's scene, for a sky light whose own capture is not readable here: with real-time capture on, the
+	 * irradiance map stays empty on the game thread, and a light that has not captured has none. The creator's level is left as it
+	 * is: a transient copy (real-time capture off, the same capture settings) is spawned at the light, captured into Out
+	 * and destroyed. False when it cannot be done: no renderer, no scene, or a cubemap source, which is not captured.
+	 */
+	bool CaptureCopyOf(const USkyLightComponent* Source, FSHVectorRGB3& Out)
+	{
+		UWorld* World = Source->GetWorld();
+		if (!World || !World->Scene || !FApp::CanEverRender() || Source->SourceType != SLS_CapturedScene)
+		{
+			return false;
+		}
+		FActorSpawnParameters Params;
+		Params.ObjectFlags = RF_Transient;
+		Params.bTemporaryEditorActor = true;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		ASkyLight* Copy = World->SpawnActor<ASkyLight>(Source->GetComponentLocation(), FRotator::ZeroRotator, Params);
+		USkyLightComponent* Light = Copy ? Copy->GetLightComponent() : nullptr;
+		if (!Light)
+		{
+			return false;
+		}
+		Light->SkyDistanceThreshold = Source->SkyDistanceThreshold;
+		Light->bLowerHemisphereIsBlack = Source->bLowerHemisphereIsBlack;
+		Light->LowerHemisphereColor = Source->LowerHemisphereColor;
+		Light->bCaptureEmissiveOnly = Source->bCaptureEmissiveOnly;
+		Light->CubemapResolution = Source->CubemapResolution;
+		float AverageBrightness = 1.0f;
+		FLinearColor* NoColorScale = nullptr;
+		World->Scene->UpdateSkyCaptureContents(Light, Light->bCaptureEmissiveOnly, nullptr, nullptr, AverageBrightness, Out, nullptr, NoColorScale);
+		// Wait until the render thread has written Out.
+		FlushRenderingCommands();
+		World->DestroyActor(Copy);
+		return true;
+	}
+
+	/** One texel of a cubemap's source data as linear colour; false for a format not handled. */
+	bool ReadSourceTexel(const uint8* Texel, const ETextureSourceFormat Format, const bool bSRGB, FLinearColor& Out)
+	{
+		switch (Format)
+		{
+		case TSF_BGRA8:
+		{
+			const FColor Color(Texel[2], Texel[1], Texel[0], Texel[3]);
+			Out = bSRGB ? FLinearColor(Color) : Color.ReinterpretAsLinear();
+			return true;
+		}
+		case TSF_BGRE8:
+			// Red, green and blue share the exponent in the fourth byte.
+			Out = FColor(Texel[2], Texel[1], Texel[0], Texel[3]).FromRGBE();
+			return true;
+		case TSF_RGBA16:
+		{
+			uint16 Channels[4];
+			FMemory::Memcpy(Channels, Texel, sizeof(Channels));
+			Out = FLinearColor(Channels[0] / 65535.0f, Channels[1] / 65535.0f, Channels[2] / 65535.0f, 1.0f);
+			return true;
+		}
+		case TSF_RGBA16F:
+		{
+			FFloat16 Channels[4];
+			FMemory::Memcpy(Channels, Texel, sizeof(Channels));
+			Out = FLinearColor(Channels[0].GetFloat(), Channels[1].GetFloat(), Channels[2].GetFloat(), 1.0f);
+			return true;
+		}
+		case TSF_RGBA32F:
+		{
+			float Channels[4];
+			FMemory::Memcpy(Channels, Texel, sizeof(Channels));
+			Out = FLinearColor(Channels[0], Channels[1], Channels[2], 1.0f);
+			return true;
+		}
+		default:
+			return false;
+		}
+	}
+
+	/** The actor an entity id was exported from, null when none. */
+	const AActor* ActorForEntity(const TMap<const AActor*, FString>& IdByActor, const FString& Id)
+	{
+		for (const TPair<const AActor*, FString>& Pair : IdByActor)
+		{
+			if (Pair.Value == Id)
+			{
+				return Pair.Key;
+			}
+		}
+		return nullptr;
+	}
+
+	/**
+	 * The level's first sky light as a scale on Mantle's own (#722). Sets Environment.SkyLightIntensity when it differs from
+	 * Mantle's by more than a hair and says what it did in Carried, or why not in NotCarried. Accounted is the light's component
+	 * properties the scale accounts for, so the report does not list them as lost, and Info what it found when nothing changed.
+	 */
+	void MapSkyLight(const ASkyLight* SkyLight, FMantleEnvironmentSettings& Environment, const bool bReadsLighting, FString& Carried,
+		TArray<FString>& NotCarried, TArray<FName>& Accounted, FString& Info)
+	{
+		USkyLightComponent* Component = SkyLight->GetLightComponent();
+		if (!Component)
+		{
+			return;
+		}
+		if (Environment.SkyLightIntensity.IsSet())
+		{
+			NotCarried.Add(TEXT("Sky Light (Mantle Place Settings sets its own strength, which wins)"));
+			return;
+		}
+		if (!bReadsLighting)
+		{
+			NotCarried.Add(FString::Printf(TEXT("Sky Light (%s)"), FMantleTargetFeatures::NeedsNewerClient));
+			return;
+		}
+		const double LevelMean = FMantleEnvironmentExport::SkyLightMeanLuminance(Component);
+		if (LevelMean < 0.0 && Component->SourceType == SLS_SpecifiedCubemap)
+		{
+			NotCarried.Add(TEXT("Sky Light (its cubemap's brightness could not be read from the texture's source data, so Mantle's own sky light is used at full strength)"));
+			return;
+		}
+		if (LevelMean < 0.0)
+		{
+			NotCarried.Add(TEXT("Sky Light (its scene could not be captured here, which needs the editor to render, so Mantle's own is used at full strength; export from the open editor)"));
+			return;
+		}
+		Accounted = { FName(TEXT("Intensity")), FName(TEXT("IndirectLightingIntensity")), FName(TEXT("LightColor")) };
+		const double Hour = Environment.ClockTime.Get(MantleEnvironmentDefaults::StartHour);
+		const double Scale = FMantleEnvironmentExport::SkyLightScaleFor(LevelMean, Hour);
+		if (Scale >= SkyLightScaleUnchanged)
+		{
+			Info = FString::Printf(TEXT("its brightness (%.3g) is as bright as Mantle's sky at %s, so Mantle's own is used at full strength"), LevelMean, *HourText(Hour));
+			return;
+		}
+		Environment.SkyLightIntensity = Rounded(Scale);
+		Carried = FString::Printf(TEXT("strength (%g of Mantle's sky light, from the level's sky brightness %.3g against Mantle's sky at %s)"),
+			*Environment.SkyLightIntensity, LevelMean, *HourText(Hour));
+	}
+
+	/**
+	 * Whether the level's sun lights the place (#722): no direct sun when Mantle Place Settings says Never, or (Automatic) when the
+	 * sun reaches no spawn point. Sets Environment.bNoDirectSun and reports it.
+	 */
+	void MapDirectSun(UWorld* World, const TMap<const AActor*, FString>& IdByActor, FMantlePlace& Place, FMantleCoverage& Coverage,
+		const bool bReadsLighting)
+	{
+		const FMantleEntity* Sun = Place.Entities.FindByPredicate([](const FMantleEntity& Entity) { return Entity.Type == EMantleEntityType::DirectionalLight; });
+		if (!Sun)
+		{
+			return;
+		}
+		const AMantlePlaceSettingsActor* PlaceSettings = World ? AMantlePlaceSettingsActor::Find(World) : nullptr;
+		const EMantlePlaceDirectSun Choice = PlaceSettings ? PlaceSettings->DirectSun : EMantlePlaceDirectSun::Automatic;
+		FMantleEnvironmentSettings& Environment = Place.Settings.Environment;
+		if (Choice == EMantlePlaceDirectSun::Never)
+		{
+			// MakeEnvironmentSettings already set it; a client that does not read the key would refuse it.
+			if (!bReadsLighting)
+			{
+				Environment.bNoDirectSun = false;
+				Coverage.Add(Cat::Lights, EOutcome::Dropped, Sun->Name,
+					FString::Printf(TEXT("Mantle Place Settings turns the sun off, but %s."), FMantleTargetFeatures::NeedsNewerClient));
+			}
+			else
+			{
+				Coverage.Add(Cat::Lights, EOutcome::Approximated, Sun->Name, TEXT("no direct sun: Mantle Place Settings turns the level's sun off, so only the sky lights the place."));
+			}
+			return;
+		}
+		if (Choice == EMantlePlaceDirectSun::Always)
+		{
+			return;
+		}
+
+		const ADirectionalLight* SunActor = Cast<ADirectionalLight>(ActorForEntity(IdByActor, Sun->Id));
+		const UDirectionalLightComponent* Light = SunActor ? Cast<UDirectionalLightComponent>(SunActor->GetLightComponent()) : nullptr;
+		if (!Light || Light->Intensity <= 0.0f)
+		{
+			return;
+		}
+		const FVector TowardSun = -SunActor->GetActorForwardVector();
+		// A sun at or below the horizon is the clock's night, which has no sun to keep out.
+		if (TowardSun.Z <= FMath::Sin(FMath::DegreesToRadians(MinSunElevationDegrees)))
+		{
+			return;
+		}
+		TArray<FVector> Points;
+		for (const FMantleEntity& Entity : Place.Entities)
+		{
+			if (Entity.Type == EMantleEntityType::PlayerStart)
+			{
+				if (const AActor* Start = ActorForEntity(IdByActor, Entity.Id))
+				{
+					Points.Add(Start->GetActorLocation());
+				}
+			}
+		}
+		if (!FMantleEnvironmentExport::IsShadedFromSun(World, TowardSun, Points))
+		{
+			return;
+		}
+		if (!bReadsLighting)
+		{
+			Coverage.Add(Cat::Lights, EOutcome::Dropped, Sun->Name,
+				FString::Printf(TEXT("the sun reaches no spawn point (%d of them), so the place would have no direct sun, but %s."), Points.Num(), FMantleTargetFeatures::NeedsNewerClient));
+			return;
+		}
+		Environment.bNoDirectSun = true;
+		Coverage.Add(Cat::Lights, EOutcome::Approximated, Sun->Name,
+			FString::Printf(TEXT("no direct sun: the sun reaches none of the level's %d spawn point(s), as in the editor's baked lighting, so only the sky lights the place; "
+				"set Direct Sun to Always in Mantle Place Settings to keep it."), Points.Num()));
 	}
 
 	/** The volume with the highest priority wins, an unbound one before a bounded one. */
@@ -706,6 +945,151 @@ bool FMantleEnvironmentExport::ExposureFor(const FPostProcessSettings* Settings,
 	return true;
 }
 
+double FMantleEnvironmentExport::MantleSkyMeanLuminance(const double Hour)
+{
+	using namespace MantleEnvironmentExportPrivate;
+	const double Peak = FMath::Sin(FMath::DegreesToRadians(MantleEnvironmentDefaults::PeakElevationDegrees));
+	const double SunUp = FMath::Clamp(FMantleSkyClock::SunDirection(Hour, 0.0).Z / Peak, 0.0, 1.0);
+	return MantleSkyMeanLuminanceAtNoon * (MantleSkyNightShare + (1.0 - MantleSkyNightShare) * SunUp);
+}
+
+double FMantleEnvironmentExport::SkyLightScaleFor(const double LevelMeanLuminance, const double Hour)
+{
+	if (!FMath::IsFinite(LevelMeanLuminance) || LevelMeanLuminance <= 0.0)
+	{
+		return 0.0;
+	}
+	return FMath::Clamp(LevelMeanLuminance / MantleSkyMeanLuminance(Hour), 0.0, 1.0);
+}
+
+double FMantleEnvironmentExport::CubemapMeanLuminance(UTextureCube* Cubemap, const bool bLowerHemisphereBlack)
+{
+	using namespace MantleEnvironmentExportPrivate;
+	constexpr int32 TargetTexelsPerSide = 32;
+	if (!Cubemap)
+	{
+		return -1.0;
+	}
+	FTextureSource& Source = Cubemap->Source;
+	const int32 Size = static_cast<int32>(Source.GetSizeX());
+	const ETextureSourceFormat Format = Source.GetFormat(0);
+	if (!Source.IsValid() || Source.GetNumSlices() != 6 || Size <= 0 || Size != Source.GetSizeY() || Source.GetNumLayers() != 1
+		|| Format == TSF_Invalid)
+	{
+		return -1.0;
+	}
+	const int64 BytesPerTexel = FTextureSource::GetBytesPerPixel(Format);
+	const uint8* Data = Source.LockMipReadOnly(0, 0, 0);
+	if (!Data)
+	{
+		return -1.0;
+	}
+	const int64 SliceBytes = Source.CalcMipSize(0, 0, 0) / 6;
+	const bool bSRGB = Source.GetGammaSpace(0) != EGammaSpace::Linear;
+	const int32 Step = FMath::Max(1, Size / TargetTexelsPerSide);
+	double Sum = 0.0;
+	double Weights = 0.0;
+	bool bReadable = true;
+	for (int32 Face = 0; Face < 6 && bReadable; ++Face)
+	{
+		for (int32 Y = Step / 2; Y < Size && bReadable; Y += Step)
+		{
+			for (int32 X = Step / 2; X < Size; X += Step)
+			{
+				// The solid angle a texel covers on the unit cube, up to a constant: (1 + u^2 + v^2)^-1.5.
+				const double U = (X + 0.5) / Size * 2.0 - 1.0;
+				const double V = (Y + 0.5) / Size * 2.0 - 1.0;
+				const double Weight = FMath::Pow(1.0 + U * U + V * V, -1.5);
+				// Faces are +X, -X, +Y, -Y, +Z, -Z, the side faces upright: the lower half is the rows past the middle.
+				const bool bBlack = bLowerHemisphereBlack && (Face == 5 || (Face < 4 && Y >= Size / 2));
+				if (!bBlack)
+				{
+					FLinearColor Color;
+					if (!ReadSourceTexel(Data + Face * SliceBytes + (static_cast<int64>(Y) * Size + X) * BytesPerTexel, Format, bSRGB, Color))
+					{
+						bReadable = false;
+						break;
+					}
+					Sum += Weight * Color.GetLuminance();
+				}
+				Weights += Weight;
+			}
+		}
+	}
+	Source.UnlockMip(0, 0, 0);
+	if (!bReadable || Weights <= 0.0)
+	{
+		return -1.0;
+	}
+	return Sum / Weights;
+}
+
+double FMantleEnvironmentExport::SkyLightMeanLuminance(USkyLightComponent* Component)
+{
+	if (!Component)
+	{
+		return -1.0;
+	}
+	if (Component->SourceType == SLS_SpecifiedCubemap)
+	{
+		const double CubemapMean = CubemapMeanLuminance(Component->Cubemap, Component->bLowerHemisphereIsBlack);
+		if (CubemapMean <= 0.0 || !FMath::IsFinite(CubemapMean))
+		{
+			return -1.0;
+		}
+		return CubemapMean * Component->Intensity * Component->IndirectLightingIntensity * static_cast<double>(Component->GetLightColor().GetLuminance());
+	}
+	// The zeroth coefficient integrates to the radiance's total over the sphere; the mean is that over the sphere's 4 pi.
+	auto MeanOf = [](FSHVectorRGB3 Radiance)
+	{
+		return static_cast<double>(Radiance.CalcIntegral().GetLuminance()) / (4.0 * UE_DOUBLE_PI);
+	};
+	double Mean = MeanOf(Component->GetIrradianceEnvironmentMap());
+	FSHVectorRGB3 OneOff;
+	if ((!FMath::IsFinite(Mean) || Mean <= 0.0) && MantleEnvironmentExportPrivate::CaptureCopyOf(Component, OneOff))
+	{
+		// A real-time capture's map is empty here, and so is one that never captured: take it from a one-off capture.
+		Mean = MeanOf(OneOff);
+	}
+	if (!FMath::IsFinite(Mean) || Mean <= 0.0)
+	{
+		// All zero is a light that could not be captured: a dark room's capture still has its walls' light.
+		return -1.0;
+	}
+	return Mean * Component->Intensity * Component->IndirectLightingIntensity * static_cast<double>(Component->GetLightColor().GetLuminance());
+}
+
+bool FMantleEnvironmentExport::CastsShadowInPlace(const UPrimitiveComponent* Component)
+{
+	return Component && Component->CastShadow && (Component->bCastDynamicShadow || Component->bCastStaticShadow);
+}
+
+bool FMantleEnvironmentExport::IsShadedFromSun(UWorld* World, const FVector& TowardSun, const TArray<FVector>& Points)
+{
+	using namespace MantleEnvironmentExportPrivate;
+	const FVector Direction = TowardSun.GetSafeNormal();
+	if (!World || Points.Num() == 0 || Direction.IsNearlyZero())
+	{
+		return false;
+	}
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(MantleSunProbe), /*bTraceComplex*/ true);
+	for (const FVector& Point : Points)
+	{
+		const FVector Start = Point + FVector(0.0, 0.0, SunProbeHeight);
+		FHitResult Hit;
+		if (!World->LineTraceSingleByChannel(Hit, Start, Start + Direction * SunProbeDistance, ECC_Visibility, Params))
+		{
+			return false;
+		}
+		const UPrimitiveComponent* Blocker = Hit.GetComponent();
+		if (!Blocker || !Blocker->IsVisible() || !CastsShadowInPlace(Blocker))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 EMantleWeatherState FMantleEnvironmentExport::WeatherForCloudCoverage(const double CloudGlobalCoverage)
 {
 	using namespace MantleEnvironmentDefaults;
@@ -812,6 +1196,7 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 {
 	using namespace MantleEnvironmentExportPrivate;
 	const bool bReadsEnvironment = FMantleTargetFeatures::Current().Reads(MantleClientFeatures::EnvironmentDefaults);
+	const bool bReadsLighting = FMantleTargetFeatures::Current().Reads(MantleClientFeatures::EnvironmentLighting);
 	FMantleEnvironmentSettings& Environment = Place.Settings.Environment;
 
 	TArray<const ASkyAtmosphere*> Atmospheres;
@@ -856,6 +1241,7 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 	const bool bHasEnvironment = bHasSun || Atmospheres.Num() > 0 || SkyLights.Num() > 0 || Clouds.Num() > 0 || Fogs.Num() > 0 || Volumes.Num() > 0;
 
 	MapSun(IdByActor, Place, Coverage, bReadsEnvironment);
+	MapDirectSun(World, IdByActor, Place, Coverage, bReadsLighting);
 	MapPostProcess(Volumes, Environment, Coverage, bReadsEnvironment, bHasEnvironment, FMantleExposureProject::Current());
 
 	// The weather. A level with a sky of its own (an atmosphere, clouds, a sky light or a sun) has one look, so the place's
@@ -920,10 +1306,26 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 		ReportLook(Coverage, Cat::Sky, LabelOf(Atmosphere), false, FString(), TunedProperties(Atmosphere->GetComponent()),
 			TEXT("Mantle supplies its own sky atmosphere (the place has no setting for it)"));
 	}
-	for (const ASkyLight* SkyLight : SkyLights)
+	for (int32 Index = 0; Index < SkyLights.Num(); ++Index)
 	{
-		ReportLook(Coverage, Cat::Sky, LabelOf(SkyLight), false, FString(),
-			TunedProperties(SkyLight->GetLightComponent(), { FName(TEXT("bRealTimeCapture")) }), TEXT("Mantle supplies its own sky light (the place has no setting for it)"));
+		const ASkyLight* SkyLight = SkyLights[Index];
+		FString Carried;
+		TArray<FString> NotCarried;
+		TArray<FName> Accounted = { FName(TEXT("bRealTimeCapture")) };
+		FString Extra;
+		if (Index == 0)
+		{
+			TArray<FName> Mapped;
+			MapSkyLight(SkyLight, Environment, bReadsLighting, Carried, NotCarried, Mapped, Extra);
+			Accounted.Append(Mapped);
+		}
+		else
+		{
+			Extra = FString::Printf(TEXT("the place carries the level's first sky light's (%s) strength"), *LabelOf(SkyLights[0]));
+		}
+		NotCarried.Append(TunedProperties(SkyLight->GetLightComponent(), Accounted));
+		ReportLook(Coverage, Cat::Sky, LabelOf(SkyLight), !Carried.IsEmpty(), Carried, NotCarried,
+			TEXT("Mantle supplies its own sky light (the place carries only its strength, as a scale on Mantle's)"), Extra);
 	}
 	for (const AVolumetricCloud* Cloud : Clouds)
 	{

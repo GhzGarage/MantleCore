@@ -7,6 +7,9 @@
 class AActor;
 class FMantleCoverage;
 class UObject;
+class UPrimitiveComponent;
+class USkyLightComponent;
+class UTextureCube;
 class UWorld;
 struct FPostProcessSettings;
 
@@ -62,13 +65,18 @@ struct MANTLEEDITOR_API FMantleExposureProject
  *   the project's own compensation and the range when the volume overrides one;
  * - the level's first height fog's density, height falloff, inscattering colours and start distance as the place's fog,
  *   the keys that differ from Mantle's own fog;
+ * - the level's sky light as a scale on Mantle's own (settings.environment.skyLight.intensity, #722): the captured scene's
+ *   average brightness against Mantle's sky at the clock's hour (SkyLightScaleFor), so a closed room is not lit by an
+ *   outdoor sky;
+ * - no direct sun (settings.environment.sun.direct false, #722) for a level whose spawn points are all in the shade of its own
+ *   shadow-casting meshes (IsShadedFromSun): a sealed room with a baked sun, which the editor shows with no sun inside;
  * - the weather, held: the volumetric cloud's coverage as Clear, PartlyCloudy or Overcast, or Clear when the level has a sky
  *   (atmosphere, sky light or sun) but no cloud. A level with a sky of its own is never left to the natural weather, which
  *   would rain on a level that never did; the creator chooses another Weather in Mantle Place Settings.
  *
  * A value Mantle Place Settings sets explicitly wins over the level's actor: Place.Settings.Environment already holds
  * what the settings actor set (only what differs from the default is set), and Apply fills only the keys it left
- * unset. The sky light, atmosphere, the fog's other settings and the post-process's contrast and the rest have no key in
+ * unset. The sky light's colour, atmosphere, the fog's other settings and the post-process's contrast and the rest have no key in
  * the place, so they are not carried; the report says so. The exposure is written only for a level with an environment
  * of its own (a sun, sky, fog or post-process volume), as the weather is. Nothing is written for a target client that does not read
  * settings.environment (FMantleTargetFeatures).
@@ -114,6 +122,50 @@ public:
 	 */
 	static bool ExposureFor(const FPostProcessSettings* Settings, const FMantleExposureProject& Project, FMantleExposureSettings& Out,
 		TArray<FString>& Carried, TArray<FString>& Notes);
+
+	/**
+	 * The scale (0 to 1) on Mantle's sky light that makes it as bright as a level's own, from the level's sky light's average
+	 * brightness (LevelMeanLuminance: the captured sky's mean radiance, times the light's intensity and colour) and Mantle's sky
+	 * at the clock's Hour: Mantle's mean is MantleSkyMeanLuminanceAtNoon at noon, falling with the sun's elevation to a
+	 * floor at night. The ratio, clamped to 0..1: a sky light as bright as Mantle's open sky (or brighter) is 1, Mantle's own.
+	 */
+	static double SkyLightScaleFor(double LevelMeanLuminance, double Hour);
+
+	/** Mantle's sky's mean luminance at Hour, in the units of SkyLightMeanLuminance. */
+	static double MantleSkyMeanLuminance(double Hour);
+
+	/**
+	 * A sky light's average brightness: for a captured scene the mean radiance over the sphere (the zeroth spherical harmonic of
+	 * the capture, taken from a one-off capture when the light's own is not readable), for a specified cubemap that cubemap's
+	 * mean (CubemapMeanLuminance), as a luminance, times the light's intensity, indirect lighting intensity and colour. Negative
+	 * when it cannot be read (a capture is a render-thread result a headless export may not have).
+	 */
+	static double SkyLightMeanLuminance(USkyLightComponent* Component);
+
+	/**
+	 * The mean luminance over the sphere of a cubemap's source data (#722): the six faces sampled on a grid of about 32 texels a
+	 * side, each texel weighted by the solid angle it covers, linear (an sRGB source is converted; RGBE and float sources are
+	 * read as they are). The mean does not depend on the sky light's cubemap angle. With bLowerHemisphereBlack the faces' lower
+	 * half is counted as black, as the sky light's Lower Hemisphere Is Black does (the side faces' lower rows, and the -Z face).
+	 * Negative when the source cannot be read: no cubemap, no source data, not six square faces or a format not handled
+	 * (BGRA8, BGRE8, RGBA16, RGBA16F, RGBA32F).
+	 */
+	static double CubemapMeanLuminance(UTextureCube* Cubemap, bool bLowerHemisphereBlack);
+
+	/**
+	 * True when the sun, shining from TowardSun (a unit vector from the world to the sun), is blocked at every one of
+	 * Points (a point a player stands at; each is raised a little) by a mesh that casts a shadow in the place and is visible:
+	 * the sun reaches none of them. False for no points, and for a point whose way to the sun is open, or blocked by
+	 * something that would not shade it in Mantle (an invisible collision volume): a sun is never turned off on a doubt.
+	 */
+	static bool IsShadedFromSun(UWorld* World, const FVector& TowardSun, const TArray<FVector>& Points);
+
+	/**
+	 * Whether a mesh component casts a shadow in a place. Mantle lights everything dynamically, so a mesh the editor shades
+	 * with a light's baked (static) shadow alone still casts one there: the flag is Cast Shadow with either of the dynamic or
+	 * static shadows on. Without this a sealed room's ceiling could let the sun in.
+	 */
+	static bool CastsShadowInPlace(const UPrimitiveComponent* Component);
 
 	/** The place's weather that has the cloud cover a cloud material's coverage value gives: Clear, PartlyCloudy or Overcast. */
 	static EMantleWeatherState WeatherForCloudCoverage(double CloudGlobalCoverage);

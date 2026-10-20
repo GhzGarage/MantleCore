@@ -81,6 +81,21 @@ enum class EMantlePlaceWeather : uint8
 };
 
 /**
+ * Whether the level's sun lights the place (#722), the place file's settings.environment.sun.direct. Automatic and
+ * Always both leave the key out; Never writes false.
+ */
+UENUM()
+enum class EMantlePlaceDirectSun : uint8
+{
+	/** The export decides: no direct sun when no spawn point is in the sun's light (a sealed room), the level's sun otherwise. */
+	Automatic,
+	/** The level's sun lights the place, whatever the export finds. */
+	Always,
+	/** No direct sun: only the sky lights the place. */
+	Never,
+};
+
+/**
  * The colour-grading preset a place starts in (#532), the place file's
  * settings.environment.colorGrading. None is the key left out; the rest are Environment.ColorGrading's
  * presets, numbered as MantleEnvironmentOverrideValues numbers them.
@@ -247,6 +262,25 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Mantle|Environment")
 	EMantlePlaceWeather Weather = EMantlePlaceWeather::LevelSky;
+
+	/** Set the sky light's strength with Sky Light Intensity instead of letting the export estimate it from the level's sky light. */
+	UPROPERTY(EditAnywhere, Category = "Mantle|Environment", meta = (InlineEditConditionToggle))
+	bool bSetSkyLightIntensity = false;
+
+	/**
+	 * How strongly Mantle's own sky light shines: 1 is its full outdoor sky, 0 none. An indoor level wants it low, or its
+	 * walls are lit by a sky the level does not show. Left unset, the export estimates it from the level's sky light.
+	 * Places that set it need a Mantle client that reads the sky light setting to load.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Mantle|Environment", meta = (EditCondition = "bSetSkyLightIntensity", ClampMin = "0", ClampMax = "1", UIMin = "0", UIMax = "1"))
+	double SkyLightIntensity = 1.0;
+
+	/**
+	 * Whether the level's sun lights the place. Automatic turns it off for a level whose spawn points are all in the shade
+	 * of its own meshes (a sealed room), as the editor's baked lighting shows it; Always and Never decide it yourself.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Mantle|Environment")
+	EMantlePlaceDirectSun DirectSun = EMantlePlaceDirectSun::Automatic;
 
 	/** A colour multiplied over the whole picture. White leaves it unchanged. */
 	UPROPERTY(EditAnywhere, Category = "Mantle|Environment", meta = (HideAlphaChannel))
