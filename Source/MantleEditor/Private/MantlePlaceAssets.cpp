@@ -1833,7 +1833,7 @@ void FMantlePlaceDependencies::AddSoundComponent(const UAudioComponent* Audio, c
 void FMantlePlaceDependencies::AddSound(const USoundBase* Sound, const FString& Label)
 {
 	// A Sound Cue uploads as the sound wave it publishes as (#818).
-	USoundWave* Wave = const_cast<USoundWave*>(Cast<USoundWave>(PublishedSound(Sound)));
+	USoundWave* Wave = const_cast<USoundWave*>(Cast<USoundWave>(FMantlePlaceAssets::PublishedSound(Sound)));
 	// MetaSounds (a procedural wave) and generated waves are not uploads: Check says why.
 	if (!Wave || Wave->IsA<USoundWaveProcedural>() || FMantlePlaceAssets::IsLibraryAsset(Wave))
 	{
