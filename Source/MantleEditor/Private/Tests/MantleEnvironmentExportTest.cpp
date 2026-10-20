@@ -22,6 +22,7 @@
 #include "Engine/SkyLight.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
+#include "Engine/TextureCube.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Misc/AutomationTest.h"
@@ -829,6 +830,57 @@ bool FMantleEnvironmentSkyLightScaleTest::RunTest(const FString& Parameters)
 		FMantleEnvironmentExport::SkyLightScaleFor(Midnight * 0.5, 0.0) > FMantleEnvironmentExport::SkyLightScaleFor(Midnight * 0.5, 12.0));
 	TestEqual(TEXT("a black capture is no sky light"), FMantleEnvironmentExport::SkyLightScaleFor(0.0, 12.0), 0.0);
 	TestEqual(TEXT("and a bad number is none"), FMantleEnvironmentExport::SkyLightScaleFor(std::numeric_limits<double>::quiet_NaN(), 12.0), 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleEnvironmentCubemapMeanTest,
+	"Mantle.Editor.EnvironmentExport.CubemapMean",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleEnvironmentCubemapMeanTest::RunTest(const FString& Parameters)
+{
+	// #722: a specified cubemap's brightness, read from its source data. Small generated cubemaps, 4 texels a side.
+	constexpr int32 Size = 4;
+	constexpr int32 Texels = Size * Size * 6;
+	TestTrue(TEXT("no cubemap is unreadable"), FMantleEnvironmentExport::CubemapMeanLuminance(nullptr, false) < 0.0);
+
+	// A float cubemap of one grey: its mean is that grey, whatever the weights.
+	UTextureCube* Float = NewObject<UTextureCube>(GetTransientPackage());
+	if (!TestNotNull(TEXT("a cubemap"), Float))
+	{
+		return false;
+	}
+	TArray<float> FloatTexels;
+	for (int32 Texel = 0; Texel < Texels; ++Texel)
+	{
+		FloatTexels.Append({ 0.5f, 0.5f, 0.5f, 1.0f });
+	}
+	Float->Source.Init(Size, Size, 6, 1, TSF_RGBA32F, reinterpret_cast<const uint8*>(FloatTexels.GetData()));
+	TestNearlyEqual(TEXT("a float cubemap of 0.5 has mean 0.5"), FMantleEnvironmentExport::CubemapMeanLuminance(Float, false), 0.5, 1.0e-4);
+	TestNearlyEqual(TEXT("with a black lower hemisphere it has a quarter of it"), FMantleEnvironmentExport::CubemapMeanLuminance(Float, true), 0.25, 1.0e-3);
+
+	// An LDR cubemap: sRGB 188 is about 0.5 linear; read as linear it is 188 / 255.
+	UTextureCube* Ldr = NewObject<UTextureCube>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an LDR cubemap"), Ldr))
+	{
+		return false;
+	}
+	TArray<uint8> LdrTexels;
+	for (int32 Texel = 0; Texel < Texels; ++Texel)
+	{
+		LdrTexels.Append({ 188, 188, 188, 255 });
+	}
+	Ldr->Source.Init(Size, Size, 6, 1, TSF_BGRA8, LdrTexels.GetData());
+	Ldr->SRGB = true;
+	TestNearlyEqual(TEXT("an sRGB cubemap is converted to linear"), FMantleEnvironmentExport::CubemapMeanLuminance(Ldr, false), 0.503, 0.01);
+	Ldr->SRGB = false;
+	TestNearlyEqual(TEXT("a linear one is not"), FMantleEnvironmentExport::CubemapMeanLuminance(Ldr, false), 188.0 / 255.0, 0.01);
+
+	// Not six faces: unreadable.
+	UTextureCube* Flat = NewObject<UTextureCube>(GetTransientPackage());
+	Flat->Source.Init(Size, Size, 1, 1, TSF_BGRA8, LdrTexels.GetData());
+	TestTrue(TEXT("a source without six faces is unreadable"), FMantleEnvironmentExport::CubemapMeanLuminance(Flat, false) < 0.0);
 	return true;
 }
 

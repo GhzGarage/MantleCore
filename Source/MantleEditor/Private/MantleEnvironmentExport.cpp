@@ -23,6 +23,7 @@
 #include "Engine/PostProcessVolume.h"
 #include "Engine/Scene.h"
 #include "Engine/SkyLight.h"
+#include "Engine/TextureCube.h"
 #include "CollisionQueryParams.h"
 #include "Misc/App.h"
 #include "RenderingThread.h"
@@ -324,6 +325,47 @@ namespace MantleEnvironmentExportPrivate
 		return true;
 	}
 
+	/** One texel of a cubemap's source data as linear colour; false for a format not handled. */
+	bool ReadSourceTexel(const uint8* Texel, const ETextureSourceFormat Format, const bool bSRGB, FLinearColor& Out)
+	{
+		switch (Format)
+		{
+		case TSF_BGRA8:
+		{
+			const FColor Color(Texel[2], Texel[1], Texel[0], Texel[3]);
+			Out = bSRGB ? FLinearColor(Color) : Color.ReinterpretAsLinear();
+			return true;
+		}
+		case TSF_BGRE8:
+			// Red, green and blue share the exponent in the fourth byte.
+			Out = FColor(Texel[2], Texel[1], Texel[0], Texel[3]).FromRGBE();
+			return true;
+		case TSF_RGBA16:
+		{
+			uint16 Channels[4];
+			FMemory::Memcpy(Channels, Texel, sizeof(Channels));
+			Out = FLinearColor(Channels[0] / 65535.0f, Channels[1] / 65535.0f, Channels[2] / 65535.0f, 1.0f);
+			return true;
+		}
+		case TSF_RGBA16F:
+		{
+			FFloat16 Channels[4];
+			FMemory::Memcpy(Channels, Texel, sizeof(Channels));
+			Out = FLinearColor(Channels[0].GetFloat(), Channels[1].GetFloat(), Channels[2].GetFloat(), 1.0f);
+			return true;
+		}
+		case TSF_RGBA32F:
+		{
+			float Channels[4];
+			FMemory::Memcpy(Channels, Texel, sizeof(Channels));
+			Out = FLinearColor(Channels[0], Channels[1], Channels[2], 1.0f);
+			return true;
+		}
+		default:
+			return false;
+		}
+	}
+
 	/** The actor an entity id was exported from, null when none. */
 	const AActor* ActorForEntity(const TMap<const AActor*, FString>& IdByActor, const FString& Id)
 	{
@@ -360,12 +402,12 @@ namespace MantleEnvironmentExportPrivate
 			NotCarried.Add(FString::Printf(TEXT("Sky Light (%s)"), FMantleTargetFeatures::NeedsNewerClient));
 			return;
 		}
-		if (Component->SourceType != SLS_CapturedScene)
+		const double LevelMean = FMantleEnvironmentExport::SkyLightMeanLuminance(Component);
+		if (LevelMean < 0.0 && Component->SourceType == SLS_SpecifiedCubemap)
 		{
-			NotCarried.Add(TEXT("Sky Light (its cubemap's brightness is not read, so Mantle's own sky light is used at full strength)"));
+			NotCarried.Add(TEXT("Sky Light (its cubemap's brightness could not be read from the texture's source data, so Mantle's own sky light is used at full strength)"));
 			return;
 		}
-		const double LevelMean = FMantleEnvironmentExport::SkyLightMeanLuminance(Component);
 		if (LevelMean < 0.0)
 		{
 			NotCarried.Add(TEXT("Sky Light (its scene could not be captured here, which needs the editor to render, so Mantle's own is used at full strength; export from the open editor)"));
@@ -380,7 +422,7 @@ namespace MantleEnvironmentExportPrivate
 			return;
 		}
 		Environment.SkyLightIntensity = Rounded(Scale);
-		Carried = FString::Printf(TEXT("strength (%g of Mantle's sky light, from the captured scene's brightness %.3g against Mantle's sky at %s)"),
+		Carried = FString::Printf(TEXT("strength (%g of Mantle's sky light, from the level's sky brightness %.3g against Mantle's sky at %s)"),
 			*Environment.SkyLightIntensity, LevelMean, *HourText(Hour));
 	}
 
@@ -920,11 +962,82 @@ double FMantleEnvironmentExport::SkyLightScaleFor(const double LevelMeanLuminanc
 	return FMath::Clamp(LevelMeanLuminance / MantleSkyMeanLuminance(Hour), 0.0, 1.0);
 }
 
+double FMantleEnvironmentExport::CubemapMeanLuminance(UTextureCube* Cubemap, const bool bLowerHemisphereBlack)
+{
+	using namespace MantleEnvironmentExportPrivate;
+	constexpr int32 TargetTexelsPerSide = 32;
+	if (!Cubemap)
+	{
+		return -1.0;
+	}
+	FTextureSource& Source = Cubemap->Source;
+	const int32 Size = static_cast<int32>(Source.GetSizeX());
+	const ETextureSourceFormat Format = Source.GetFormat(0);
+	if (!Source.IsValid() || Source.GetNumSlices() != 6 || Size <= 0 || Size != Source.GetSizeY() || Source.GetNumLayers() != 1
+		|| Format == TSF_Invalid)
+	{
+		return -1.0;
+	}
+	const int64 BytesPerTexel = FTextureSource::GetBytesPerPixel(Format);
+	const uint8* Data = Source.LockMipReadOnly(0, 0, 0);
+	if (!Data)
+	{
+		return -1.0;
+	}
+	const int64 SliceBytes = Source.CalcMipSize(0, 0, 0) / 6;
+	const bool bSRGB = Source.GetGammaSpace(0) != EGammaSpace::Linear;
+	const int32 Step = FMath::Max(1, Size / TargetTexelsPerSide);
+	double Sum = 0.0;
+	double Weights = 0.0;
+	bool bReadable = true;
+	for (int32 Face = 0; Face < 6 && bReadable; ++Face)
+	{
+		for (int32 Y = Step / 2; Y < Size && bReadable; Y += Step)
+		{
+			for (int32 X = Step / 2; X < Size; X += Step)
+			{
+				// The solid angle a texel covers on the unit cube, up to a constant: (1 + u^2 + v^2)^-1.5.
+				const double U = (X + 0.5) / Size * 2.0 - 1.0;
+				const double V = (Y + 0.5) / Size * 2.0 - 1.0;
+				const double Weight = FMath::Pow(1.0 + U * U + V * V, -1.5);
+				// Faces are +X, -X, +Y, -Y, +Z, -Z, the side faces upright: the lower half is the rows past the middle.
+				const bool bBlack = bLowerHemisphereBlack && (Face == 5 || (Face < 4 && Y >= Size / 2));
+				if (!bBlack)
+				{
+					FLinearColor Color;
+					if (!ReadSourceTexel(Data + Face * SliceBytes + (static_cast<int64>(Y) * Size + X) * BytesPerTexel, Format, bSRGB, Color))
+					{
+						bReadable = false;
+						break;
+					}
+					Sum += Weight * Color.GetLuminance();
+				}
+				Weights += Weight;
+			}
+		}
+	}
+	Source.UnlockMip(0, 0, 0);
+	if (!bReadable || Weights <= 0.0)
+	{
+		return -1.0;
+	}
+	return Sum / Weights;
+}
+
 double FMantleEnvironmentExport::SkyLightMeanLuminance(USkyLightComponent* Component)
 {
 	if (!Component)
 	{
 		return -1.0;
+	}
+	if (Component->SourceType == SLS_SpecifiedCubemap)
+	{
+		const double CubemapMean = CubemapMeanLuminance(Component->Cubemap, Component->bLowerHemisphereIsBlack);
+		if (CubemapMean <= 0.0 || !FMath::IsFinite(CubemapMean))
+		{
+			return -1.0;
+		}
+		return CubemapMean * Component->Intensity * Component->IndirectLightingIntensity * static_cast<double>(Component->GetLightColor().GetLuminance());
 	}
 	// The zeroth coefficient integrates to the radiance's total over the sphere; the mean is that over the sphere's 4 pi.
 	auto MeanOf = [](FSHVectorRGB3 Radiance)

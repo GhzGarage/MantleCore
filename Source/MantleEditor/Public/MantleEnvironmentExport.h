@@ -9,6 +9,7 @@ class FMantleCoverage;
 class UObject;
 class UPrimitiveComponent;
 class USkyLightComponent;
+class UTextureCube;
 class UWorld;
 struct FPostProcessSettings;
 
@@ -134,11 +135,22 @@ public:
 	static double MantleSkyMeanLuminance(double Hour);
 
 	/**
-	 * A sky light's average brightness as the editor captured it: the mean radiance over the sphere (the zeroth spherical
-	 * harmonic of the capture) as a luminance, times the light's intensity, indirect lighting intensity and colour. Negative when
-	 * the light has not captured (a capture is a render-thread result a headless export may not have).
+	 * A sky light's average brightness: for a captured scene the mean radiance over the sphere (the zeroth spherical harmonic of
+	 * the capture, taken from a one-off capture when the light's own is not readable), for a specified cubemap that cubemap's
+	 * mean (CubemapMeanLuminance), as a luminance, times the light's intensity, indirect lighting intensity and colour. Negative
+	 * when it cannot be read (a capture is a render-thread result a headless export may not have).
 	 */
 	static double SkyLightMeanLuminance(USkyLightComponent* Component);
+
+	/**
+	 * The mean luminance over the sphere of a cubemap's source data (#722): the six faces sampled on a grid of about 32 texels a
+	 * side, each texel weighted by the solid angle it covers, linear (an sRGB source is converted; RGBE and float sources are
+	 * read as they are). The mean does not depend on the sky light's cubemap angle. With bLowerHemisphereBlack the faces' lower
+	 * half is counted as black, as the sky light's Lower Hemisphere Is Black does (the side faces' lower rows, and the -Z face).
+	 * Negative when the source cannot be read: no cubemap, no source data, not six square faces or a format not handled
+	 * (BGRA8, BGRE8, RGBA16, RGBA16F, RGBA32F).
+	 */
+	static double CubemapMeanLuminance(UTextureCube* Cubemap, bool bLowerHemisphereBlack);
 
 	/**
 	 * True when the sun, shining from TowardSun (a unit vector from the world to the sun), is blocked at every one of
