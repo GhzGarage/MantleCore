@@ -146,8 +146,8 @@ bool FMantlePlaceInstancingGroupTest::RunTest(const FString& Parameters)
 		{
 			const FTransform Expected = MakeMesh(TEXT("x"), MeshA, FVector(Index * 250.0, Index * 40.0, 10.0)).Transform;
 			TestTrue(*FString::Printf(TEXT("instance %d keeps its location"), Index), Groups[0].WorldInstances[Index].GetLocation().Equals(Expected.GetLocation(), 1.0e-9));
-			TestTrue(*FString::Printf(TEXT("rotation"), Index), Groups[0].WorldInstances[Index].GetRotation().Equals(Expected.GetRotation(), 1.0e-9));
-			TestTrue(*FString::Printf(TEXT("and scale"), Index), Groups[0].WorldInstances[Index].GetScale3D().Equals(Expected.GetScale3D(), 1.0e-9));
+			TestTrue(*FString::Printf(TEXT("instance %d keeps its rotation"), Index), Groups[0].WorldInstances[Index].GetRotation().Equals(Expected.GetRotation(), 1.0e-9));
+			TestTrue(*FString::Printf(TEXT("instance %d keeps its scale"), Index), Groups[0].WorldInstances[Index].GetScale3D().Equals(Expected.GetScale3D(), 1.0e-9));
 		}
 
 		// Cut into entities, each instance is at its place again: the anchor plus where the entity puts it.
