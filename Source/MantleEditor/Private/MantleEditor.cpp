@@ -28,6 +28,7 @@
 #include "MantlePlaceSettingsActor.h"
 #include "MantlePlaceThumbnail.h"
 #include "MantlePlacePreview.h"
+#include "MantleCheck.h"
 #include "MantlePlaceValidator.h"
 #include "MantlePublishPanel.h"
 #include "MantleReferenceBodies.h"
@@ -103,7 +104,9 @@ namespace
 	void OnValidate()
 	{
 		UWorld* World = CurrentEditorWorld();
-		const FMantleValidationResult Validation = FMantlePlaceValidator::Validate(World);
+		FMantleValidationResult Validation = FMantlePlaceValidator::Validate(World);
+		// GhzGarage/mantle#818: the place file as Publish would write it, against the 8 MiB the backend takes (and the instance limit).
+		FMantleCheck::AppendPlaceBudget(World, Validation);
 
 		for (const FMantleValidationIssue& Issue : Validation.Issues)
 		{

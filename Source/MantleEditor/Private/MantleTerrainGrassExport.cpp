@@ -702,7 +702,7 @@ FMantleTerrainGrass FMantleTerrainGrassExport::MakeGrass(const FMantleGrassEntry
 	return Out;
 }
 
-void FMantleTerrainGrassExport::WriteJson(const TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>>& Writer, const TArray<FMantleTerrainGrass>& Grass)
+void FMantleTerrainGrassExport::WriteJson(const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>>& Writer, const TArray<FMantleTerrainGrass>& Grass)
 {
 	if (Grass.IsEmpty())
 	{

@@ -5,7 +5,11 @@
 #include "MantleRuntime.h"
 
 #include "Engine/World.h"
+#include "EngineDefines.h"
 #include "WorldPartition/WorldPartition.h"
+#include "HAL/PlatformMemory.h"
+#include "WorldPartition/LoaderAdapter/LoaderAdapterShape.h"
+#include "WorldPartition/WorldPartitionEditorLoaderAdapter.h"
 #include "WorldPartition/WorldPartitionHelpers.h"
 #if WITH_EDITOR
 #include "WorldPartition/HLOD/HLODActor.h"
@@ -87,7 +91,7 @@ FString FMantlePlaceWorldPartition::DescribeProblem(int32 Count, const TArray<FS
 
 FString FMantlePlaceWorldPartition::DescribeRemedy()
 {
-	return TEXT("Load the whole level, then check again: in the World Partition window select every cell and choose Load Region From Selection, or turn off Enable Streaming in World Settings.");
+	return TEXT("Publish loads every cell itself. To check now, load the whole level: in the World Partition window select every cell and choose Load Region From Selection, or turn off Enable Streaming in World Settings.");
 }
 
 void FMantlePlaceWorldPartition::CheckLevel(UWorld* World, TArray<FMantleValidationIssue>& OutIssues)
@@ -119,4 +123,71 @@ void FMantlePlaceWorldPartition::CheckExport(UWorld* World, TArray<FMantleParseE
 	OutErrors.Add(FMantleParseError{
 		TEXT("/worldPartition"),
 		DescribeProblem(Count, Examples) + TEXT(" ") + DescribeRemedy() });
+}
+
+FMantlePlaceWorldPartition::FLoadResult FMantlePlaceWorldPartition::LoadAll(UWorld* World)
+{
+	FLoadResult Result;
+#if WITH_EDITOR
+	if (!IsValid(World) || World->IsGameWorld())
+	{
+		return Result;
+	}
+	UWorldPartition* WorldPartition = World->GetWorldPartition();
+	if (!WorldPartition || !WorldPartition->IsInitialized())
+	{
+		return Result;
+	}
+	TArray<FString> Examples;
+	Result.UnloadedBefore = CountUnloaded(GatherEntries(World), Examples);
+	if (Result.UnloadedBefore == 0)
+	{
+		return Result;
+	}
+
+	Result.CommitBeforeMB = static_cast<int64>(FPlatformMemory::GetStats().UsedVirtual >> 20);
+	UE_LOG(LogMantle, Log, TEXT("World Partition: loading %d actors in unloaded cells for the publish (committed memory %lld MB)"),
+		Result.UnloadedBefore, Result.CommitBeforeMB);
+	// The same adapter the World Partition window's Load Region makes, over the whole world.
+	UWorldPartitionEditorLoaderAdapter* Adapter = WorldPartition->CreateEditorLoaderAdapter<FLoaderAdapterShape>(
+		World, FBox(FVector(-HALF_WORLD_MAX), FVector(HALF_WORLD_MAX)), TEXT("Mantle publish"));
+	Adapter->GetLoaderAdapter()->Load();
+	Result.Adapter = Adapter;
+
+	Result.UnloadedAfter = CountUnloaded(GatherEntries(World), Examples);
+	Result.CommitAfterMB = static_cast<int64>(FPlatformMemory::GetStats().UsedVirtual >> 20);
+	UE_LOG(LogMantle, Log, TEXT("World Partition: %s"), *DescribeLoad(Result));
+#endif
+	return Result;
+}
+
+void FMantlePlaceWorldPartition::ReleaseLoaded(UWorld* World, FLoadResult& Result)
+{
+#if WITH_EDITOR
+	UWorldPartitionEditorLoaderAdapter* Adapter = Cast<UWorldPartitionEditorLoaderAdapter>(Result.Adapter.Get());
+	Result.Adapter.Reset();
+	if (!Adapter)
+	{
+		return;
+	}
+	if (IsValid(World))
+	{
+		if (UWorldPartition* WorldPartition = World->GetWorldPartition())
+		{
+			WorldPartition->ReleaseEditorLoaderAdapter(Adapter);
+			UE_LOG(LogMantle, Log, TEXT("World Partition: let go of the cells the publish loaded"));
+		}
+	}
+#endif
+}
+
+FString FMantlePlaceWorldPartition::DescribeLoad(const FLoadResult& Result)
+{
+	FString Text = FString::Printf(TEXT("Loaded %d World Partition actors in cells that were not loaded, so they publish with the rest (committed memory %lld MB, was %lld MB)."),
+		Result.Loaded(), Result.CommitAfterMB, Result.CommitBeforeMB);
+	if (Result.UnloadedAfter > 0)
+	{
+		Text += FString::Printf(TEXT(" %d actors are still not loaded (a data layer that is off, or a cell that would not load)."), Result.UnloadedAfter);
+	}
+	return Text;
 }

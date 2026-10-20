@@ -117,7 +117,7 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/PhysicsConstraintActor.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
-#include "Policies/PrettyJsonPrintPolicy.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -163,8 +163,8 @@ namespace MantlePlaceExporterUploads
 
 namespace
 {
-	using FWriter = TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>;
-	using FWriterFactory = TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>;
+	using FWriter = TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>;
+	using FWriterFactory = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>;
 
 
 	FString SanitiseId(const FString& In)
@@ -2837,6 +2837,22 @@ namespace
 	/** Below this an instance's scale is written as zero, which the schema refuses. */
 	constexpr double GExporterMinInstanceScale = 0.00005;
 
+	/**
+	 * Whether Owner is the level's painted foliage (an InstancedFoliageActor, by class name: MantleEditor does not link the Foliage
+	 * module). Thinning takes these instances first (GhzGarage/mantle#818).
+	 */
+	bool ExporterIsFoliageOwner(const AActor* Owner)
+	{
+		for (const UClass* Class = Owner ? Owner->GetClass() : nullptr; Class; Class = Class->GetSuperClass())
+		{
+			if (Class->GetFName() == TEXT("InstancedFoliageActor"))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	FString ExporterLabelOf(const AActor* Actor)
 	{
 		return Actor->GetActorLabel();
@@ -3430,6 +3446,11 @@ FString FMantlePlaceExporter::InstancedGroupKey(const FMantleStaticMeshProps& Me
 	return Key;
 }
 
+FString FMantlePlaceExporter::InstancedEntityIdPrefix(const FMantleStaticMeshProps& Mesh)
+{
+	return FString::Printf(TEXT("ent_ism_%s_"), *ExporterMd5Hex(InstancedGroupKey(Mesh)).Left(24));
+}
+
 TArray<FMantleEntity> FMantlePlaceExporter::ChunkInstancedMeshes(const TArray<FMantleInstancedMeshGroup>& Groups, int32 MaxPerEntity)
 {
 	TArray<FMantleEntity> Entities;
@@ -3468,7 +3489,7 @@ TArray<FMantleEntity> FMantlePlaceExporter::ChunkInstancedMeshes(const TArray<FM
 		}
 		Order.StableSort([](const TPair<uint64, int32>& A, const TPair<uint64, int32>& B) { return A.Key < B.Key; });
 
-		const FString KeyHash = ExporterMd5Hex(InstancedGroupKey(Group->Mesh)).Left(24);
+		const FString IdPrefix = InstancedEntityIdPrefix(Group->Mesh);
 		const int32 Chunks = (Instances.Num() + MaxPerEntity - 1) / MaxPerEntity;
 		for (int32 Chunk = 0; Chunk < Chunks; ++Chunk)
 		{
@@ -3493,7 +3514,7 @@ TArray<FMantleEntity> FMantlePlaceExporter::ChunkInstancedMeshes(const TArray<FM
 			}
 
 			FMantleEntity Entity;
-			Entity.Id = FString::Printf(TEXT("ent_ism_%s_%d"), *KeyHash, Chunk);
+			Entity.Id = FString::Printf(TEXT("%s%d"), *IdPrefix, Chunk);
 			Entity.Type = EMantleEntityType::InstancedMesh;
 			Entity.Name = FString::Printf(TEXT("%s (instanced %d/%d)"), *Group->MeshName, Chunk + 1, Chunks)
 				.Left(FMantlePlaceLimits::MaxEntityNameLength);
@@ -3858,10 +3879,12 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 	// material set across the whole level in world space, then cut into entities of at most
 	// MaxInstancesPerEntity. Meshes and materials go through the library or the upload path exactly
 	// as a StaticMesh's do.
+	// Whether the place is over its instance limit is decided at the end (GhzGarage/mantle#818), once thinning, if asked for, has run.
+	// GhzGarage/mantle#818: the ids of the instanced entities painted foliage made, which thinning takes from first.
+	TSet<FString> ThinFirstIds;
 	{
 		TArray<FMantleInstancedMeshGroup> Groups;
 		TMap<FString, int32> GroupByKey;
-		int64 InstanceTotal = 0;
 		for (const UInstancedStaticMeshComponent* Component : CollectInstanceSources(World))
 		{
 			const AActor* Owner = Component->GetOwner();
@@ -3887,10 +3910,12 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 			FMantleStaticMeshProps Mesh;
 			ExporterReadMeshComponent(Component, SourcePath, ReferencedAssets, Uploads, Result.Errors, Mesh);
 			const FString Key = InstancedGroupKey(Mesh);
+			const bool bFoliage = ExporterIsFoliageOwner(Owner);
 			int32 GroupIndex = INDEX_NONE;
 			if (const int32* Found = GroupByKey.Find(Key))
 			{
 				GroupIndex = *Found;
+				Groups[GroupIndex].bThinFirst = Groups[GroupIndex].bThinFirst && bFoliage;
 			}
 			else
 			{
@@ -3899,6 +3924,7 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 				FMantleInstancedMeshGroup& Added = Groups.AddDefaulted_GetRef();
 				Added.Mesh = Mesh;
 				Added.MeshName = Component->GetStaticMesh()->GetName();
+				Added.bThinFirst = bFoliage;
 			}
 
 			TArray<FTransform>& Instances = Groups[GroupIndex].WorldInstances;
@@ -3912,32 +3938,51 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 					Instances.Add(ExporterNormalizeInstance(Instance));
 				}
 			}
-			InstanceTotal += Count;
 		}
 
-		if (InstanceTotal > FMantlePlaceLimits::MaxInstancesPerPlace)
+		// GhzGarage/mantle#818: static mesh actors that are the same mesh with the same materials become one instance set (the
+		// scratch grouping pass of Medieval Village), so a prop-heavy map is a few hundred entities, not thousands.
+		if (Options.bGroupStaticMeshes)
 		{
-			Result.Errors.Add(FMantleParseError{
-				TEXT("/entities"),
-				FString::Printf(
-					TEXT("This level has %lld instanced meshes (foliage, PCG output, instanced components); a place holds at most %d. Thin them out, or split the world into more than one place."),
-					InstanceTotal, FMantlePlaceLimits::MaxInstancesPerPlace) });
-		}
-		else
-		{
-			for (FMantleEntity& Entity : ChunkInstancedMeshes(Groups, FMantlePlaceLimits::MaxInstancesPerEntity))
+			Result.Grouping = FMantlePlaceInstancing::GroupStaticMeshes(Place, Groups);
+			if (Result.Grouping.Actors > 0)
 			{
-				// Hashed ids don't collide with guid-based ones in practice; if one ever does, the
-				// later entity is suffixed rather than failing the publish, as MakeEntityId does.
-				const FString Base = Entity.Id;
-				int32 Suffix = 2;
-				while (UsedIds.Contains(Entity.Id))
-				{
-					Entity.Id = FString::Printf(TEXT("%s_%d"), *Base.Left(36), Suffix++);
-				}
-				UsedIds.Add(Entity.Id);
-				Place.Entities.Add(MoveTemp(Entity));
+				Result.Coverage.Add(MantleCoverageCategory::StaticMeshes, EMantleCoverageOutcome::Approximated, TEXT("identical mesh actors"),
+					FString::Printf(TEXT("%d actors that share a mesh and materials were published as %d instance sets: each keeps its place, rotation and scale, but they are no longer separate named objects."),
+						Result.Grouping.Actors, Result.Grouping.Sets),
+					Result.Grouping.Actors);
+				UE_LOG(LogMantle, Log, TEXT("Grouped %d identical static mesh actors into %d instance sets"), Result.Grouping.Actors, Result.Grouping.Sets);
 			}
+		}
+
+		TSet<FString> FoliagePrefixes;
+		for (const FMantleInstancedMeshGroup& Group : Groups)
+		{
+			if (Group.bThinFirst)
+			{
+				FoliagePrefixes.Add(InstancedEntityIdPrefix(Group.Mesh));
+			}
+		}
+		for (FMantleEntity& Entity : ChunkInstancedMeshes(Groups, FMantlePlaceLimits::MaxInstancesPerEntity))
+		{
+			// Hashed ids don't collide with guid-based ones in practice; if one ever does, the
+			// later entity is suffixed rather than failing the publish, as MakeEntityId does.
+			const FString Base = Entity.Id;
+			int32 Suffix = 2;
+			while (UsedIds.Contains(Entity.Id))
+			{
+				Entity.Id = FString::Printf(TEXT("%s_%d"), *Base.Left(36), Suffix++);
+			}
+			UsedIds.Add(Entity.Id);
+			for (const FString& Prefix : FoliagePrefixes)
+			{
+				if (Base.StartsWith(Prefix))
+				{
+					ThinFirstIds.Add(Entity.Id);
+					break;
+				}
+			}
+			Place.Entities.Add(MoveTemp(Entity));
 		}
 	}
 
@@ -4730,6 +4775,39 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 	// #628: the level's sun, sky, fog, clouds and post-process, mapped onto what the place can say about its look, and
 	// reported. Before the survey, which leaves those actors and the first sun to it.
 	FMantleEnvironmentExport::Apply(World, IdByActor, Place, Result.Coverage);
+
+	// GhzGarage/mantle#818: the place file's size and instance count against what the backend takes. Over a limit, the creator is
+	// told with the fix (even thinning, with its numbers); the instances are removed only when thinning was asked for.
+	{
+		Result.InstanceTotal = FMantlePlaceInstancing::CountInstances(Place);
+		Result.PlaceBytes = FMantlePlaceInstancing::PlaceBytes(Place);
+		if (Result.InstanceTotal > FMantlePlaceLimits::MaxInstancesPerPlace || Result.PlaceBytes > FMantlePlaceLimits::MaxPlaceFileBytes)
+		{
+			const int64 InstancesBefore = Result.InstanceTotal;
+			const int64 BytesBefore = Result.PlaceBytes;
+			const FMantleThinReport Thin = FMantlePlaceInstancing::ThinToFit(
+				Place, ThinFirstIds, FMantlePlaceLimits::MaxInstancesPerPlace, FMantlePlaceLimits::MaxPlaceFileBytes, Options.bThinInstances);
+			if (Options.bThinInstances)
+			{
+				Result.Thinning = Thin;
+				Result.InstanceTotal = Thin.InstancesAfter;
+				Result.PlaceBytes = Thin.BytesAfter;
+				UE_LOG(LogMantle, Log, TEXT("%s"), *Thin.Describe());
+			}
+			else
+			{
+				Result.ThinPreview = Thin;
+			}
+			if (!Options.bThinInstances || !Thin.bFits)
+			{
+				Result.bOverBudget = true;
+				Result.BudgetProblem = FMantlePlaceInstancing::DescribeOverBudget(InstancesBefore, FMantlePlaceLimits::MaxInstancesPerPlace,
+					BytesBefore, FMantlePlaceLimits::MaxPlaceFileBytes, Thin);
+				Result.Errors.Add(FMantleParseError{ TEXT("/entities"), Result.BudgetProblem });
+			}
+		}
+		Result.bSuccess = Result.Errors.Num() == 0;
+	}
 
 	// #628: the coverage report, last, errors or not: what was kept, approximated and dropped, by category.
 	FMantleCoverageSurvey::Run(World, Result);

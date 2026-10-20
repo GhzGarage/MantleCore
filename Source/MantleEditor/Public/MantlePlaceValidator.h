@@ -84,7 +84,11 @@ struct FMantleValidationResult
 class MANTLEEDITOR_API FMantlePlaceValidator
 {
 public:
-	static FMantleValidationResult Validate(UWorld* World);
+	/**
+	 * bThinInstances: the creator chose even thinning (GhzGarage/mantle#818), so a level over the instance limit is a note, not an error;
+	 * Export removes the instances.
+	 */
+	static FMantleValidationResult Validate(UWorld* World, bool bThinInstances = false);
 
 	/**
 	 * The revision notes a Publish sends, held to the schema's limit (#393). Not part of Validate,

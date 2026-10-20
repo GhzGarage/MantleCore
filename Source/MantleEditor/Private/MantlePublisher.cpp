@@ -131,9 +131,9 @@ FString FMantlePublisher::MakePublishBody(const FString& Notes)
 	return Body;
 }
 
-FMantlePublishResult FMantlePublisher::PublishToCloud(UWorld* World, const FString& Notes, const double MaxBlockingSeconds)
+FMantlePublishResult FMantlePublisher::PublishToCloud(UWorld* World, const FString& Notes, const double MaxBlockingSeconds, const bool bThinInstances)
 {
-	return Run(World, /*bGoLive*/ true, Notes, MaxBlockingSeconds);
+	return Run(World, /*bGoLive*/ true, Notes, MaxBlockingSeconds, bThinInstances);
 }
 
 FString FMantlePublisher::DescribeWait(const double Seconds)
@@ -171,7 +171,7 @@ FMantlePublishResult FMantlePublisher::RunToEnd(const TSharedRef<FMantlePlacePub
 	return Session->GetResult();
 }
 
-FMantlePublishResult FMantlePublisher::Run(UWorld* World, bool bGoLive, const FString& Notes, const double MaxBlockingSeconds)
+FMantlePublishResult FMantlePublisher::Run(UWorld* World, bool bGoLive, const FString& Notes, const double MaxBlockingSeconds, const bool bThinInstances)
 {
 	FMantlePublishResult Result;
 
@@ -191,8 +191,10 @@ FMantlePublishResult FMantlePublisher::Run(UWorld* World, bool bGoLive, const FS
 	// The same session the editor's Publish runs in the background, run to the end here:
 	// one implementation of the flow, whoever starts it. The editor is not ticking while this
 	// runs, so the HTTP manager is driven directly, as FMantleApiClient::Send does.
+	const TSharedRef<FMantleLevelPublishSource> Source = MakeShared<FMantleLevelPublishSource>(World, Notes);
+	Source->SetThinInstances(bThinInstances);
 	const TSharedRef<FMantlePlacePublishSession> Session = MakeShared<FMantlePlacePublishSession>(
-		MakeShared<FMantleLevelPublishSource>(World, Notes), MakeShared<FMantleApiUploadTransport>(), bGoLive, Notes);
+		Source, MakeShared<FMantleApiUploadTransport>(), bGoLive, Notes);
 	// A blocking run has nobody to make the rights declaration a public library item needs, so vehicles it publishes are
 	// private (as UploadCosmetic's are). Without this the Library step would wait for a choice no one can make.
 	Session->VehicleChoice.bPublic = false;

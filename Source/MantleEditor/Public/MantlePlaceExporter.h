@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "MantleCoverage.h"
+#include "MantlePlaceInstancing.h"
 #include "MantlePlaceTypes.h"
 #include "MantleScriptApiUsage.h"
 #include "MantleScriptCatalogFiles.h"
@@ -50,6 +51,9 @@ struct FMantleInstancedMeshGroup
 	FString MeshName;
 
 	TArray<FTransform> WorldInstances;
+
+	/** Painted foliage only (GhzGarage/mantle#818): the instances thinning takes first, before props and PCG output. */
+	bool bThinFirst = false;
 };
 
 /**
@@ -120,6 +124,30 @@ struct FMantleExportResult
 	 */
 	FMantleCoverage Coverage;
 
+	/** The place file's size in bytes, as ToJson writes it (GhzGarage/mantle#818), measured after grouping and any thinning. */
+	int64 PlaceBytes = 0;
+
+	/** Instanced mesh entries in the place file, after grouping and any thinning. */
+	int64 InstanceTotal = 0;
+
+	/** Static mesh actors Export folded into instance sets. */
+	FMantleGroupReport Grouping;
+
+	/** Instances removed by Options.bThinInstances. Not applied (RemovesAnything false) unless it was asked for. */
+	FMantleThinReport Thinning;
+
+	/**
+	 * When the place is over the instance limit or the file-size limit and thinning was not asked for: what thinning would do,
+	 * so Check and Publish can offer it with its numbers. Empty (RemovesAnything false) otherwise.
+	 */
+	FMantleThinReport ThinPreview;
+
+	/** Over the instance limit or the file-size limit (Errors says which, with the fix). */
+	bool bOverBudget = false;
+
+	/** The creator-facing sentence for bOverBudget, with the fix (also in Errors). */
+	FString BudgetProblem;
+
 	FString ErrorSummary() const
 	{
 		TArray<FString> Lines;
@@ -164,6 +192,19 @@ struct FMantleExportOptions
 	 * stands in, and the manifest carries the source package's provisional digest.
 	 */
 	const FMantlePlaceAssetSet* Assets = nullptr;
+
+	/**
+	 * Fold repeated identical static mesh actors into instance sets (FMantlePlaceInstancing::GroupStaticMeshes). On unless a test
+	 * wants the actors as they are.
+	 */
+	bool bGroupStaticMeshes = true;
+
+	/**
+	 * GhzGarage/mantle#818: when the place is over the instance limit or the backend's file-size limit, remove instances evenly
+	 * until it fits (FMantlePlaceInstancing::ThinToFit), and say how many in the coverage report. Off by default: nothing is ever
+	 * thinned unless the creator chose it (Thin and publish, Mantle.Publish -Thin=auto, Mantle.Check -Thin=auto).
+	 */
+	bool bThinInstances = false;
 };
 
 /**
@@ -587,6 +628,9 @@ public:
 
 	/** The key instances are grouped by: mesh id, material ids by slot, collision and shadow, and a surface other than default (#596). */
 	static FString InstancedGroupKey(const FMantleStaticMeshProps& Mesh);
+
+	/** The start of the ids ChunkInstancedMeshes gives a group's entities: "ent_ism_" and the hash of its key, then "_" (GhzGarage/mantle#818). */
+	static FString InstancedEntityIdPrefix(const FMantleStaticMeshProps& Mesh);
 
 	/**
 	 * The transform Export writes for Actor: relative to its attach parent when Export writes that

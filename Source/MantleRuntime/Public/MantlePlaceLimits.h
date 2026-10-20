@@ -53,6 +53,12 @@ struct MANTLERUNTIME_API FMantlePlaceLimits
 	 */
 	static constexpr int32 MaxInstancesPerPlace = 100000;
 
+	/**
+	 * The place file's size in bytes (GhzGarage/mantle#818): the backend's places.MaxPlaceFileBytes (8 MiB), which refuses a bigger
+	 * file at the draft save, after every asset is uploaded. Export measures the file against it so Publish can refuse first.
+	 */
+	static constexpr int64 MaxPlaceFileBytes = 8 * 1024 * 1024;
+
 	/** DirectionalLight intensity, 0 to this. */
 	static constexpr double MaxDirectionalLightIntensity = 200.0;
 

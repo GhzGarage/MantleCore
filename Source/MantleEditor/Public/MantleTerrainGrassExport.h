@@ -5,7 +5,7 @@
 #include "MantleCoverage.h"
 #include "MantlePlaceTypes.h"
 #include "MantleTerrainExport.h"
-#include "Policies/PrettyJsonPrintPolicy.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonWriter.h"
 
 class AActor;
@@ -180,5 +180,5 @@ public:
 	static FMantleTerrainGrass MakeGrass(const FMantleGrassEntryDraft& Draft, const FString& MapId, const FString& MeshId, const TArray<FString>& MaterialIds);
 
 	/** Writes the Terrain properties' "grass" array (every key of each entry, so the client builds what the editor previewed), nothing when Grass is empty. */
-	static void WriteJson(const TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>>& Writer, const TArray<FMantleTerrainGrass>& Grass);
+	static void WriteJson(const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>>& Writer, const TArray<FMantleTerrainGrass>& Grass);
 };

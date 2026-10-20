@@ -15,17 +15,38 @@ FMantleHeadlessPublish::FArgs FMantleHeadlessPublish::ParseArgs(const TArray<FSt
 	FArgs Parsed;
 	int32 First = 0;
 	static const FString TimeoutPrefix = TEXT("-TimeoutMinutes=");
-	if (Args.Num() > 0 && Args[0].StartsWith(TimeoutPrefix, ESearchCase::IgnoreCase))
+	static const FString ThinPrefix = TEXT("-Thin=");
+	// Leading options, in any order; the first word that is not one starts the notes.
+	for (; First < Args.Num(); ++First)
 	{
-		const FString Value = Args[0].RightChop(TimeoutPrefix.Len());
-		const double Minutes = Value.IsNumeric() ? FCString::Atod(*Value) : 0.0;
-		if (Minutes <= 0.0)
+		if (Args[First].StartsWith(TimeoutPrefix, ESearchCase::IgnoreCase))
 		{
-			Parsed.Error = FString::Printf(TEXT("-TimeoutMinutes wants a number of minutes above zero, not '%s'."), *Value);
-			return Parsed;
+			const FString Value = Args[First].RightChop(TimeoutPrefix.Len());
+			const double Minutes = Value.IsNumeric() ? FCString::Atod(*Value) : 0.0;
+			if (Minutes <= 0.0)
+			{
+				Parsed.Error = FString::Printf(TEXT("-TimeoutMinutes wants a number of minutes above zero, not '%s'."), *Value);
+				return Parsed;
+			}
+			Parsed.TimeoutSeconds = Minutes * 60.0;
 		}
-		Parsed.TimeoutSeconds = Minutes * 60.0;
-		First = 1;
+		else if (Args[First].StartsWith(ThinPrefix, ESearchCase::IgnoreCase))
+		{
+			const FString Value = Args[First].RightChop(ThinPrefix.Len());
+			if (Value.Equals(TEXT("auto"), ESearchCase::IgnoreCase))
+			{
+				Parsed.bThin = true;
+			}
+			else if (!Value.Equals(TEXT("off"), ESearchCase::IgnoreCase))
+			{
+				Parsed.Error = FString::Printf(TEXT("-Thin wants auto (thin foliage and instances evenly if the place is too big) or off, not '%s'."), *Value);
+				return Parsed;
+			}
+		}
+		else
+		{
+			break;
+		}
 	}
 	TArray<FString> Words;
 	for (int32 Index = First; Index < Args.Num(); ++Index)
@@ -118,11 +139,11 @@ FMantlePublishResult FMantleHeadlessPublish::Run(UWorld* World, const TArray<FSt
 		Registry.WaitForCompletion();
 	}
 
-	UE_LOG(LogMantle, Display, TEXT("MANTLE_PUBLISH_START level=%s api=%s timeout=%.0fs"),
+	UE_LOG(LogMantle, Display, TEXT("MANTLE_PUBLISH_START level=%s api=%s timeout=%.0fs thin=%s"),
 		*World->GetOutermost()->GetName(), FMantleApiClient::BaseUrlResolver ? *FMantleApiClient::BaseUrlResolver() : TEXT("(default)"),
-		Parsed.TimeoutSeconds);
+		Parsed.TimeoutSeconds, Parsed.bThin ? TEXT("auto") : TEXT("off"));
 	const double Started = FPlatformTime::Seconds();
-	Result = FMantlePublisher::PublishToCloud(World, Parsed.Notes, Parsed.TimeoutSeconds);
+	Result = FMantlePublisher::PublishToCloud(World, Parsed.Notes, Parsed.TimeoutSeconds, Parsed.bThin);
 	const double Seconds = FPlatformTime::Seconds() - Started;
 
 	for (const FMantleValidationIssue& Issue : Result.Validation.Issues)
@@ -132,6 +153,12 @@ FMantlePublishResult FMantleHeadlessPublish::Run(UWorld* World, const TArray<FSt
 	for (const FMantleValidationIssue& Issue : Result.Attention)
 	{
 		UE_LOG(LogMantle, Display, TEXT("MANTLE_PUBLISH_ATTENTION %s"), *MantleHeadlessPublishPrivate::OneLine(Issue.ToString()));
+	}
+
+	if (!Result.ThinOffer.IsEmpty())
+	{
+		UE_LOG(LogMantle, Display, TEXT("MANTLE_PUBLISH_THIN_OFFER %s Run Mantle.Publish -Thin=auto to publish it thinned."),
+			*MantleHeadlessPublishPrivate::OneLine(Result.ThinOffer));
 	}
 
 	const FString Line = OutcomeLine(Result, Seconds, FMantlePublishMemory::Sample());
@@ -150,8 +177,9 @@ namespace MantleHeadlessPublishPrivate
 {
 	FAutoConsoleCommandWithWorldAndArgs GMantlePublishCommand(
 		TEXT("Mantle.Publish"),
-		TEXT("Mantle.Publish [-TimeoutMinutes=N] [notes...] -- publishes the open level exactly like Tools > Mantle > Publish ")
+		TEXT("Mantle.Publish [-TimeoutMinutes=N] [-Thin=auto] [notes...] -- publishes the open level exactly like Tools > Mantle > Publish ")
 		TEXT("(check, convert, upload, wait for Mantle, go live), blocking the editor until it ends (default wait 30 minutes). ")
+		TEXT("-Thin=auto thins foliage and instances evenly when the place is over the instance or file-size limit (never otherwise). ")
 		TEXT("For automation; logs MANTLE_PUBLISH_DONE <placeId> <revision> or MANTLE_PUBLISH_FAILED <reason>."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{

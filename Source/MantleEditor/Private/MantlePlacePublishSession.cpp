@@ -7,6 +7,7 @@
 #include "MantleCreatorSignIn.h"
 #include "MantlePlaceExporter.h"
 #include "MantlePlaceSettingsActor.h"
+#include "MantlePlaceWorldPartition.h"
 #include "MantlePlaceStorage.h"
 #include "MantlePublishCaches.h"
 #include "MantleRuntime.h"
@@ -295,9 +296,25 @@ bool FMantleLevelPublishSource::Prepare(FMantleValidationResult& OutValidation, 
 		OutMessage = TEXT("The level being published was closed. Open it and choose Publish again; nothing is uploaded twice.");
 		return false;
 	}
+	// GhzGarage/mantle#818: a World Partition level publishes whole. Every cell is loaded first (and let go in EndPublish), so the
+	// check and the export see all of it instead of refusing the cells the editor had not loaded.
+	if (!LoadedCells.IsValid())
+	{
+		FMantlePlaceWorldPartition::FLoadResult Loaded = FMantlePlaceWorldPartition::LoadAll(Level);
+		LoadedCells = Loaded.Adapter;
+		if (Loaded.bLoaded())
+		{
+			WorldPartitionNote = FMantlePlaceWorldPartition::DescribeLoad(Loaded);
+		}
+	}
 	// Validation first. Uploading a level with unpublishable content would either lose it
 	// silently or fail server-side with a worse message.
-	OutValidation = FMantlePlaceValidator::Validate(Level);
+	OutValidation = FMantlePlaceValidator::Validate(Level, bThinInstances);
+	if (!WorldPartitionNote.IsEmpty())
+	{
+		OutValidation.Issues.Add(FMantleValidationIssue{ EMantleIssueSeverity::Warning, FString(), WorldPartitionNote,
+			TEXT("They are unloaded again when the publish ends.") });
+	}
 	// The notes travel in the place file, and the backend refuses notes past the schema's limit
 	// only at the draft save, after every upload (#393).
 	FMantlePlaceValidator::CheckRevisionNotes(Notes, OutValidation);
@@ -535,6 +552,38 @@ bool FMantleLevelPublishSource::CollectScripts(TArray<FMantlePlaceScriptUpload>&
 	return true;
 }
 
+bool FMantleLevelPublishSource::CheckPlaceSize(FMantlePlaceSizeCheck& OutCheck)
+{
+	UWorld* Level = World.Get();
+	if (!Level)
+	{
+		return true;
+	}
+	// GhzGarage/mantle#818: the place file as it would be written, with the ids an upload will give replaced by provisional ones of
+	// the same length (nothing is converted or uploaded yet). The backend refuses a file over 8 MiB only at the draft save, after
+	// every upload; this finds out first.
+	FMantleExportOptions Options;
+	Options.Name = LevelName;
+	Options.RevisionNotes = Notes;
+	Options.bThinInstances = bThinInstances;
+	const FMantleExportResult Exported = FMantlePlaceExporter::Export(Level, Options);
+	OutCheck.Bytes = Exported.PlaceBytes;
+	OutCheck.Instances = Exported.InstanceTotal;
+	UE_LOG(LogMantle, Log, TEXT("Place file before upload: %s, %lld instanced meshes%s"), *FMantlePlaceInstancing::DescribeBytes(Exported.PlaceBytes),
+		Exported.InstanceTotal, Exported.Thinning.RemovesAnything() ? *FString::Printf(TEXT(" (%s)"), *Exported.Thinning.Describe()) : TEXT(""));
+	if (!Exported.bOverBudget)
+	{
+		return true;
+	}
+	OutCheck.bOver = true;
+	OutCheck.Issues.Add({ EMantleIssueSeverity::Error, FString(), Exported.BudgetProblem, FString() });
+	if (!bThinInstances && Exported.ThinPreview.RemovesAnything() && Exported.ThinPreview.bFits)
+	{
+		OutCheck.ThinOffer = Exported.ThinPreview.Describe();
+	}
+	return false;
+}
+
 EMantlePlaceExportOutcome FMantleLevelPublishSource::Export(const FMantlePlaceAssetSet& Set, const TMap<FString, FString>& ScriptSourceIds,
 	const TMap<FString, FString>& ScriptAuthorSourceIds, FString& OutPlaceJson, TArray<FMantleValidationIssue>& OutIssues)
 {
@@ -552,6 +601,7 @@ EMantlePlaceExportOutcome FMantleLevelPublishSource::Export(const FMantlePlaceAs
 	Options.ScriptAuthorSourceIds = ScriptAuthorSourceIds;
 	Options.UIDocumentSourceIds = UIDocumentSourceIds;
 	Options.Assets = &Set;
+	Options.bThinInstances = bThinInstances;
 	const FMantleExportResult Exported = FMantlePlaceExporter::Export(Level, Options);
 	// #628: what the export kept, approximated and dropped, as MANTLE_COVERAGE lines in the log (the publish log gets it below).
 	// The materials gathered for the upload, recognised, baked or lost, join the report here: Export leaves them to whoever gathered.
@@ -585,6 +635,16 @@ EMantlePlaceExportOutcome FMantleLevelPublishSource::Export(const FMantlePlaceAs
 	// The ids scripts use for the Script Assets, which exist only once they are uploaded: the
 	// publish log names each one, and so does the settings actor's read-only list.
 	ExportNotes.Reset();
+	// GhzGarage/mantle#818: what was done to fit the place, never silently.
+	if (Exported.Grouping.Actors > 0)
+	{
+		ExportNotes.Add(FString::Printf(TEXT("Grouped %d identical mesh actors into %d instance sets"), Exported.Grouping.Actors, Exported.Grouping.Sets));
+	}
+	if (Exported.Thinning.bApplied && Exported.Thinning.RemovesAnything())
+	{
+		ExportNotes.Add(Exported.Thinning.Describe());
+	}
+	ExportNotes.Add(FString::Printf(TEXT("Place file: %s, %lld instanced meshes"), *FMantlePlaceInstancing::DescribeBytes(Exported.PlaceBytes), Exported.InstanceTotal));
 	TArray<FString> Ids;
 	for (const FMantleScriptAssetId& Asset : Exported.ScriptAssets)
 	{
@@ -894,6 +954,15 @@ void FMantleLevelPublishSource::ConversionFinished()
 void FMantleLevelPublishSource::EndPublish()
 {
 	Pins.Release();
+	// GhzGarage/mantle#818: the cells this publish loaded go again; the ones the creator loaded stay.
+	if (LoadedCells.IsValid())
+	{
+		FMantlePlaceWorldPartition::FLoadResult Loaded;
+		Loaded.Adapter = LoadedCells;
+		FMantlePlaceWorldPartition::ReleaseLoaded(World.Get(), Loaded);
+		LoadedCells.Reset();
+	}
+	WorldPartitionNote.Reset();
 }
 
 // =============================================================================================
@@ -1255,6 +1324,23 @@ void FMantlePlacePublishSession::TickChecking()
 	{
 		Fail(FString::Printf(TEXT("This place has %d problem(s) to fix first."), Result.Validation.NumErrors()));
 		return;
+	}
+	// GhzGarage/mantle#818: a place the backend would refuse at the end is refused here, before anything is converted or uploaded.
+	if (!bSizeChecked)
+	{
+		bSizeChecked = true;
+		FMantlePlaceSizeCheck Size;
+		if (!Source->CheckPlaceSize(Size))
+		{
+			Result.Validation.Issues.Append(Size.Issues);
+			Result.ThinOffer = Size.ThinOffer;
+			AddLog(FString::Printf(TEXT("The place file would be %s with %lld instanced meshes"), *FMantlePlaceInstancing::DescribeBytes(Size.Bytes), Size.Instances));
+			Fail(FString::Printf(TEXT("This place is too big for Mantle (%s, %lld instanced meshes). Nothing was prepared or uploaded.%s"),
+				*FMantlePlaceInstancing::DescribeBytes(Size.Bytes), Size.Instances,
+				Size.ThinOffer.IsEmpty() ? TEXT("") : TEXT(" Thinning the foliage evenly would fix it; the list below says how many go.")));
+			return;
+		}
+		AddLog(FString::Printf(TEXT("Place file size checked: %s, %lld instanced meshes"), *FMantlePlaceInstancing::DescribeBytes(Size.Bytes), Size.Instances));
 	}
 	ConversionTotal = Source->NumConversionSteps();
 	ConversionDone = 0;
