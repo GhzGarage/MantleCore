@@ -39,6 +39,7 @@
 #include "Components/SphereComponent.h"
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "Engine/DecalActor.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/CollisionProfile.h"
@@ -46,6 +47,7 @@
 #include "Engine/RectLight.h"
 #include "Engine/SpotLight.h"
 #include "Engine/StaticMeshActor.h"
+#include "Engine/TextRenderActor.h"
 #include "Engine/Texture.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerStart.h"
@@ -1360,6 +1362,58 @@ namespace
 		}
 		return Actor;
 	}
+
+	/** The engine's alignment for a Text's horizontalAlignment (#724). */
+	EHorizTextAligment BuilderTextHorizontalAlignment(EMantleTextHorizontalAlignment Alignment)
+	{
+		switch (Alignment)
+		{
+		case EMantleTextHorizontalAlignment::Center: return EHTA_Center;
+		case EMantleTextHorizontalAlignment::Right:  return EHTA_Right;
+		default:                                     return EHTA_Left;
+		}
+	}
+
+	/** The engine's alignment for a Text's verticalAlignment (#724): baseline is the engine's Quad Top. */
+	EVerticalTextAligment BuilderTextVerticalAlignment(EMantleTextVerticalAlignment Alignment)
+	{
+		switch (Alignment)
+		{
+		case EMantleTextVerticalAlignment::Center:   return EVRTA_TextCenter;
+		case EMantleTextVerticalAlignment::Bottom:   return EVRTA_TextBottom;
+		case EMantleTextVerticalAlignment::Baseline: return EVRTA_QuadTop;
+		default:                                     return EVRTA_TextTop;
+		}
+	}
+
+	/**
+	 * A Text (#724): an ATextRenderActor at the entity's transform (applied in pass 3). Its component keeps the
+	 * engine's built-in font and text material, the class defaults, and takes every other key from the place. A
+	 * dedicated server spawns the same actor, so the entity stands for attachment and scripts, and draws nothing.
+	 */
+	AActor* BuildText(UWorld* World, const FMantleEntity& Entity, const FMantleTextProps& Props)
+	{
+		ATextRenderActor* Actor = SpawnBare<ATextRenderActor>(World, Entity.Name);
+		if (!Actor)
+		{
+			return nullptr;
+		}
+		MakeMovable(Actor);
+
+		if (UTextRenderComponent* Text = Actor->GetTextRender())
+		{
+			// What a creator wrote, not a localizable string.
+			Text->SetText(FText::AsCultureInvariant(Props.Text));
+			// The place's colour is linear; the component's is an sRGB FColor, as the editor keeps it.
+			Text->SetTextRenderColor(Props.Color.ToFColor(true));
+			Text->SetWorldSize(static_cast<float>(Props.WorldSize));
+			Text->SetHorizontalAlignment(BuilderTextHorizontalAlignment(Props.HorizontalAlignment));
+			Text->SetVerticalAlignment(BuilderTextVerticalAlignment(Props.VerticalAlignment));
+			Text->SetXScale(static_cast<float>(Props.XScale));
+			Text->SetYScale(static_cast<float>(Props.YScale));
+		}
+		return Actor;
+	}
 }
 
 // Named, not anonymous: MantleRuntime builds as a unity build.
@@ -1564,6 +1618,13 @@ FMantleBuildResult FMantlePlaceBuilder::Build(
 			if (const FMantleScriptPointProps* Props = Entity.Props.TryGet<FMantleScriptPointProps>())
 			{
 				Actor = BuildScriptPoint(World, Entity, *Props);
+			}
+			break;
+
+		case EMantleEntityType::Text:
+			if (const FMantleTextProps* Props = Entity.Props.TryGet<FMantleTextProps>())
+			{
+				Actor = BuildText(World, Entity, *Props);
 			}
 			break;
 		}
