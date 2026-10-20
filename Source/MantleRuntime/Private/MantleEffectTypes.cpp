@@ -349,6 +349,25 @@ UFXSystemAsset* FMantleEffects::LoadSystem(const EMantleEffectArchetype Archetyp
 	return Loaded;
 }
 
+void FMantleEffects::WarmSystems()
+{
+	using namespace MantleEffectTypesPrivate;
+	for (int32 Index = 0; Index < NumArchetypes; ++Index)
+	{
+		const EMantleEffectArchetype Archetype = static_cast<EMantleEffectArchetype>(Index);
+		if (GSystemMissing[EffectArchetypeIndex(Archetype)])
+		{
+			continue;
+		}
+		const FSoftObjectPath Path(SystemPath(Archetype));
+		if (!Path.ResolveObject() && FPackageName::DoesPackageExist(Path.GetLongPackageName()))
+		{
+			// Nothing to do when it lands: LoadSystem finds it already in memory.
+			LoadPackageAsync(Path.GetLongPackageName());
+		}
+	}
+}
+
 UClass* FMantleEffects::ComponentClass()
 {
 	using namespace MantleEffectTypesPrivate;

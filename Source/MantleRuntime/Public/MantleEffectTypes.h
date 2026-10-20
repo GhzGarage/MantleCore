@@ -317,6 +317,13 @@ struct MANTLERUNTIME_API FMantleEffects
 	static UFXSystemAsset* LoadSystem(EMantleEffectArchetype Archetype);
 
 	/**
+	 * Starts loading every archetype's system in the background, so the first effect of each does not pay a synchronous load
+	 * (and, in the editor, a compile) inside whatever called it: a script's call is charged that time against its CPU budget.
+	 * Safe to call more than once; systems already loaded or missing are skipped.
+	 */
+	static void WarmSystems();
+
+	/**
 	 * Niagara's component class (/Script/Niagara.NiagaraComponent), found by name so MantleCore links no
 	 * plugin. Null, logged once, where the Niagara plugin is not loaded.
 	 */

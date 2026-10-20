@@ -117,6 +117,45 @@ namespace MantleEffectActorPrivate
 	}
 
 	/**
+	 * Writes Value to Component's Vector3 (or position) user parameter Name through the UFUNCTION FunctionName taking a name
+	 * and an FVector (Niagara's SetVariableVec3 and SetVariablePosition), called by reflection. False when the class has none.
+	 */
+	bool SetEffectComponentVec3(UFXSystemComponent& Component, const TCHAR* FunctionName, const FName Name, const FVector& Value)
+	{
+		UFunction* Function = Component.FindFunction(FunctionName);
+		if (!Function)
+		{
+			return false;
+		}
+		FStructOnScope Params(Function);
+		uint8* Memory = Params.GetStructMemory();
+		bool bSetName = false;
+		bool bSetValue = false;
+		for (TFieldIterator<FProperty> It(Function); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
+		{
+			if (FNameProperty* NameProperty = CastField<FNameProperty>(*It))
+			{
+				NameProperty->SetPropertyValue_InContainer(Memory, Name);
+				bSetName = true;
+			}
+			else if (FStructProperty* StructProperty = CastField<FStructProperty>(*It))
+			{
+				if (StructProperty->Struct == TBaseStructure<FVector>::Get())
+				{
+					*StructProperty->ContainerPtrToValuePtr<FVector>(Memory) = Value;
+					bSetValue = true;
+				}
+			}
+		}
+		if (!bSetName || !bSetValue)
+		{
+			return false;
+		}
+		Component.ProcessEvent(Function, Memory);
+		return true;
+	}
+
+	/**
 	 * Writes Material to Component's material user parameter Name through Niagara's SetVariableMaterial (a UFUNCTION,
 	 * called by reflection so MantleCore links no plugin). False when the class has no such function.
 	 */
@@ -402,6 +441,46 @@ AMantleEffect* AMantleEffect::SpawnOneShot(UWorld* World, const FTransform& Tran
 	Effect->ScheduleBurstEnd(Emit);
 	Effect->SetLifeSpan(static_cast<float>(Emit + Look.Lifetime + 0.5));
 	return Effect;
+}
+
+UFXSystemComponent* AMantleEffect::SpawnSystem(UWorld* World, const FTransform& Transform, UFXSystemAsset* System, const double LifeSeconds)
+{
+	UClass* ComponentClass = FMantleEffects::ComponentClass();
+	if (!DrawsEffects(World) || !ComponentClass || !System)
+	{
+		return nullptr;
+	}
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	Params.ObjectFlags |= RF_Transient;
+	AMantleEffect* Host = World->SpawnActor<AMantleEffect>(AMantleEffect::StaticClass(), Transform, Params);
+	if (!Host)
+	{
+		return nullptr;
+	}
+	Host->bAutoplay = false;
+	UFXSystemComponent* Component = NewObject<UFXSystemComponent>(Host, ComponentClass, NAME_None,
+		RF_Transient | RF_TextExportTransient | RF_DuplicateTransient);
+	if (!Component || !MantleEffectActorPrivate::SetEffectComponentSystem(*Component, *System))
+	{
+		if (Component)
+		{
+			Component->MarkAsGarbage();
+		}
+		Host->Destroy();
+		return nullptr;
+	}
+	Component->SetAutoActivate(false);
+	Component->SetupAttachment(Host->EffectRoot);
+	Component->RegisterComponent();
+	// Left inactive: the caller writes its user parameters, then activates. The actor outlives the system by a moment.
+	Host->SetLifeSpan(static_cast<float>(FMath::Max(LifeSeconds, 0.05) + 0.5));
+	return Component;
+}
+
+bool AMantleEffect::SetSystemVariableVec3(UFXSystemComponent& Component, const TCHAR* FunctionName, const FName Name, const FVector& Value)
+{
+	return MantleEffectActorPrivate::SetEffectComponentVec3(Component, FunctionName, Name, Value);
 }
 
 void AMantleEffect::OnConstruction(const FTransform& Transform)

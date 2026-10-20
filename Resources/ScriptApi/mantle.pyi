@@ -39,6 +39,7 @@ class Entity:
     angular_velocity: Vector3
     can_collide: bool
     clip_time: Optional[float]
+    collision_layer: str
     color: str
     exists: bool
     light_color: str
@@ -248,11 +249,21 @@ class NPC:
     max_health: float
     position: Vector3
     rotation: Vector3
+    target: Optional[Entity]
+    target_player: Optional[Player]
     walk_speed: float
+    attacked: Signal
     died: Signal
     drive_finished: Signal
     health_changed: Signal
     move_completed: Signal
+    target_changed: Signal
+    def attack(self, target: Entity | Player | NPC, options: dict[str, Any] = ...) -> None:
+        """Make target the NPC's enemy: it walks up to it and hurts it every Interval until it dies, goes away or you call ClearTarget. TargetChanged fires now, and Attacked fires at every swing or shot. It replaces whatever the NPC was doing. Melee by default: options Range (how close it gets before it swings, centimetres, 150 by default; 50 to 500), Damage (10 by default), DamageType ('Melee' by default) and Interval (seconds between swings, 1 by default; 0.1 to 60). The damage goes through the weapons' path, so armour, shield and the Damaged and Died signals apply to a player it hits; a kill credits nobody (the NPC is not a player), and friendly fire does not protect against an NPC. Chase (true by default): false makes it stand still and attack only what comes into Range. Give Projectile (the options of Projectiles:Fire, minus Position, Velocity, Target and Attacker) to make it a ranged attacker: it stops within Range (2000 by default, up to 5000) with a clear line to the target and fires that projectile at it, aimed for gravity, every Interval; Damage and DamageType then come from the projectile. Once a player target dies the NPC stops and TargetChanged fires with no target; attack them again after they respawn, or let SetAggroRange do it. Example: zombie:Attack(player, {Damage = 15, Interval = 1.2}) or turret:Attack(player, {Range = 3000, Interval = 0.5, Projectile = {Speed = 4000, Damage = 8, Look = 'Ball'}})"""
+        ...
+    def clear_target(self) -> bool:
+        """Call the NPC off: it stops attacking or following and stands where it is, and TargetChanged fires with no target. Returns false when it had nothing to stop. An aggro range (SetAggroRange) stays on and may pick a new target."""
+        ...
     def destroy(self) -> None:
         """Remove the NPC for everyone. Its walk ends without MoveCompleted, and it no longer counts toward the 50."""
         ...
@@ -264,6 +275,9 @@ class NPC:
         ...
     def exit_vehicle(self) -> bool:
         """Get the NPC out of the car it is driving, standing beside it, and free the seat. A drive in progress ends as 'cancelled'. Returns false when the NPC is not in a car, the car is still moving faster than a walk (3 m/s; StopDriving, then try again once it has stopped) or there is nowhere to stand beside it."""
+        ...
+    def follow(self, target: Entity | Player | NPC, distance: Optional[float] = ...) -> None:
+        """Walk after target and keep about distance (centimetres) away from it, 200 by default; 50 to 5000. The NPC follows a player through respawns, going where they go as the server's navigation mesh allows, and stands still once it is close enough. It replaces whatever the NPC was doing (a MoveTo, an earlier Follow or an Attack) and carries on until StopFollowing, ClearTarget, a MoveTo, or the NPC or the target going away; a MoveTo you give it yourself takes over and ends the follow. The walk does not fire MoveCompleted. Example: guard:Follow(player, 300)"""
         ...
     def get_entity(self) -> Entity:
         """The NPC as an Entity: what a raycast that hits it reports. Tag it or give it attributes like any entity."""
@@ -286,6 +300,9 @@ class NPC:
     def respawn(self, position: Optional[Vector3] = ...) -> bool:
         """Bring the NPC back with full health, dead or alive: standing at position (its feet) when given, otherwise where NPCs:Spawn first put it. Its clip stops, and a walk in progress ends without MoveCompleted. Returns false when it could not be put there."""
         ...
+    def set_aggro_range(self, range: float, options: dict[str, Any] = ...) -> None:
+        """Let the NPC pick its own enemies: whenever it has no target and a living player comes within range (centimetres, up to 5000) it attacks the nearest one, as if you had called Attack with options (the same table as Attack's). 0 turns it off. It looks a few times a second, a ranged attacker ignores players it has no clear line to, and an NPC drops a target that gets more than twice range away. Players only; attack other NPCs with Attack. Example: zombie:SetAggroRange(1500, {Damage = 12})"""
+        ...
     def stop(self) -> None:
         """Stop walking where the NPC is. The walk it abandons never fires MoveCompleted."""
         ...
@@ -294,6 +311,9 @@ class NPC:
         ...
     def stop_driving(self) -> None:
         """End the drive the NPC is on: the car brakes to a stop with the NPC still in the seat, and DriveFinished fires with 'cancelled'. Does nothing when the NPC is not driving."""
+        ...
+    def stop_following(self) -> bool:
+        """End the follow Follow started: the NPC stops where it is. Returns false when the NPC was not following. An Attack is ended with ClearTarget."""
         ...
     def take_damage(self, amount: float, source: Optional[Player] = ...) -> bool:
         """Hurt the NPC through the same path weapons use. source is the player to credit: if this hit kills, Died names them as the killer. Returns false when the NPC is already dead or the damage was refused."""
@@ -460,13 +480,49 @@ class _CameraService:
 Camera: _CameraService
 
 class _ChatService:
-    """React to what players say in chat, and post lines from the place."""
+    """React to what players say in chat, post lines from the place, and run private team chat and whispers."""
     message_posted: Signal
+    whisper_sent: Signal
+    def get_whisper_mode(self) -> str:
+        """The whisper mode set with Chat:SetWhisperMode: 'Everyone', 'Team' or 'Nobody'."""
+        ...
     def send_system_message(self, text: str, player: Optional[Player] = ...) -> bool:
         """Post a line from the place into chat, drawn apart from what players say: to everyone, or only to player when you pass one. It goes through the same chat filter as player text, so a line with words that aren't allowed is masked or never shown. At most 500 characters, and at most 10 lines a minute per server. Returns false when it cannot be sent right now: over that limit, the player has no verified account yet, or this server has no session chat (a local test run)."""
         ...
+    def send_to_players(self, players: list[Player], text: str) -> bool:
+        """Post a private line from the place to a list of players, drawn apart from what players say, and seen by nobody else: a team message, a hint to the people holding the flag. It goes through the same chat filter as everything else, and Mantle stores it so that only those players can read it back. At most 10 players and 500 characters. It is one line however many players it is for, and counts as one of the server's 10 place lines a minute (Chat:SendSystemMessage shares that limit). Players with no verified account yet are skipped. Returns false when it cannot be sent right now. Example: Chat:SendToPlayers(Teams:GetPlayers('Red'), 'Your flag was taken!')"""
+        ...
+    def set_audience(self, player: Player, recipients: Optional[list[Player]] = ...) -> bool:
+        """Make what a player types in chat reach only the players in recipients (and the player themselves): a team channel. Leave recipients out, or pass nil, to let everyone see their lines again. The chat filter still checks every line, a player's own blocks still hide them, and every line can still be reported; this only ever shows a line to fewer people. Mantle stores such a line so that only the sender and these recipients can read it back; it is still kept for moderation. At most 128 recipients. Returns false when the player is not verified yet or the list is too long. Lasts until the player leaves. Example: Chat:SetAudience(p, Teams:GetPlayers(p.Team)) -- p now talks to their team only"""
+        ...
+    def set_whisper_blocked(self, player: Player, blocked: bool) -> bool:
+        """Stop (true) or allow (false) one player sending or receiving whispers, whatever the mode: for players who are dead, jailed or out of the round. A refused whisper tells the sender so. Returns false when the player is not verified yet. Lasts until the player leaves. Example: Chat:SetWhisperBlocked(deadPlayer, true)"""
+        ...
+    def set_whisper_mode(self, mode: str) -> None:
+        """Choose who players may whisper to: 'Everyone' (the default), 'Team' (only to someone on their own team, see Teams) or 'Nobody' (whispers are off). Players whisper by typing /w name message in the chat box (the name in quotes if it has spaces). A whisper is filtered, rate-limited, reportable and hidden by blocks like any chat line, is shown only to the sender and the recipient, and is never given to Chat.MessagePosted. A refused whisper tells the sender so. Mantle stores a whisper so that only its two players can read it back; like all chat it is kept for moderation. Example: Chat:SetWhisperMode('Team')"""
+        ...
 
 Chat: _ChatService
+
+class _CollisionService:
+    """Collision layers: sort the objects of your place into named layers and decide which layers bump into which. Make a layer with CreateLayer (up to 8), put an object on it with entity.CollisionLayer = 'Name', then use SetLayerCollides to let two layers pass through each other. Every object starts on the 'Default' layer, which collides with everything, and players stay on Default: layers sort your props and never let a player through a wall (to let teammates pass through each other use Teams.TeammatesCollide). A layer also narrows World:Raycast, Spherecast, Blockcast, GetEntitiesInRadius and GetEntitiesInBox with params.Layers and params.ExcludeLayers. Server only."""
+    def create_layer(self, name: str) -> None:
+        """Make a collision layer. name is 1 to 32 characters (not case-sensitive), must be new and cannot be 'Default'. A place can have 8 layers. A new layer collides with every layer, itself included, until you change a pair. Example: Collision:CreateLayer('Debris')"""
+        ...
+    def get_layer_collides(self, a: str, b: str) -> bool:
+        """Whether objects on layer a and objects on layer b bump into each other (true unless SetLayerCollides turned it off). 'Default' collides with everything."""
+        ...
+    def get_layers(self) -> list[str]:
+        """The names of the layers you made ('Default' is always there and not listed)."""
+        ...
+    def remove_layer(self, name: str) -> None:
+        """Delete a layer. Objects on it go back to the Default layer."""
+        ...
+    def set_layer_collides(self, a: str, b: str, collides: bool) -> None:
+        """Say whether objects on layer a and objects on layer b bump into each other. false lets them pass through one another (a and b can be the same layer, to make its objects pass through each other). Both layers must exist, and 'Default' cannot be changed: it always collides with everything, so objects still meet players and the world. Example: Collision:SetLayerCollides('Debris', 'Debris', false)"""
+        ...
+
+Collision: _CollisionService
 
 class _ConstraintsService:
     """Join physics entities with welds, hinges and ropes while the place runs (server only)."""
@@ -521,9 +577,15 @@ class _DataStoreService:
 DataStore: _DataStoreService
 
 class _EffectsService:
-    """Show Mantle's built-in particle effects anywhere in the world: smoke, fire, sparks, dust and glow."""
+    """Show Mantle's built-in visual effects anywhere in the world. Play makes a puff of particles (smoke, fire, sparks, dust, glow, explosion, impact, muzzle flash, blood, splash, confetti, heal), Beam draws a short tracer line between two points, and Decal leaves a mark such as a bullet hole or a scorch on a surface. All are cosmetic: they do not hurt anyone or change the world. Example: Effects:Play('Explosion', Vector3.new(0, 5, 0))"""
+    def beam(self, from: Vector3, to: Vector3, params: Optional[dict[str, Any]] = ...) -> None:
+        """Draw a short-lived glowing beam (a tracer or a zap) from one point to another, then it fades. params: Color ('#RRGGBB', the beam's own look by default), Width (how thick, 0.5 to 100 cm, 4 by default) and Duration (how long it shows, 0 to 5 seconds, 0.15 by default); numbers out of range are clamped. A line longer than 1000 m is cut short. A client or a server holds at most 16 beams at once; a new one past that replaces the oldest. Use it for tracers, lightning bolts, lasers or showing a link between two things. Example: Effects:Beam(Vector3.new(0, 2, 0), Vector3.new(0, 2, 40), {Color = '#FF3030', Duration = 0.2}). From a client script only this player sees it; from a server script every player does, but not one who joins later. A dedicated server shows nothing. At most 10 effect calls a frame per script (Play, Beam and Decal count together), and a server script at most 10 a second (bursts of 20); past either the script stops."""
+        ...
+    def decal(self, position: Vector3, normal: Vector3, params: Optional[dict[str, Any]] = ...) -> None:
+        """Leave a mark on a surface at position, facing along normal (the direction the surface faces, such as a raycast hit's normal; it does not need to be exactly length 1). params.Style picks the mark: 'BulletHole' (a dark hole with a scuffed ring, the default), 'Scorch' (a ragged soot patch) or 'Splat' (a paint-like blob with droplets, blue by default). Color ('#RRGGBB') tints it, Size is how wide it is (2 to 500 cm, 30 by default) and Lifetime how many seconds it stays before fading away (0.1 to 60, 20 by default); numbers out of range are clamped. A player's machine keeps at most 64 script decals at once (fewer on a low Effects quality setting); a new one past that removes the oldest. Example: local hit = World:Raycast(origin, direction); if hit then Effects:Decal(hit.Position, hit.Normal, {Style = 'Scorch', Size = 80}) end. From a client script only this player sees it; from a server script every player does, but not one who joins later. A dedicated server shows nothing. At most 10 effect calls a frame per script (Play, Beam and Decal count together), and a server script at most 10 a second (bursts of 20); past either the script stops."""
+        ...
     def play(self, archetype: str, position: Vector3, params: Optional[dict[str, Any]] = ...) -> None:
-        """Show a built-in effect at position for a moment: archetype is 'Smoke', 'Fire', 'Sparks', 'Dust' or 'Glow' (any case). It emits for params.Duration seconds (1 by default, 0 to 10) and is gone once its last particles are. params tune its look, each the archetype's own by default: Color ('#RRGGBB'), Size (particle size, 1 to 1000 cm), Rate (particles a second, 0 to 200), Speed (0 to 5000 cm/s), Lifetime (how long each particle lives, 0.05 to 10 seconds); numbers out of range are clamped. Particles leave along +Z, or along Rotation's up (a Vector3 of pitch, yaw and roll). From a client script only this player sees it; from a server script every player does, but not one who joins later. A dedicated server shows nothing. At most 10 plays a frame per script, and a server script at most 10 a second (bursts of 20); past either the script stops."""
+        """Show a built-in particle effect at position for a moment, then it is gone. archetype is one of (any case; 'Muzzle Flash' and 'muzzle_flash' work too): 'Smoke' (a soft grey column), 'Fire' (flames), 'Sparks' (a spray of hot sparks), 'Dust' (a slow brown puff), 'Glow' (a soft light mist), 'Explosion' (a fireball with smoke and sparks), 'Impact' (sparks and dust where something hits), 'MuzzleFlash' (the flash at a gun's mouth), 'Blood' (a small stylised red spray for a hit), 'Splash' (water droplets), 'Confetti' (a party burst in three colours) or 'Heal' (green sparkles rising). The bursts (Explosion, Impact, MuzzleFlash, Blood, Splash, Confetti) play for a fraction of a second; the others for params.Duration seconds (1 by default, 0 to 10). params tune the look, each the archetype's own by default: Color ('#RRGGBB'; on Confetti it is the first of the three colours), Size (particle size, 1 to 1000 cm; a bigger Size makes a bigger explosion all through), Rate (particles a second, 0 to 200), Speed (0 to 5000 cm/s), Lifetime (how long each particle lives, 0.05 to 10 seconds) and Duration; numbers out of range are clamped. Particles leave along +Z, or along Rotation's up (a Vector3 of pitch, yaw and roll). On a low Effects quality setting a player sees the main layer only. Example: Effects:Play('Explosion', Vector3.new(0, 5, 0), {Size = 250, Color = '#44AAFF'}). From a client script only this player sees it; from a server script every player does, but not one who joins later. A dedicated server shows nothing. At most 10 effect calls a frame per script (Play, Beam and Decal count together), and a server script at most 10 a second (bursts of 20); past either the script stops."""
         ...
 
 Effects: _EffectsService
@@ -581,6 +643,14 @@ class _EventsService:
         ...
 
 Events: _EventsService
+
+class _ExplosionsService:
+    """Blow things up from a server script: damage that fades with distance, a shove for loose props and players, and a visible, audible blast. The damage goes through the same path weapons use, so armour, the shield, team friendly fire and the Damaged and Died signals all apply (a death credits the attacker). Everything happens on the server; there is nothing for a client script here."""
+    def create(self, position: Vector3, options: dict[str, Any] = ...) -> float:
+        """Explode at position (centimetres). Everything alive or loose within Radius is hurt and pushed, and the call returns how many things were hurt. options: Radius (centimetres, 500 by default; 10 to 5000), Damage (at the centre, 100 by default; 0 to 1000000), InnerRadius (full damage out to here, 0 by default), Falloff (how damage drops from InnerRadius to 0 at Radius: 0 is full damage everywhere, 1 drops in a straight line, the default, and 2 or more drops faster), DamageType (the tag Damaged and Died report, 'Explosion' by default; your own tag works), Attacker (the Player who gets the kill, and whose team friendly fire protects; their own blast hurts them too, which makes rocket jumps; leave it out for the world), Impulse (the speed in centimetres per second a loose physics prop at the centre is given, fading with distance; 800 by default, 0 for none; the weight of the prop does not matter), Ragdoll (true by default: a player in the blast is thrown down and gets up again after RagdollSeconds, 2 by default; with false only a heavy hit throws them), LineOfSight (true by default: nothing behind a wall or a hill is touched; false makes the blast reach through walls), Effect (the look of the blast: 'None', 'Small', 'Medium' (the default), 'Large' or 'Dirt') and Sound (true by default). At most 30 explosions a second. A player riding in a car is shielded by its body. NPCs take the damage like players do. Example: Explosions:Create(barrel.Position, {Radius = 600, Damage = 80, Attacker = player})"""
+        ...
+
+Explosions: _ExplosionsService
 
 class _InputService:
     """The local player's keys, mouse buttons and gamepad buttons, and their sticks, triggers and mouse wheel as axes (client only). Mantle's own controls (the menu, chat, voice, movement, the Backpack and Tool keys) can never be bound or read."""
@@ -718,6 +788,19 @@ class _PlayersService:
 
 Players: _PlayersService
 
+class _ProjectilesService:
+    """Fire projectiles from a server script: a ball, rocket, arrow or cube that flies under gravity, hits what is in its way, hurts it, and can explode. Each flies on the server and shows on every player's screen. Fire returns an id; Hit and Expired say how it ended. A projectile never hits the player or NPC that fired it, and a hit goes through the same damage path weapons use (armour, shield, friendly fire, Damaged and Died). Weapon damage, fire rate and ammo stay the game's: this is for your own gadgets, traps and turrets. At most 64 projectiles fly at once."""
+    expired: Signal
+    hit: Signal
+    def cancel(self, id: float) -> bool:
+        """Take a projectile out of the air: it vanishes without Hit or Expired, and without exploding. Returns false when it has already ended."""
+        ...
+    def fire(self, options: dict[str, Any]) -> float:
+        """Launch a projectile and return its id. options: Position (where it starts) and either Velocity (a Vector3 in centimetres per second: the direction and speed) or Target (a point to hit; it is aimed at that point at Speed, 3000 by default, arcing for gravity; a target out of reach gets the flattest shot it can); GravityScale (1 by default; 0 flies dead straight, up to 10), Lifetime (seconds before it expires, 5 by default; 0.1 to 30), Look ('Ball' the default, 'Rocket', 'Arrow', 'Cube' or 'Invisible'), Color ('#RRGGBB'), Scale (0.1 to 10), Damage (to what it hits directly: 25 by default, or 0 when it has an Explosion; 0 to 1000000), DamageType ('Bullet' by default), Explosion (a table like Explosions:Create's options: it goes off where the projectile hits, and replaces the direct damage unless you also give Damage), ExplodeOnExpire (true: it goes off where it is when the lifetime ends, like a grenade; it needs an Explosion table, otherwise it explodes with the defaults), Tag (a name up to 64 characters Hit and Expired give back, so a handler knows which of its projectiles ended) and Attacker (the Player who gets the credit, whose team friendly fire protects, and who it never hits). Example: Projectiles:Fire({Position = muzzle, Velocity = aim * 2500, Look = 'Rocket', Attacker = player, Explosion = {Radius = 400, Damage = 90}})"""
+        ...
+
+Projectiles: _ProjectilesService
+
 class _RespawnService:
     """How a death becomes a respawn. By default a dead player respawns on their own after a short wait at a spawn point the place picks. Change the wait, or turn automatic respawning off to run rounds where the dead stay down until you bring them back with Player:Respawn. The server decides; there is nothing for a client script here. Player.Respawned fires when a player gets a fresh character."""
     auto_respawn: bool
@@ -785,6 +868,7 @@ Storage: _StorageService
 class _TeamsService:
     """Teams for a place: define them, put players on them, and decide whether teammates can hurt each other. The server decides everything; which team a player is on replicates, so client scripts and HUDs can read it. A team is named by its name (not case-sensitive) and has a colour. Friendly fire is off by default: once a player is on a team, damage from a teammate is ignored until Teams.FriendlyFire is set to true."""
     friendly_fire: bool
+    teammates_collide: bool
     player_team_changed: Signal
     def create(self, name: str, color: Optional[str] = ...) -> None:
         """Define a team. name is 1 to 32 characters and must be new. color is '#RRGGBB' (white when left out), for a HUD or a nameplate to use. Up to 16 teams. Example: Teams:Create('Red', '#E53935')"""
@@ -844,11 +928,68 @@ UI: _UIService
 
 class _VehiclesService:
     """Spawn and seat cars: the vehicles in the place's storage (server only)."""
+    boost_started: Signal
+    boost_stopped: Signal
+    damaged: Signal
+    destroyed: Signal
+    fuel_changed: Signal
+    fuel_empty: Signal
+    def damage(self, vehicle: Entity, amount: float) -> float:
+        """Take amount of health off the car (never below 0) and return the health it has left. Fires Vehicles.Damaged, and Vehicles.Destroyed if it reaches 0. Turn health on first with SetHealthEnabled."""
+        ...
     def eject(self, player: Player) -> bool:
         """Put the player back on foot beside the car they are driving. Returns false when they are not driving, the car is still moving, or there is nowhere beside it to stand."""
         ...
+    def get_boost(self, vehicle: Entity) -> float:
+        """The boost the car has left, from 0 to MaxBoost."""
+        ...
+    def get_boost_drain(self, vehicle: Entity) -> float:
+        """How much boost is used each second while the driver boosts (25 unless you change it)."""
+        ...
+    def get_boost_regen(self, vehicle: Entity) -> float:
+        """How much boost comes back each second while the driver is not boosting (10 unless you change it)."""
+        ...
+    def get_boost_strength(self, vehicle: Entity) -> float:
+        """How hard the boost pushes, from 0 (nothing) to 1 (the hardest it can; about 18 m/s of extra speed every second). 0.5 unless you change it."""
+        ...
+    def get_fuel(self, vehicle: Entity) -> float:
+        """The fuel in the tank, from 0 to MaxFuel."""
+        ...
+    def get_fuel_consumption(self, vehicle: Entity) -> float:
+        """How much fuel the car burns each second while it is driven and moving (1 unless you change it)."""
+        ...
+    def get_health(self, vehicle: Entity) -> float:
+        """The car's health, from 0 to MaxHealth. It only changes while health is on."""
+        ...
+    def get_max_boost(self, vehicle: Entity) -> float:
+        """The most boost the car can store (100 unless you change it)."""
+        ...
+    def get_max_fuel(self, vehicle: Entity) -> float:
+        """The tank's size (100 unless you change it)."""
+        ...
+    def get_max_health(self, vehicle: Entity) -> float:
+        """The most health the car can have (100 unless you change it)."""
+        ...
     def get_speed(self, vehicle: Entity) -> float:
         """The car's speed in centimetres per second, as the simulation reports it. Errors if the entity is not a car or no longer exists."""
+        ...
+    def is_boost_enabled(self, vehicle: Entity) -> bool:
+        """Whether the car has a boost (SetBoostEnabled)."""
+        ...
+    def is_boosting(self, vehicle: Entity) -> bool:
+        """Whether the car's driver is boosting right now."""
+        ...
+    def is_destroyed(self, vehicle: Entity) -> bool:
+        """Whether the car has health on and none left."""
+        ...
+    def is_fuel_empty(self, vehicle: Entity) -> bool:
+        """Whether the car has a fuel tank and it is empty."""
+        ...
+    def is_fuel_enabled(self, vehicle: Entity) -> bool:
+        """Whether the car has a fuel tank (SetFuelEnabled)."""
+        ...
+    def is_health_enabled(self, vehicle: Entity) -> bool:
+        """Whether the car has health (SetHealthEnabled)."""
         ...
     def is_locked(self, vehicle: Entity) -> bool:
         """Whether the car is locked. A locked car opens only for the last player who drove it: anyone else's vehicle key rattles the door, and holding the key breaks in -- the window on that side breaks, the car unlocks, and it must be hotwired before it starts. The lock stays when the driver gets out, and its driver can also lock and unlock it from the seat (L / D-pad left). Errors if the entity is not a car or no longer exists."""
@@ -856,11 +997,56 @@ class _VehiclesService:
     def lock(self, vehicle: Entity) -> bool:
         """Lock the car. A locked car opens only for the last player who drove it: anyone else's vehicle key rattles the door, and holding the key breaks in -- the window on that side breaks, the car unlocks, and it must be hotwired before it starts. The lock stays when the driver gets out, and its driver can also lock and unlock it from the seat (L / D-pad left). Returns false when the entity is not a car."""
         ...
+    def refuel(self, vehicle: Entity, amount: float = ...) -> float:
+        """Put amount of fuel in the tank (never above MaxFuel), or fill it when you leave amount out. Returns the fuel in the tank now. Example: Vehicles:Refuel(car, 20)"""
+        ...
+    def repair(self, vehicle: Entity, amount: float = ...) -> float:
+        """Give the car amount of health back (never above MaxHealth), or all of it when you leave amount out. Returns the health it has now. A destroyed car drives again once it has any health."""
+        ...
     def seat(self, vehicle: Entity, player: Player) -> bool:
         """Put the player in the driver's seat, through the same checks as walking up and pressing the prompt: the player must be on foot, alive, near the car with a clear line to the seat, and the seat must be empty. Returns false when any of that refuses."""
         ...
+    def set_boost(self, vehicle: Entity, boost: float) -> None:
+        """Set the boost left, clamped to 0..MaxBoost."""
+        ...
+    def set_boost_drain(self, vehicle: Entity, perSecond: float) -> None:
+        """Set how much boost is used each second while the driver boosts, from 0 up."""
+        ...
+    def set_boost_enabled(self, vehicle: Entity, enabled: bool) -> None:
+        """Give the car a boost (true) or take it away (false). Off for every car until you turn it on. With boost on, its driver holds Shift (B on a gamepad) to push the car forward harder. Boost drains at BoostDrain a second while it pushes and comes back at BoostRegen a second when it does not. It starts full (MaxBoost, 100 unless you change it). A destroyed car or one with no fuel cannot boost."""
+        ...
+    def set_boost_regen(self, vehicle: Entity, perSecond: float) -> None:
+        """Set how much boost comes back each second, from 0 up. 0 means a used boost never comes back by itself."""
+        ...
+    def set_boost_strength(self, vehicle: Entity, strength: float) -> None:
+        """Set how hard the boost pushes, from 0 (nothing) to 1 (the hardest it can)."""
+        ...
+    def set_fuel(self, vehicle: Entity, fuel: float) -> None:
+        """Set the fuel, clamped to 0..MaxFuel. Fires Vehicles.FuelChanged, and Vehicles.FuelEmpty if it reaches 0."""
+        ...
+    def set_fuel_consumption(self, vehicle: Entity, perSecond: float) -> None:
+        """Set how much fuel the car burns each second while it is driven and moving, from 0 up. 0 means it never runs dry."""
+        ...
+    def set_fuel_enabled(self, vehicle: Entity, enabled: bool) -> None:
+        """Give the car a fuel tank (true) or take it away (false). Off for every car until you turn it on. With fuel on, the car burns FuelConsumption units a second while someone drives it and it is moving, and with none left it cannot accelerate (it rolls to a stop). It starts full (MaxFuel, 100 unless you change it)."""
+        ...
+    def set_health(self, vehicle: Entity, health: float) -> None:
+        """Set the car's health, clamped to 0..MaxHealth. Lowering it counts as damage (Vehicles.Damaged fires, and Vehicles.Destroyed if it reaches 0)."""
+        ...
+    def set_health_enabled(self, vehicle: Entity, enabled: bool) -> None:
+        """Give the car health (true) or take it away again (false). It is off for every car until you turn it on, so a car you never touch crashes as it always did. With health on, crashes wear the car down (a hard enough crash wrecks it in one hit), and at 0 health the car is destroyed: it cannot accelerate until you Repair it. It starts full (MaxHealth, 100 unless you change it)."""
+        ...
     def set_livery(self, vehicle: Entity, index: float) -> bool:
         """Put one of the car's liveries on it: index counts from 0 in the liveries its vehicle was published with, and -1 takes the livery off. Every player sees the change. Returns false when the entity is not a car or the car has no livery at that index (the built-in cars have none)."""
+        ...
+    def set_max_boost(self, vehicle: Entity, max: float) -> None:
+        """Set the most boost the car can store, from 1 to 1,000,000."""
+        ...
+    def set_max_fuel(self, vehicle: Entity, max: float) -> None:
+        """Set the tank's size, from 1 to 1,000,000. Lowering it below the fuel lowers the fuel too; raising it does not fill the tank."""
+        ...
+    def set_max_health(self, vehicle: Entity, max: float) -> None:
+        """Set the most health the car can have, from 1 to 1,000,000. Lowering it below the car's health lowers the health too; raising it does not heal."""
         ...
     def set_paint_color(self, vehicle: Entity, color: str) -> bool:
         """Paint the car: color is '#RRGGBB', the same format as Backpack:SetWeaponColor. Returns false when the entity is not a car."""
@@ -873,6 +1059,34 @@ class _VehiclesService:
         ...
 
 Vehicles: _VehiclesService
+
+class _VoiceService:
+    """Control who hears whom on voice chat, and see who is speaking."""
+    speaking_started: Signal
+    speaking_stopped: Signal
+    def can_hear(self, listener: Player, speaker: Player) -> bool:
+        """Whether your rules let the listener hear the speaker. It does not know the players' own mutes and blocks, so a true here can still be silent for that listener."""
+        ...
+    def is_muted(self, player: Player) -> bool:
+        """Whether you have muted this player for everyone with Voice:SetMuted. It says nothing about players' own mutes, and it is false while you have only muted them for some listeners."""
+        ...
+    def is_speaking(self, player: Player) -> bool:
+        """Whether the player is talking on voice chat right now. Each player's game tells the server whether they are talking (a yes or no, never audio), so it can lag by a fraction of a second, and a modified game could lie: use it for indicators and game play, not for anything that must be secure. A muted player still counts as speaking. On a client it covers the players this player can hear, themselves included. Example: if Voice:IsSpeaking(p) then ShowMicIcon(p) end"""
+        ...
+    def mute_for(self, listener: Player, speaker: Player, muted: bool) -> bool:
+        """Stop (true) or allow (false) one listener hearing one speaker; everyone else still hears the speaker. Use it for rules that depend on who is listening. Returns false when either player is not verified yet, or you already hold 4096 of these pairs. Lasts until either player leaves, or Voice:Reset. Example: for _, other in Players:GetPlayers() do Voice:MuteFor(other, dead, true) end -- the living cannot hear a dead player, who still hears them."""
+        ...
+    def reset(self, player: Optional[Player] = ...) -> None:
+        """Clear voice rules: every one that names player (muted, muted for someone, heard by an audience, or in one), or every rule on the server when you leave player out."""
+        ...
+    def set_audience(self, speaker: Player, listeners: Optional[list[Player]] = ...) -> bool:
+        """Make a speaker heard only by the players in listeners (and by themselves); leave listeners out, or pass nil, to let everyone hear them again. This is team voice: set each player's audience to their team. At most 128 listeners. Returns false when the speaker is not verified yet or the list is too long. Lasts until the speaker leaves, or Voice:Reset. Mutes still apply on top. Example: Voice:SetAudience(p, Teams:GetPlayers(p.Team)) -- p's team hears p; call it again when teams change."""
+        ...
+    def set_muted(self, player: Player, muted: bool) -> bool:
+        """Mute (true) or unmute (false) a player's voice for everyone: nobody hears them until you unmute them, though they can still talk. Use it for players who are dead, jailed or out of the round. Returns false when the player is not verified yet (moments after joining). The mute lasts until the player leaves. It only ever makes them quieter: a player who has muted or blocked someone themselves keeps them muted whatever you do. Voice goes straight between players' games, not through the server, so the server cannot hear or record it, and each listener's game applies the mute. A player running a modified game could ignore it, so use it to run a game, never to protect a secret. Example: Players:OnPlayer(function(p) Voice:SetMuted(p, true) end) -- everyone starts muted until a round begins, then Voice:SetMuted(p, false) for the players in it."""
+        ...
+
+Voice: _VoiceService
 
 class _WorldService:
     """Find and watch the things in the level."""
@@ -889,7 +1103,7 @@ class _WorldService:
         """Every entity and player character touching a box of this size (its full width, depth and height, at most 100 m on any side, kept square to the world's axes) centred on center, nearest first. Takes the same params as World:GetEntitiesInRadius."""
         ...
     def get_entities_in_radius(self, center: Vector3, radius: float, params: dict[str, Any] = ...) -> list[Entity]:
-        """Every entity and player character touching a ball of this radius (at most 50 m) around center, nearest first. Overlap-only entities (triggers) count; entities with no collision never do. A character is listed as its Entity; Players:GetPlayerFromCharacter tells whose it is. params: Include, Exclude, Tag, IgnorePlayers, and MaxResults (256 at most, and by default). Runs on this machine only; a script may make 256 spatial queries a frame."""
+        """Every entity and player character touching a ball of this radius (at most 50 m) around center, nearest first. Overlap-only entities (triggers) count; entities with no collision never do. A character is listed as its Entity; Players:GetPlayerFromCharacter tells whose it is. params: Include, Exclude, Tag, IgnorePlayers, Layers, ExcludeLayers (collision layers, server scripts only), and MaxResults (256 at most, and by default). Runs on this machine only; a script may make 256 spatial queries a frame."""
         ...
     def on_tagged(self, tag: str, handler: Callable[..., Any]) -> Connection:
         """Call handler for every entity that has the tag now, and for each one that gets it later."""
@@ -898,7 +1112,7 @@ class _WorldService:
         """Call handler when an entity loses the tag."""
         ...
     def raycast(self, origin: Vector3, direction: Vector3, params: dict[str, Any] = ...) -> Optional[dict[str, Any]]:
-        """Cast a ray from origin along direction and return the first thing it hits: a table of Entity, Player, Position, Normal and Distance, or nil. Player is set when the hit is a player's character. The ray is as long as direction, or params.MaxDistance when given, and at most 1 km. It passes through overlap-only entities (triggers) and never hits entities with no collision. params: MaxDistance, Include (only these entities or players count), Exclude, Tag (only entities with this tag count), IgnorePlayers. Runs on this machine only; a script may make 256 spatial queries a frame."""
+        """Cast a ray from origin along direction and return the first thing it hits: a table of Entity, Player, Position, Normal and Distance, or nil. Player is set when the hit is a player's character. The ray is as long as direction, or params.MaxDistance when given, and at most 1 km. It passes through overlap-only entities (triggers) and never hits entities with no collision. params: MaxDistance, Include (only these entities or players count), Exclude, Tag (only entities with this tag count), IgnorePlayers, Layers (only entities on these collision layers count; server scripts only) and ExcludeLayers (look through entities on these layers). Runs on this machine only; a script may make 256 spatial queries a frame."""
         ...
     def spherecast(self, origin: Vector3, radius: float, direction: Vector3, params: dict[str, Any] = ...) -> Optional[dict[str, Any]]:
         """Sweep a ball of this radius (at most 50 m) from origin along direction and return the first thing it touches, in the same table as World:Raycast, or nil. Distance is how far the ball's centre travelled. Takes the same params as World:Raycast."""

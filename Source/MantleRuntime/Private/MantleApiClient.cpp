@@ -1262,7 +1262,8 @@ FString FMantleApiClient::BuildServerChatMessagesBody(TOptional<int64> After)
 	return After.IsSet() ? FString::Printf(TEXT("{\"after\":%lld}"), After.GetValue()) : FString(TEXT("{}"));
 }
 
-FString FMantleApiClient::BuildServerChatSystemBody(const FString& Text, const FString& PlayerId)
+FString FMantleApiClient::BuildServerChatSystemBody(const FString& Text, const FString& PlayerId,
+	const TArray<FString>& PlayerIds)
 {
 	FString Body;
 	const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
@@ -1272,6 +1273,15 @@ FString FMantleApiClient::BuildServerChatSystemBody(const FString& Text, const F
 	if (!PlayerId.IsEmpty())
 	{
 		Writer->WriteValue(TEXT("playerId"), PlayerId);
+	}
+	if (!PlayerIds.IsEmpty())
+	{
+		Writer->WriteArrayStart(TEXT("playerIds"));
+		for (const FString& Id : PlayerIds)
+		{
+			Writer->WriteValue(Id);
+		}
+		Writer->WriteArrayEnd();
 	}
 	Writer->WriteObjectEnd();
 	Writer->Close();
@@ -1286,6 +1296,11 @@ void FMantleApiClient::ServerChatMessagesAsync(TOptional<int64> After, FMantleAp
 void FMantleApiClient::ServerChatSystemAsync(const FString& Text, const FString& PlayerId, FMantleApiCallback OnDone)
 {
 	SendServerTokenRequest(TEXT("/server/chat/system"), BuildServerChatSystemBody(Text, PlayerId), OnDone);
+}
+
+void FMantleApiClient::ServerChatSystemToAsync(const FString& Text, const TArray<FString>& PlayerIds, FMantleApiCallback OnDone)
+{
+	SendServerTokenRequest(TEXT("/server/chat/system"), BuildServerChatSystemBody(Text, FString(), PlayerIds), OnDone);
 }
 
 void FMantleApiClient::ServerChatIngestAsync(const FString& BodyJson, FMantleApiCallback OnDone)
