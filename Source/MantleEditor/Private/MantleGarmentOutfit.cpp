@@ -9,6 +9,7 @@
 #include "MantleCosmeticExport.h"
 #include "MantleMetaHumanPose.h"
 #include "MantleNailSeating.h"
+#include "MantleOutfitSections.h"
 #include "MantleParametricOutfitAuthoring.h"
 
 #include "Animation/AnimSequence.h"
@@ -27,6 +28,7 @@
 #include "MetaHumanCharacterEditorSubsystem.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "Misc/PackageName.h"
+#include "Modules/ModuleManager.h"
 #include "Misc/ScopeExit.h"
 #include "PreviewScene.h"
 #include "Rendering/SkeletalMeshModel.h"
@@ -780,11 +782,27 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 			: FString(TEXT("The body could not be made a MetaHuman: Strip, the A-pose or the conform did not run (see the fix list in \"convert\")."));
 		return false;
 	}
-	OutResult.Character = Work->Character->GetPathName();
-	OutResult.InputScale = Work->InputScale;
+	return MakeFromWork(*Work, InBody.GetName(), Folder, Garments, OutResult, OutRefusalCode, OutRefusal);
+}
+
+bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work, const FString& BodyName, const FString& Folder,
+	TConstArrayView<USkeletalMesh*> Garments, FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal)
+{
+	using namespace MantleGarmentOutfitPrivate;
+	if (!Work.Character.IsValid() || !Work.APoseClip.IsValid() || !Work.SkinOnly.IsValid() || !Work.PosedMesh.IsValid())
+	{
+		OutRefusalCode = TEXT("no_metahuman");
+		OutRefusal = FString::Printf(TEXT("Convert made no MetaHuman of %s (its A-pose or conform did not run), so there is nothing to fit its clothing on."), *BodyName);
+		return false;
+	}
+	const FString BodyTag = FMantleMetaHumanSteps::AssetTag(BodyName);
+	OutResult.OutputFolder = Folder;
+	FString Error;
+	OutResult.Character = Work.Character->GetPathName();
+	OutResult.InputScale = Work.InputScale;
 
 	// 2. The MetaHuman's merged body and head, as Epic's resize reads a character: the Outfit's authored body.
-	UMetaHumanCharacter* Character = Cast<UMetaHumanCharacter>(Work->Character.Get());
+	UMetaHumanCharacter* Character = Cast<UMetaHumanCharacter>(Work.Character.Get());
 	UMetaHumanCharacterEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
 	if (!Character || !Subsystem)
 	{
@@ -883,7 +901,7 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 	// The body posed by its own A-pose clip and scaled by k, as the conform's input was: the check that this pose is the
 	// A-pose step's, and the offset that puts it on the MetaHuman's skin.
 	TMap<FName, FTransform> ClipBones;
-	if (!GarmentClipBones(*Work->SkinOnly.Get(), *Work->APoseClip.Get(), ClipBones, Error))
+	if (!GarmentClipBones(*Work.SkinOnly.Get(), *Work.APoseClip.Get(), ClipBones, Error))
 	{
 		OutRefusalCode = TEXT("pose_failed");
 		OutRefusal = Error;
@@ -892,8 +910,8 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 	FMantleGlbMesh PosedBody;
 	TArray<UMaterialInterface*> BodyMaterials;
 	int32 Matched = 0;
-	if (!FMantleCosmeticExport::ReadSkeletalMesh(Work->SkinOnly.Get(), 0, PosedBody, BodyMaterials, Triangles, Error)
-		|| !PoseMesh(PosedBody, GarmentPosedJoints(PosedBody.Joints, ClipBones, Matched), Work->InputScale, Error))
+	if (!FMantleCosmeticExport::ReadSkeletalMesh(Work.SkinOnly.Get(), 0, PosedBody, BodyMaterials, Triangles, Error)
+		|| !PoseMesh(PosedBody, GarmentPosedJoints(PosedBody.Joints, ClipBones, Matched), Work.InputScale, Error))
 	{
 		OutRefusalCode = TEXT("pose_failed");
 		OutRefusal = FString::Printf(TEXT("The body could not be posed: %s."), *Error);
@@ -904,7 +922,7 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 	{
 		PosedBox += Position;
 	}
-	const FBox ConformBox = Work->PosedMesh->GetBoundingBox();
+	const FBox ConformBox = Work.PosedMesh->GetBoundingBox();
 	const double PoseGap = FMath::Max((FVector(PosedBox.Min) - ConformBox.Min).GetAbsMax(), (FVector(PosedBox.Max) - ConformBox.Max).GetAbsMax());
 	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT posed body bounds %s vs conform input %s: %.3f cm"), *PosedBox.ToString(), *ConformBox.ToString(), PoseGap);
 	if (PoseGap > PoseCheckCm)
@@ -937,10 +955,10 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 		const TArray<FTransform> Posed = GarmentPosedJoints(Geometry->Joints, ClipBones, Matched);
 		if (Matched == 0)
 		{
-			Piece.Error = FString::Printf(TEXT("%s shares no bones with %s, so it can't be posed the way the body was"), *Garment->GetName(), *Body->GetName());
+			Piece.Error = FString::Printf(TEXT("%s shares no bones with %s, so it can't be posed the way the body was"), *Garment->GetName(), *BodyName);
 			continue;
 		}
-		if (!PoseMesh(*Geometry, Posed, Work->InputScale, Error))
+		if (!PoseMesh(*Geometry, Posed, Work.InputScale, Error))
 		{
 			Piece.Error = Error;
 			continue;
@@ -996,6 +1014,208 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 			*Piece.Outfit, *Piece.Garment, Piece.Vertices, Piece.FarVertices, Piece.MeanSkinCm);
 	}
 	return true;
+}
+
+FString FMantleGarmentOutfit::GarmentSlot(const FString& MeshName, TConstArrayView<FMantleOutfitSection> Sections, FString& OutWhy)
+{
+	OutWhy.Reset();
+	// The pieces the name's words say, word by word ("SK_Clothes_Shirt" is a top). Hair is never clothing ("Hair_Short").
+	TArray<EMantleOutfitPiece> NamePieces;
+	bool bNotClothing = FMantleAvatarAssemblyFixer::IsHairName(MeshName);
+	for (const FString& Word : FMantleOutfitSections::Words(MeshName))
+	{
+		FMantleOutfitSection ByWord;
+		ByWord.SlotName = Word;
+		const EMantleOutfitPiece Piece = FMantleOutfitSections::Classify(ByWord);
+		if (!FMantleOutfitSections::PieceSlot(Piece).IsEmpty())
+		{
+			NamePieces.AddUnique(Piece);
+		}
+		bNotClothing |= Piece == EMantleOutfitPiece::Skin || FMantleOutfitSections::IsProp(ByWord);
+	}
+	TArray<EMantleOutfitPiece> SectionPieces;
+	bool bSkin = false;
+	for (const FMantleOutfitSection& Section : Sections)
+	{
+		const EMantleOutfitPiece Piece = FMantleOutfitSections::Classify(Section);
+		if (!FMantleOutfitSections::PieceSlot(Piece).IsEmpty())
+		{
+			SectionPieces.AddUnique(Piece);
+		}
+		bSkin |= Piece == EMantleOutfitPiece::Skin;
+	}
+	auto Several = [](const TArray<EMantleOutfitPiece>& Pieces)
+	{
+		TArray<FString> Names;
+		for (const EMantleOutfitPiece Piece : Pieces)
+		{
+			Names.Add(FMantleOutfitSections::PieceName(Piece));
+		}
+		return FString::Printf(TEXT("Holds more than one piece of clothing (%s) in one mesh, so it can't be one Outfit."), *FString::Join(Names, TEXT(" and ")));
+	};
+	const FString Merged = TEXT("Clothing merged with the body's skin in one mesh, so it can't be an Outfit. Use the character's separate clothing pieces.");
+	if (NamePieces.Num() > 1)
+	{
+		OutWhy = Several(NamePieces);
+		return FString();
+	}
+	if (NamePieces.Num() == 1 && !bNotClothing)
+	{
+		if (bSkin)
+		{
+			OutWhy = Merged;
+			return FString();
+		}
+		return FMantleOutfitSections::PieceSlot(NamePieces[0]);
+	}
+	if (bNotClothing || SectionPieces.Num() == 0)
+	{
+		return FString();
+	}
+	if (bSkin || SectionPieces.Num() > 1)
+	{
+		OutWhy = bSkin ? Merged : Several(SectionPieces);
+		return FString();
+	}
+	return FMantleOutfitSections::PieceSlot(SectionPieces[0]);
+}
+
+void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered)
+{
+	OutGarments.Reset();
+	OutNotOffered.Reset();
+	const FString Folder = FPackageName::GetLongPackagePath(Body.GetPackage()->GetName());
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	FARFilter Filter;
+	Filter.PackagePaths.Add(*Folder);
+	Filter.bRecursivePaths = true;
+	Filter.ClassPaths.Add(USkeletalMesh::StaticClass()->GetClassPathName());
+	TArray<FAssetData> Assets;
+	Registry.GetAssets(Filter, Assets);
+	Assets.Sort([](const FAssetData& A, const FAssetData& B) { return A.PackageName.LexicalLess(B.PackageName); });
+	const FReferenceSkeleton& BodyBones = Body.GetRefSkeleton();
+	const FString Worn = WornClothing(Body);
+	FString BareBody;
+	for (const FAssetData& Asset : Assets)
+	{
+		// Convert's output (Converted folders) is never the creator's clothing.
+		if (Asset.PackageName == Body.GetPackage()->GetFName() || (Asset.PackagePath.ToString() + TEXT("/")).Contains(TEXT("/Converted/")))
+		{
+			continue;
+		}
+		USkeletalMesh* Mesh = Cast<USkeletalMesh>(Asset.GetAsset());
+		if (!Mesh)
+		{
+			continue;
+		}
+		TArray<int32> Slots;
+		const TArray<FMantleOutfitSection> Sections = FMantleCosmeticExport::ReadOutfitSections(Mesh, 0, Slots);
+		FString Why;
+		const FString Slot = GarmentSlot(Mesh->GetName(), Sections, Why);
+		const FString Name = FMantleAvatarAssemblyFixer::DisplayName(Mesh->GetName());
+		if (Slot.IsEmpty() && Why.IsEmpty())
+		{
+			// Not clothing: another body or head goes unsaid (a bare one, "Nude" first, is remembered), anything else
+			// (hair, gloves, a belt) is named.
+			FMantleOutfitSection ByName;
+			ByName.SlotName = Mesh->GetName();
+			bool bAllSkin = Sections.Num() > 0;
+			for (const FMantleOutfitSection& Section : Sections)
+			{
+				bAllSkin &= FMantleOutfitSections::Classify(Section) == EMantleOutfitPiece::Skin;
+			}
+			const TArray<FString> Words = FMantleOutfitSections::Words(Mesh->GetName());
+			const bool bHead = Words.Contains(TEXT("head")) || Words.Contains(TEXT("face"));
+			const bool bNude = Words.Contains(TEXT("nude")) || Words.Contains(TEXT("naked"));
+			if (bNude || (bAllSkin && !bHead))
+			{
+				if (BareBody.IsEmpty() || bNude)
+				{
+					BareBody = Name;
+				}
+			}
+			else if (FMantleOutfitSections::Classify(ByName) != EMantleOutfitPiece::Skin)
+			{
+				OutNotOffered.Add(Name);
+			}
+			continue;
+		}
+		const FReferenceSkeleton& Bones = Mesh->GetRefSkeleton();
+		int32 Shared = 0;
+		for (int32 Bone = 0; Bone < Bones.GetRawBoneNum(); ++Bone)
+		{
+			Shared += BodyBones.FindRawBoneIndex(Bones.GetBoneName(Bone)) != INDEX_NONE ? 1 : 0;
+		}
+		if (Why.IsEmpty() && Shared * 2 < Bones.GetRawBoneNum())
+		{
+			Why = FString::Printf(TEXT("Isn't rigged to %s's skeleton, so it can't be posed the way the body is."), *Body.GetName());
+		}
+		FMantleConvertGarment& Garment = OutGarments.AddDefaulted_GetRef();
+		Garment.Mesh = Mesh;
+		Garment.Slot = Slot;
+		Garment.Name = Name;
+		Garment.Why = Why;
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT found %s slot=%s why=%s"), *Mesh->GetPathName(), *Slot, *Why);
+	}
+	// The clothing was made for a bare body, not one that wears clothing (Convert would make the MetaHuman of what Strip leaves).
+	if (!Worn.IsEmpty())
+	{
+		const FString Why = FString::Printf(TEXT("%s wears clothing (%s), so it isn't the bare body this was made for. Convert %s instead."),
+			*FMantleAvatarAssemblyFixer::DisplayName(Body.GetName()), *Worn, BareBody.IsEmpty() ? TEXT("the character's bare body") : *BareBody);
+		for (FMantleConvertGarment& Garment : OutGarments)
+		{
+			if (Garment.Why.IsEmpty())
+			{
+				Garment.Why = Why;
+			}
+		}
+	}
+	// Tops, bottoms, footwear, then merged clothing; within each, the pieces that can be Outfits first.
+	auto Rank = [](const FMantleConvertGarment& Garment)
+	{
+		return Garment.Slot == TEXT("top") ? 0 : Garment.Slot == TEXT("bottom") ? 1 : Garment.Slot == TEXT("footwear") ? 2 : 3;
+	};
+	OutGarments.StableSort([&Rank](const FMantleConvertGarment& A, const FMantleConvertGarment& B)
+	{
+		return Rank(A) != Rank(B) ? Rank(A) < Rank(B) : (A.Why.IsEmpty() && !B.Why.IsEmpty());
+	});
+}
+
+FString FMantleGarmentOutfit::WhyNoOutfits(const FMantleConvertContext& Context, const int32 PartIndex)
+{
+	const FMantleConvertPart* Part = Context.Parts.IsValidIndex(PartIndex) ? &Context.Parts[PartIndex] : nullptr;
+	const FString BodyName = Part && Part->Original.IsValid() ? Part->Original->GetName() : FString(TEXT("The body"));
+	const FMantleConvertMetaHumanWork* Work = Context.MetaHuman.Find(PartIndex);
+	if (Work && Work->bFaceOnly)
+	{
+		return FString::Printf(TEXT("%s was converted as a face on MetaHuman's own body, not its own body, so its clothing wouldn't fit. Convert the character's bare body to use its clothing."), *BodyName);
+	}
+	if (!Work || !Work->Character.IsValid() || !Work->APoseClip.IsValid() || !Work->SkinOnly.IsValid() || !Work->PosedMesh.IsValid())
+	{
+		return FString::Printf(TEXT("Convert made no MetaHuman of %s, so there is nothing to fit its clothing on."), *BodyName);
+	}
+	// A body wearing clothing: the MetaHuman is made of what Strip left, not the bare body the clothing was made for.
+	const FString Worn = Part && Part->Original.IsValid() ? WornClothing(*Part->Original.Get()) : FString();
+	if (!Worn.IsEmpty())
+	{
+		return FString::Printf(TEXT("%s wears clothing (%s), so it isn't the bare body this clothing was made for. Convert the character's bare body to use its clothing."),
+			*BodyName, *Worn);
+	}
+	return FString();
+}
+
+FString FMantleGarmentOutfit::WornClothing(const USkeletalMesh& Body)
+{
+	TArray<int32> Slots;
+	TArray<FString> Worn;
+	for (const FMantleOutfitSection& Section : FMantleCosmeticExport::ReadOutfitSections(&Body, 0, Slots))
+	{
+		if (!FMantleOutfitSections::PieceSlot(FMantleOutfitSections::Classify(Section)).IsEmpty())
+		{
+			Worn.Add(Section.SlotName);
+		}
+	}
+	return FString::Join(Worn, TEXT(", "));
 }
 
 FString FMantleGarmentOutfit::RunForAgent(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff, const FString& Confirm)

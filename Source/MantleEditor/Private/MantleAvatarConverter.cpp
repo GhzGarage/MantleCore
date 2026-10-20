@@ -3,6 +3,7 @@
 #include "MantleAvatarStripFixer.h"
 #include "MantleAvatarContract.h"
 #include "MantleEditorActions.h"
+#include "MantleGarmentOutfit.h"
 #include "MantleMetaHumanBuild.h"
 #include "MantleReferenceBodies.h"
 #include "MantleRuntime.h"
@@ -435,8 +436,20 @@ bool FMantleAvatarConverter::MakeContext(UObject* Selection, const FMantleConver
 				*Mesh->GetName(), *Part.ClothAsset));
 		}
 	}
-	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT context mesh=%s slot=%s assembly=%s output=%s"), *Mesh->GetPathName(), *Slot,
-		*OutContext.AssemblyFolder, *OutContext.OutputFolder);
+	// A third-party avatar's body picked on its own: its separate clothing beside it, which can become MetaHuman Outfits on
+	// the MetaHuman Convert makes of this body.
+	if (!InAssembly && Class == EMantleCosmeticClass::Avatar && OutContext.Route == EMantleAvatarRoute::Convert && !Part.bUnrigged
+		&& Options.OnlyFixers.Num() == 0)
+	{
+		TArray<FString> NotOffered;
+		FMantleGarmentOutfit::FindGarments(*Mesh, OutContext.Garments, NotOffered);
+		if (NotOffered.Num() > 0)
+		{
+			OutContext.Notes.Add(FString::Printf(TEXT("Only tops, bottoms and footwear become Outfits; not offered: %s."), *FString::Join(NotOffered, TEXT(", "))));
+		}
+	}
+	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT context mesh=%s slot=%s assembly=%s output=%s garments=%d"), *Mesh->GetPathName(), *Slot,
+		*OutContext.AssemblyFolder, *OutContext.OutputFolder, OutContext.Garments.Num());
 	return true;
 }
 
@@ -1103,6 +1116,19 @@ TSharedRef<FJsonObject> FMantleAvatarConverter::ToJson(const FMantleConvertConte
 		Notes.Add(MakeShared<FJsonValueString>(Note));
 	}
 	Object->SetArrayField(TEXT("notes"), Notes);
+
+	// A third-party avatar's separate clothing, which the Cosmetics panel offers as Outfits after Convert.
+	TArray<TSharedPtr<FJsonValue>> Garments;
+	for (const FMantleConvertGarment& Garment : Context.Garments)
+	{
+		TSharedRef<FJsonObject> GarmentObject = MakeShared<FJsonObject>();
+		GarmentObject->SetStringField(TEXT("name"), Garment.Name);
+		GarmentObject->SetStringField(TEXT("slot"), Garment.Slot);
+		GarmentObject->SetStringField(TEXT("mesh"), Garment.Mesh.IsValid() ? Garment.Mesh->GetPathName() : FString());
+		GarmentObject->SetStringField(TEXT("why"), Garment.Why);
+		Garments.Add(MakeShared<FJsonValueObject>(GarmentObject));
+	}
+	Object->SetArrayField(TEXT("garments"), Garments);
 
 	Object->SetBoolField(TEXT("applied"), Result != nullptr);
 	if (Result)

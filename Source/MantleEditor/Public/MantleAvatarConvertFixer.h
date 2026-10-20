@@ -195,6 +195,30 @@ struct MANTLEEDITOR_API FMantleConvertMetaHumanWork
 	bool bFeminineBody = false;
 };
 
+/**
+ * A third-party character's separate piece of clothing found beside the body being converted
+ * (FMantleGarmentOutfit::FindGarments). After Convert, it can become a MetaHuman Outfit on the MetaHuman Convert made of
+ * that body (FMantleGarmentOutfit::MakeFromWork). Fixers never touch it.
+ */
+struct MANTLEEDITOR_API FMantleConvertGarment
+{
+	/** The creator's mesh (never modified). */
+	TWeakObjectPtr<USkeletalMesh> Mesh;
+
+	/** "top", "bottom" or "footwear"; empty for merged clothing (Why says so). */
+	FString Slot;
+
+	/** Display name for the upload. */
+	FString Name;
+
+	/** Why it can't become an Outfit, in plain words; empty when it can. */
+	FString Why;
+
+	/** The Outfit made from it, once made; and why making it failed, when it did. */
+	FString Outfit;
+	FString Error;
+};
+
 /** What the converter is working on, handed from fixer to fixer. */
 struct MANTLEEDITOR_API FMantleConvertContext
 {
@@ -241,6 +265,9 @@ struct MANTLEEDITOR_API FMantleConvertContext
 
 	/** #625: Convert's MetaHuman steps' work, by part index. */
 	TMap<int32, FMantleConvertMetaHumanWork> MetaHuman;
+
+	/** A third-party avatar's separate clothing (one body converted on its own): tops, bottoms and footwear, for Outfits. */
+	TArray<FMantleConvertGarment> Garments;
 
 	/**
 	 * #625: whether Parts[PartIndex] is a MetaHuman Convert built and handed on (FMantleMetaHumanBuild::HandOff). Its body

@@ -24,6 +24,8 @@ public class MantleEditor : ModuleRules
 			"InputCore",
 			"Slate",
 			"SlateCore",
+			// Mantle.Dev.ConvertPanelShot renders the Cosmetics panel's Convert section offscreen (FWidgetRenderer).
+			"UMG",
 			// Creator-declared clothing region default and preview color pickers.
 			"AppFramework",
 			"UnrealEd",
