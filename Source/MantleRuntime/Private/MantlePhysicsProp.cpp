@@ -263,6 +263,8 @@ bool AMantlePhysicsProp::AdoptPlaceholder(AActor* Placeholder)
 		}
 	}
 	To->SetCastShadow(From->CastShadow);
+	// #630: the place's drawDistance, as the placeholder was built with it (0, never culled, when it has none).
+	To->SetCullDistance(From->LDMaxDrawDistance);
 	To->SetCollisionProfileName(UCollisionProfile::CustomCollisionProfileName);
 	To->SetCollisionEnabled(From->GetCollisionEnabled());
 	To->SetCollisionResponseToChannels(From->GetCollisionResponseToChannels());

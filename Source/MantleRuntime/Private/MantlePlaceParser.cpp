@@ -775,7 +775,7 @@ namespace
 		OptionalBool(Props, TEXT("enabled"), P.bEnabled);
 	}
 
-	/** The mesh, materials, collision and shadow a StaticMesh and an InstancedMesh share. */
+	/** The mesh, materials, collision, shadow and draw distance a StaticMesh and an InstancedMesh share. */
 	void ReadMeshProps(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Props, const FString& Path, FMantleStaticMeshProps& P)
 	{
 		RequireString(Ctx, Props, TEXT("mesh"), Path, P.Mesh);
@@ -791,6 +791,24 @@ namespace
 			Ctx.Fail(Join(Path, TEXT("collision")), FString::Printf(TEXT("'%s' is not a valid collision mode"), *Collision));
 		}
 		OptionalBool(Props, TEXT("castShadow"), P.bCastShadow);
+
+		// #630: a typed number in (0, MaxDrawDistance]; absent leaves 0, never culled.
+		if (const TSharedPtr<FJsonValue> Distance = Props->TryGetField(TEXT("drawDistance")))
+		{
+			const FString DistancePath = Join(Path, TEXT("drawDistance"));
+			if (Distance->Type != EJson::Number)
+			{
+				Ctx.Fail(DistancePath, TEXT("must be a number"));
+			}
+			else if (const double Value = Distance->AsNumber(); !(Value > 0.0 && Value <= FMantlePlaceLimits::MaxDrawDistance))
+			{
+				Ctx.Fail(DistancePath, FString::Printf(TEXT("%g is outside the permitted range (0, %g]"), Value, FMantlePlaceLimits::MaxDrawDistance));
+			}
+			else
+			{
+				P.DrawDistance = Value;
+			}
+		}
 	}
 
 	/**
@@ -2255,7 +2273,7 @@ namespace
 		{
 			RequireNoUnknownKeys(
 				Ctx, Props,
-				{ TEXT("mesh"), TEXT("materials"), TEXT("collision"), TEXT("castShadow"), TEXT("physics"), TEXT("surface") },
+				{ TEXT("mesh"), TEXT("materials"), TEXT("collision"), TEXT("castShadow"), TEXT("physics"), TEXT("surface"), TEXT("drawDistance") },
 				Path);
 			FMantleStaticMeshProps P;
 			ReadMeshProps(Ctx, Props, Path, P);
@@ -2279,7 +2297,7 @@ namespace
 		{
 			RequireNoUnknownKeys(
 				Ctx, Props,
-				{ TEXT("mesh"), TEXT("materials"), TEXT("collision"), TEXT("castShadow"), TEXT("surface"), TEXT("instances") },
+				{ TEXT("mesh"), TEXT("materials"), TEXT("collision"), TEXT("castShadow"), TEXT("surface"), TEXT("drawDistance"), TEXT("instances") },
 				Path);
 			FMantleInstancedMeshProps P;
 			ReadMeshProps(Ctx, Props, Path, P.Mesh);

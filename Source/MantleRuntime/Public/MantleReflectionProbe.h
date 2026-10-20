@@ -22,6 +22,10 @@ class USceneComponent;
  * packaged game only runs that update on a frame where a capture is queued (UGameEngine::Tick asks
  * UReflectionCaptureComponent::HasReflectionCapturesToUpdate first), so UMantleReflectionProbeSubsystem queues
  * one every frame until every probe has had its turn.
+ *
+ * A runtime capture's average brightness is never measured (only the baked path runs ComputeAverageBrightness), so
+ * it stays 0, and the renderer's lightmap mixing divides a rough surface's reflection by it (ComputeMixingWeight):
+ * hence r.ReflectionEnvironmentLightmapMixing=0 in DefaultEngine.ini, and IsLightmapMixingOn for the log.
  */
 struct MANTLERUNTIME_API FMantleReflectionProbes
 {
@@ -50,6 +54,9 @@ struct MANTLERUNTIME_API FMantleReflectionProbes
 
 	/** r.ReflectionCapture.Runtime is not 0: the renderer only gives a runtime capture a proxy then. */
 	static bool IsRuntimeCaptureOn();
+
+	/** r.ReflectionEnvironmentLightmapMixing is not 0: a runtime capture then lights rough surfaces far too brightly. */
+	static bool IsLightmapMixingOn();
 
 	/** Empty when World draws probes; otherwise the reason it does not (a dedicated server, a process that does not render, a cvar off), for the log. */
 	static FString WhyNotDrawn(const UWorld* World);

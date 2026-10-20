@@ -58,6 +58,8 @@ namespace MantleClientFeatures
 	inline const TCHAR* const StaticMeshPhysics = TEXT("staticMeshPhysics");
 	inline const TCHAR* const PhysicsMaterial = TEXT("physicsMaterial");
 	inline const TCHAR* const Surface = TEXT("surface");
+	/** A StaticMesh's or an InstancedMesh's drawDistance (#630 stage 2): culled, faded and shadowless by distance. */
+	inline const TCHAR* const DrawDistance = TEXT("drawDistance");
 	/** Shading carPaint and its finish (#487). */
 	inline const TCHAR* const CarPaint = TEXT("carPaint");
 	/** #471's material keys, #533's and #628's foliage, and the extended master with their permutations. */
@@ -73,7 +75,7 @@ namespace MantleClientFeatures
 		return {
 			InstancedMesh, CrowdSpawner, CrowdPointsOfInterest, SkeletalMesh, RectLight, Decal, LightShape, Terrain, TerrainGrass,
 			Vehicle, VehicleLinkage, VehicleParts, VehicleCarInteraction, VehicleContactPoints, VehicleHiddenSeat, VehicleFliers, VehicleHover, VehicleSeatKind, VehicleWeaponArc, Effect, EffectSprites, Constraint, Scatter, ReflectionProbes, Storage,
-			UIDocuments, EnvironmentDefaults, EnvironmentLighting, AvatarHeight, SoundEmitterAutoplay, StaticMeshPhysics, PhysicsMaterial, Surface, CarPaint,
+			UIDocuments, EnvironmentDefaults, EnvironmentLighting, AvatarHeight, SoundEmitterAutoplay, StaticMeshPhysics, PhysicsMaterial, Surface, DrawDistance, CarPaint,
 			MaterialFidelity, MaterialAdditive, WeaponDocument
 		};
 	}

@@ -37,6 +37,9 @@ struct MANTLERUNTIME_API FMantlePlaceLimits
 	/** StaticMesh, InstancedMesh and SkeletalMesh materials[]. */
 	static constexpr int32 MaxMaterialSlots = 16;
 
+	/** StaticMesh and InstancedMesh drawDistance (#630 stage 2): above 0 and at most this many cm (10 km). */
+	static constexpr double MaxDrawDistance = 1000000.0;
+
 	/** SkeletalMesh playRate, 0 (hold the pose at startOffset) to this many clip seconds per server second (#469). */
 	static constexpr double MaxClipPlayRate = 10.0;
 

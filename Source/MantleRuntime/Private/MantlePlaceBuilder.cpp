@@ -15,6 +15,7 @@
 #include "MantleRuntime.h"
 #include "MantleScatterVolume.h"
 #include "MantleScriptPoint.h"
+#include "MantleShadowDistance.h"
 #include "MantleSkeletonHash.h"
 #include "MantleSoundWave.h"
 #include "MantleSurface.h"
@@ -258,6 +259,28 @@ namespace
 		}
 	}
 
+	/**
+	 * The share of an InstancedMesh's drawDistance (#630) at which its instances start to fade (dithered, per instance,
+	 * as terrain grass does): they fade over the last fifth and are gone past the whole.
+	 */
+	constexpr double InstanceFadeStartShare = 0.8;
+
+	/**
+	 * A mesh with a drawDistance (#630) that casts shadows stops casting them past a share of it, decided per view by
+	 * UMantleShadowDistanceSubsystem, which exists only where something draws in a played world.
+	 */
+	void TrackShadowDistance(UWorld* World, UPrimitiveComponent* Component, const FMantleStaticMeshProps& Props)
+	{
+		if (Props.DrawDistance <= 0.0 || !Props.bCastShadow)
+		{
+			return;
+		}
+		if (UMantleShadowDistanceSubsystem* Shadows = World->GetSubsystem<UMantleShadowDistanceSubsystem>())
+		{
+			Shadows->Track(Component, Props.DrawDistance);
+		}
+	}
+
 	AActor* BuildStaticMesh(
 		UWorld* World,
 		const FMantleEntity& Entity,
@@ -294,6 +317,18 @@ namespace
 
 		MakeMovable(Actor);
 		ApplyMeshProps(World, Actor->GetStaticMeshComponent(), Mesh, Props, Path, Errors, LoadStats);
+
+		// #630: drawn, and so shadowed, no farther than its drawDistance. Absent, never culled (0). The editor's Max Draw
+		// Distance too, so an imported place exports it again. A physics entity keeps its shadow: its prop, which copies
+		// the placeholder's draw distance and shadow when it takes over, moves where no distance check follows it.
+		if (Props.DrawDistance > 0.0)
+		{
+			Actor->GetStaticMeshComponent()->SetCullDistance(static_cast<float>(Props.DrawDistance));
+			if (!Physics)
+			{
+				TrackShadowDistance(World, Actor->GetStaticMeshComponent(), Props);
+			}
+		}
 
 		if (Physics)
 		{
@@ -352,6 +387,18 @@ namespace
 		Actor->AddInstanceComponent(Instances);
 		Instances->SetMobility(EComponentMobility::Movable);
 		ApplyMeshProps(World, Instances, Mesh, Props.Mesh, Path, Errors, LoadStats);
+
+		// #630: each instance fades out over the last fifth of the drawDistance and is gone past it, as terrain grass
+		// culls. Per instance, not the component's Max Draw Distance: that is measured to the whole set's bounds, which
+		// spread far past any one instance. Absent, never culled (0, 0). The editor's instance cull distances too, so an
+		// imported place exports them again.
+		if (Props.Mesh.DrawDistance > 0.0)
+		{
+			const int32 CullEnd = FMath::Max(FMath::RoundToInt32(Props.Mesh.DrawDistance), 1);
+			const int32 CullStart = FMath::Min(FMath::RoundToInt32(Props.Mesh.DrawDistance * InstanceFadeStartShare), CullEnd);
+			Instances->SetCullDistances(CullStart, CullEnd);
+			TrackShadowDistance(World, Instances, Props.Mesh);
+		}
 
 		// Instances go in before the component registers, so its render state and per-instance
 		// physics bodies are created once for all of them rather than grown one add at a time.

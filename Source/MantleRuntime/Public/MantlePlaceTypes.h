@@ -728,6 +728,14 @@ struct FMantleStaticMeshProps
 	 * material carries the body's surface; the parser refuses the two together.
 	 */
 	EMantleSurface Surface = EMantleSurface::Default;
+
+	/**
+	 * drawDistance (#630 stage 2): how far from the camera the mesh is drawn, in cm, above 0 and at most
+	 * FMantlePlaceLimits::MaxDrawDistance. The builder makes it a StaticMesh's Max Draw Distance, or an InstancedMesh's
+	 * instance cull distances with a dithered fade, and stops the mesh casting shadows past a share of it
+	 * (UMantleShadowDistanceSubsystem). 0, the key absent: never culled by distance, as before the key.
+	 */
+	double DrawDistance = 0.0;
 };
 
 struct FMantleEmptyProps
