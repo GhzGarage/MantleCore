@@ -130,6 +130,9 @@ struct FMantleExportResult
 	/** Instanced mesh entries in the place file, after grouping and any thinning. */
 	int64 InstanceTotal = 0;
 
+	/** Mesh entities and instance sets that got a drawDistance (GhzGarage/mantle#630); 0 when the target client does not read them. */
+	int32 DrawDistanceEntities = 0;
+
 	/** Static mesh actors Export folded into instance sets. */
 	FMantleGroupReport Grouping;
 

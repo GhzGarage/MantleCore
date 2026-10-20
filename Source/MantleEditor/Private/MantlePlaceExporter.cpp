@@ -9,6 +9,7 @@
 #include "MantleEffect.h"
 #include "MantleEffectExport.h"
 #include "MantleClientFeatures.h"
+#include "MantleDrawDistance.h"
 #include "MantleTargetFeatures.h"
 #include "MantleEnvironment.h"
 #include "MantleEnvironmentExport.h"
@@ -708,6 +709,8 @@ namespace
 		// #596: the surface a creator picked with one of Mantle's surface physical materials. A physics
 		// entity's caller clears it again: its physics.material carries the body's surface.
 		Props.Surface = FMantlePlaceExporter::ReadSurface(Component);
+		// GhzGarage/mantle#630: the component's cull distance, else a size-based default; nothing for a client that doesn't read them.
+		FMantleDrawDistance::Apply(FMantleDrawDistance::ReadComponent(Component, Mesh), FMantleTargetFeatures::Current(), Props);
 	}
 
 	/**
@@ -3437,6 +3440,12 @@ FString FMantlePlaceExporter::InstancedGroupKey(const FMantleStaticMeshProps& Me
 		Key += TEXT("|") + (Material.IsEmpty() ? FString(TEXT("-")) : Material);
 	}
 	Key += FString::Printf(TEXT("|%d|%d"), static_cast<int32>(Mesh.Collision), Mesh.bCastShadow ? 1 : 0);
+	// GhzGarage/mantle#630: only a distance that is set joins the key, so every key (and the entity ids hashed from it) of a
+	// mesh without one stays as it was, and meshes with different distances stay in different sets.
+	if (Mesh.DrawDistance > 0.0)
+	{
+		Key += FString::Printf(TEXT("|d%g"), Mesh.DrawDistance);
+	}
 	// #596: only a surface other than default joins the key, so every key (and the entity ids hashed
 	// from it) from before surfaces stays as it was.
 	if (Mesh.Surface != EMantleSurface::Default)
@@ -4780,6 +4789,12 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 	// told with the fix (even thinning, with its numbers); the instances are removed only when thinning was asked for.
 	{
 		Result.InstanceTotal = FMantlePlaceInstancing::CountInstances(Place);
+		Result.DrawDistanceEntities = FMantleDrawDistance::CountEntities(Place);
+		if (!FMantleTargetFeatures::Current().Reads(MantleClientFeatures::DrawDistance) && FMantleDrawDistance::HasMeshEntities(Place))
+		{
+			Result.Coverage.Add(MantleCoverageCategory::StaticMeshes, EMantleCoverageOutcome::Approximated, TEXT("draw distances"),
+				FString::Printf(TEXT("left out, so meshes are drawn from any distance: %s"), FMantleTargetFeatures::NeedsNewerClient));
+		}
 		Result.PlaceBytes = FMantlePlaceInstancing::PlaceBytes(Place);
 		if (Result.InstanceTotal > FMantlePlaceLimits::MaxInstancesPerPlace || Result.PlaceBytes > FMantlePlaceLimits::MaxPlaceFileBytes)
 		{
@@ -5065,6 +5080,11 @@ FString FMantlePlaceExporter::ToJson(const FMantlePlace& Place)
 			Writer->WriteArrayEnd();
 			Writer->WriteValue(TEXT("collision"), CollisionName(P->Collision));
 			Writer->WriteValue(TEXT("castShadow"), P->bCastShadow);
+			// GhzGarage/mantle#630: only above 0 (0 is never written: absent means no limit), and never without the drawDistance feature.
+			if (P->DrawDistance > 0.0)
+			{
+				Writer->WriteValue(TEXT("drawDistance"), P->DrawDistance);
+			}
 			// #596: only when not default, so every other mesh still reaches a client that predates the
 			// key (the backend gates it, SurfaceReleased), and never beside a physics block.
 			if (P->Surface != EMantleSurface::Default && !P->Physics.IsSet())
