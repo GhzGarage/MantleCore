@@ -69,4 +69,71 @@ bool FMantleHeadFitHatSocketTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHeadFitIgnoresEarsTest,
+	"Mantle.Editor.HeadFit.IgnoresEars",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHeadFitIgnoresEarsTest::RunTest(const FString& Parameters)
+{
+	// MetaHuman's ear bones, on both sides, are ears (MetaGoblin's ears made its hat 1.57 times too wide).
+	for (const TCHAR* Bone : { TEXT("FACIAL_L_Ear"), TEXT("FACIAL_R_Ear"), TEXT("FACIAL_L_Ear1"), TEXT("FACIAL_R_Ear4"), TEXT("facial_l_ear2") })
+	{
+		TestTrue(FString::Printf(TEXT("%s is an ear"), Bone), FMantleHeadFit::IsEarBone(FName(Bone)));
+	}
+	// Names that only contain the letters are not.
+	for (const TCHAR* Bone : { TEXT("head"), TEXT("FACIAL_C_Forehead"), TEXT("FACIAL_L_ForeheadMid"), TEXT("FACIAL_L_Earring"), TEXT("FACIAL_L_Nearside"),
+		TEXT("FACIAL_R_EyesackUpper"), TEXT("FACIAL_C_Skull") })
+	{
+		TestFalse(FString::Printf(TEXT("%s is not an ear"), Bone), FMantleHeadFit::IsEarBone(FName(Bone)));
+	}
+
+	// A vertex is cranium when it is mostly on the head and barely on an ear.
+	TestTrue(TEXT("all on the head, none on an ear: cranium"), FMantleHeadFit::IsCranium(1.0f, 0.0f));
+	TestTrue(TEXT("a trace of ear weight (a seam by the ear) still counts"), FMantleHeadFit::IsCranium(1.0f, 0.02f));
+	TestFalse(TEXT("an ear vertex does not count"), FMantleHeadFit::IsCranium(1.0f, 1.0f));
+	TestFalse(TEXT("a vertex shared with an ear does not count"), FMantleHeadFit::IsCranium(1.0f, 0.3f));
+	TestFalse(TEXT("a neck vertex does not count"), FMantleHeadFit::IsCranium(0.3f, 0.0f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHeadFitFrontIsForeheadTest,
+	"Mantle.Editor.HeadFit.FrontIsForehead",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHeadFitFrontIsForeheadTest::RunTest(const FString& Parameters)
+{
+	// A skull: the upper half of a 10 cm ball on the joint (X up, Y front-back with +Y the face, Z side to side).
+	TArray<FVector3f> Skull;
+	for (int32 Up = 0; Up <= 20; ++Up)
+	{
+		for (int32 Around = 0; Around < 36; ++Around)
+		{
+			const float Polar = UE_HALF_PI * Up / 20.0f;
+			const float Azimuth = UE_TWO_PI * Around / 36.0f;
+			Skull.Add(10.0f * FVector3f(FMath::Cos(Polar), FMath::Sin(Polar) * FMath::Cos(Azimuth), FMath::Sin(Polar) * FMath::Sin(Azimuth)));
+		}
+	}
+	const FBox3f Plain = FMantleHeadFit::CraniumBox(Skull);
+	TestTrue(FString::Printf(TEXT("the plain skull is 10 cm tall (%s)"), *Plain.ToString()), FMath::IsNearlyEqual(Plain.Max.X, 10.0f, 0.05f));
+
+	// The same skull with a face below the forehead: a nose 6 cm in front of it, 2 cm up.
+	TArray<FVector3f> WithNose = Skull;
+	for (int32 Index = 0; Index < 200; ++Index)
+	{
+		WithNose.Add(FVector3f(2.0f + Index * 0.01f, 16.0f, 0.0f));
+	}
+	const FBox3f Box = FMantleHeadFit::CraniumBox(WithNose);
+	TestTrue(FString::Printf(TEXT("the nose does not move the front (%.2f, without it %.2f)"), Box.Max.Y, Plain.Max.Y),
+		FMath::IsNearlyEqual(Box.Max.Y, Plain.Max.Y, 0.05f));
+	TestTrue(TEXT("the front is the forehead: the ball's front at 55% of its height"),
+		FMath::IsNearlyEqual(Box.Max.Y, 10.0f * FMath::Sqrt(1.0f - 0.55f * 0.55f), 0.6f));
+	TestTrue(TEXT("the back is the skull's own"), FMath::IsNearlyEqual(Box.Min.Y, Plain.Min.Y, 0.05f));
+	TestTrue(TEXT("the width is the skull's own"), FMath::IsNearlyEqual(Box.GetSize().Z, Plain.GetSize().Z, 0.05f));
+
+	TestFalse(TEXT("no points, no box"), static_cast<bool>(FMantleHeadFit::CraniumBox({}).IsValid));
+	return true;
+}
+
 #endif
