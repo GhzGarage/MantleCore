@@ -5,6 +5,8 @@
 #include "MantleGlbWriter.h"
 
 class USkeletalMesh;
+struct FMeshDescription;
+struct FReferenceSkeleton;
 
 /** One garment FMantleGarmentOutfit made into an Outfit. */
 struct MANTLEEDITOR_API FMantleGarmentOutfitPiece
@@ -19,6 +21,9 @@ struct MANTLEEDITOR_API FMantleGarmentOutfitPiece
 	/** Garment vertices that had no MetaHuman skin within NearCm, and the average distance from a vertex to the skin (cm). */
 	int32 FarVertices = 0;
 	double MeanSkinCm = 0.0;
+
+	/** What pushing it out of the MetaHuman's skin did (FMantleRefitPushOut::ToString). */
+	FString PushOut;
 };
 
 /** What FMantleGarmentOutfit::Make did. */
@@ -38,6 +43,9 @@ struct MANTLEEDITOR_API FMantleGarmentOutfitResult
 	FVector3f Offset = FVector3f::ZeroVector;
 	double BodyGapCm = 0.0;
 
+	/** The conformed MetaHuman's limbs turned onto MetaHuman's A-pose: "upperarm_l 7.4, ..." (degrees). */
+	FString APoseTurns;
+
 	TArray<FMantleGarmentOutfitPiece> Pieces;
 	TArray<FString> Notes;
 };
@@ -52,7 +60,9 @@ struct MANTLEEDITOR_API FMantleGarmentOutfitResult
  *      the body lacks follows its parent), scaled by the same k, and moved by the offset that puts the posed body on the
  *      MetaHuman's skin (PoseMesh, AlignTranslation).
  *   3. Its skin weights are taken from the MetaHuman's merged body and head (TransferWeights), so it is on MetaHuman's bones.
- *   4. FMantleParametricOutfitAuthoring::Create makes the Outfit, its source body that merged body (saved as a copy).
+ *   4. The MetaHuman's arms and legs are turned onto MetaHuman's own A-pose (TurnToTemplate), body and garment alike, and
+ *      the garment is pushed out of the skin where it sits under it (FMantleAvatarRefit::PushOutOfBody, as the refit does).
+ *   5. FMantleParametricOutfitAuthoring::Create makes the Outfit, its source body that turned body (saved as a copy).
  * The creator's assets are never modified; everything is saved under the output folder.
  */
 struct MANTLEEDITOR_API FMantleGarmentOutfit
@@ -101,7 +111,24 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * skeleton is replaced by a saved one of the same bones, and a transient material by the first saved material it is an
 	 * instance of. Null with why.
 	 */
-	static USkeletalMesh* SaveCopy(USkeletalMesh& Source, const FString& Folder, const FString& Name, FString& OutError);
+	static USkeletalMesh* SaveCopy(USkeletalMesh& Source, const FString& Folder, const FString& Name, FString& OutError,
+		const TFunction<bool(FMeshDescription&, FReferenceSkeleton&, FString&)>& Edit = nullptr);
+
+	/**
+	 * Pure (tested): Component (one component-space transform per raw bone of Reference) turned so each limb bone of Limbs()
+	 * points as it does in Template (bones by name), root to leaf: a bone turns about its joint by the smallest rotation,
+	 * and everything below it follows. The conform keeps the arm angle of the body it was given; Epic's standard bodies,
+	 * and the resize that fits an Outfit onto them, stand in MetaHuman's own A-pose. OutLines: "upperarm_l 7.4", one per
+	 * limb bone, degrees.
+	 */
+	static TArray<FTransform> TurnToTemplate(const FReferenceSkeleton& Reference, TConstArrayView<FTransform> Component,
+		const FReferenceSkeleton& Template, TConstArrayView<FTransform> TemplateComponent, TArray<FString>& OutLines);
+
+	/** The limb bones TurnToTemplate lines up, each with the child it points at, root to leaf (MetaHuman's names). */
+	static const TArray<TPair<FName, FName>>& Limbs();
+
+	/** Component-space transforms of Reference's raw bones in their reference pose. */
+	static TArray<FTransform> ComponentPose(const FReferenceSkeleton& Reference);
 
 	/** The toolset's MakeOutfitFromGarment: Make for asset paths (Garments comma-separated), as one JSON object. */
 	static FString RunForAgent(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff, const FString& Confirm);

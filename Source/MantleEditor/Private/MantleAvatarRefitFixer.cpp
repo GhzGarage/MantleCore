@@ -874,6 +874,29 @@ bool FMantleAvatarRefit::PushOutOfBody(FMeshDescription& Mesh, const FMantleSkin
 		return true;
 	}
 
+	const FMantleSkinnedMeshLOD Before = Garment;
+	if (!PushOutOfBody(Garment, Body, Out, OutError))
+	{
+		return false;
+	}
+	for (int32 Vertex = 0; Vertex < Vertices.Num(); ++Vertex)
+	{
+		if (FVector3f::Dist(Garment.Positions[Vertex], Before.Positions[Vertex]) > 1.e-4)
+		{
+			Positions.Set(Vertices[Vertex], Garment.Positions[Vertex]);
+		}
+	}
+	return true;
+}
+
+bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError)
+{
+	Out = FMantleRefitPushOut();
+	if (Garment.NumTriangles() == 0)
+	{
+		return true;
+	}
+
 	// Each vertex's clearance over the body; the target is at least PushOutCm, where it is not too deep to be meant.
 	FMantleGarmentClearance Target;
 	if (!FMantleGarmentClearance::Compute(Garment.Positions, Body, Target, FMantleGarmentClearance::DefaultSearchCm, &OutError))
@@ -912,14 +935,13 @@ bool FMantleAvatarRefit::PushOutOfBody(FMeshDescription& Mesh, const FMantleSkin
 		OutError = FString::Printf(TEXT("the push out of the body failed: %s"), *Error);
 		return false;
 	}
-	for (int32 Vertex = 0; Vertex < Vertices.Num(); ++Vertex)
+	for (int32 Vertex = 0; Vertex < Garment.NumVertices(); ++Vertex)
 	{
 		const double Move = FVector3f::Dist(Garment.Positions[Vertex], Before.Positions[Vertex]);
 		if (Move > 1.e-4)
 		{
 			++Out.Moved;
 			Out.MaxMoveCm = FMath::Max(Out.MaxMoveCm, Move);
-			Positions.Set(Vertices[Vertex], Garment.Positions[Vertex]);
 		}
 	}
 

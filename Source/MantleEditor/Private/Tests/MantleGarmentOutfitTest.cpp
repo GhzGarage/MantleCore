@@ -2,6 +2,7 @@
 #include "MantleGarmentOutfit.h"
 
 #include "Math/RandomStream.h"
+#include "ReferenceSkeleton.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -132,6 +133,47 @@ bool FMantleGarmentOutfitWeightsTest::RunTest(const FString& Parameters)
 	FMantleGlbMesh Bare;
 	Bare.Positions = { FVector3f::ZeroVector };
 	TestFalse(TEXT("a body without skin weights is refused"), FMantleGarmentOutfit::TransferWeights(Garment, Bare, Far, Mean, Error));
+	return true;
+}
+
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+namespace MantleGarmentOutfitTestPrivate
+{
+	/** root -> upperarm_l -> lowerarm_l -> hand_l, the upper arm and forearm each 30 cm along Arm. */
+	FReferenceSkeleton GarmentTestArm(const FVector& Arm)
+	{
+		FReferenceSkeleton Reference;
+		FReferenceSkeletonModifier Modifier(Reference, nullptr);
+		Modifier.Add(FMeshBoneInfo(FName(TEXT("root")), TEXT("root"), INDEX_NONE), FTransform::Identity);
+		Modifier.Add(FMeshBoneInfo(FName(TEXT("upperarm_l")), TEXT("upperarm_l"), 0), FTransform(FVector(0, 0, 140)));
+		Modifier.Add(FMeshBoneInfo(FName(TEXT("lowerarm_l")), TEXT("lowerarm_l"), 1), FTransform(Arm * 30.0));
+		Modifier.Add(FMeshBoneInfo(FName(TEXT("hand_l")), TEXT("hand_l"), 2), FTransform(Arm * 30.0));
+		return Reference;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitTurnTest,
+	"Mantle.Editor.GarmentOutfit.TurnToTemplate",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitTurnTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleGarmentOutfitTestPrivate;
+	// An arm held out level, turned onto a template whose arm hangs 45 degrees down.
+	const FReferenceSkeleton Level = GarmentTestArm(FVector(1, 0, 0));
+	const FReferenceSkeleton Template = GarmentTestArm(FVector(1, 0, -1).GetSafeNormal());
+	TArray<FString> Lines;
+	const TArray<FTransform> Turned = FMantleGarmentOutfit::TurnToTemplate(Level, FMantleGarmentOutfit::ComponentPose(Level), Template,
+		FMantleGarmentOutfit::ComponentPose(Template), Lines);
+	const TArray<FTransform> Wanted = FMantleGarmentOutfit::ComponentPose(Template);
+	TestTrue(TEXT("the shoulder stays"), Turned[1].GetLocation().Equals(FVector(0, 0, 140), 1e-3));
+	TestTrue(FString::Printf(TEXT("the elbow lands on the template's (%s)"), *Turned[2].GetLocation().ToString()), Turned[2].GetLocation().Equals(Wanted[2].GetLocation(), 1e-3));
+	TestTrue(TEXT("the hand follows"), Turned[3].GetLocation().Equals(Wanted[3].GetLocation(), 1e-3));
+	TestTrue(TEXT("the turn is reported"), Lines.Num() == 2 && Lines[0].StartsWith(TEXT("upperarm_l 45.0")));
 	return true;
 }
 

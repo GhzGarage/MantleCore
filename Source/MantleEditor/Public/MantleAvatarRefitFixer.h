@@ -222,6 +222,9 @@ public:
 	 */
 	static bool PushOutOfBody(FMeshDescription& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError);
 
+	/** The same on a surface (one point per welded vertex, its normals and triangles): Garment's positions are moved. */
+	static bool PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError);
+
 	/**
 	 * A NEW skeletal mesh, PackagePath/AssetName, Garment refitted by InPlan on every LOD (FMantleAvatarRepose::
 	 * WriteWithPose), with InPlan.TargetLocal as its reference pose. Garment is never modified. Null with why when a LOD

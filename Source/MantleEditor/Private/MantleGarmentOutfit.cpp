@@ -3,9 +3,12 @@
 
 #include "MantleAvatarContract.h"
 #include "MantleAvatarConverter.h"
+#include "MantleAvatarRefitFixer.h"
+#include "MantleAvatarReposeFixer.h"
 #include "MantleAvatarStripFixer.h"
 #include "MantleCosmeticExport.h"
 #include "MantleMetaHumanPose.h"
+#include "MantleNailSeating.h"
 #include "MantleParametricOutfitAuthoring.h"
 
 #include "Animation/AnimSequence.h"
@@ -214,6 +217,47 @@ namespace MantleGarmentOutfitPrivate
 		return Skeleton;
 	}
 
+	/** Mesh pushed out of Body's skin (FMantleAvatarRefit::PushOutOfBody) on its welded surface: render copies of a point move together. */
+	bool GarmentPushOut(FMantleGlbMesh& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError)
+	{
+		FMantleSkinnedMeshLOD Surface;
+		TArray<int32> PointOf;
+		TMap<FVector3f, int32> Welded;
+		for (const FVector3f& Position : Mesh.Positions)
+		{
+			const int32* Found = Welded.Find(Position);
+			PointOf.Add(Found ? *Found : Welded.Add(Position, Surface.Positions.Add(Position)));
+		}
+		Surface.Normals.Init(FVector3f::ZeroVector, Surface.Positions.Num());
+		for (int32 Vertex = 0; Vertex < Mesh.Positions.Num(); ++Vertex)
+		{
+			if (Mesh.Normals.IsValidIndex(Vertex))
+			{
+				Surface.Normals[PointOf[Vertex]] += Mesh.Normals[Vertex];
+			}
+		}
+		for (FVector3f& Normal : Surface.Normals)
+		{
+			Normal = Normal.GetSafeNormal();
+		}
+		for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives)
+		{
+			for (const uint32 Index : Primitive.Indices)
+			{
+				Surface.Indices.Add(static_cast<uint32>(PointOf[Primitive.FirstVertex + static_cast<int32>(Index)]));
+			}
+		}
+		if (!FMantleAvatarRefit::PushOutOfBody(Surface, Body, Out, OutError))
+		{
+			return false;
+		}
+		for (int32 Vertex = 0; Vertex < Mesh.Positions.Num(); ++Vertex)
+		{
+			Mesh.Positions[Vertex] = Surface.Positions[PointOf[Vertex]];
+		}
+		return true;
+	}
+
 	USkeletalMesh* GarmentLoadMesh(const FString& InPath)
 	{
 		FString Path = InPath.TrimStartAndEnd();
@@ -249,7 +293,8 @@ namespace MantleGarmentOutfitPrivate
 	}
 }
 
-USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FString& Folder, const FString& Name, FString& OutError)
+USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FString& Folder, const FString& Name, FString& OutError,
+	const TFunction<bool(FMeshDescription&, FReferenceSkeleton&, FString&)>& Edit)
 {
 	using namespace MantleGarmentOutfitPrivate;
 	// A new mesh built from Source's LOD 0 geometry, never a duplicate: MetaHuman Creator's in-memory meshes don't duplicate.
@@ -269,6 +314,11 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 		OutError = FString::Printf(TEXT("%s has no geometry to copy"), *Source.GetName());
 		return nullptr;
 	}
+	FReferenceSkeleton Reference = Source.GetRefSkeleton();
+	if (Edit && !Edit(Description, Reference, OutError))
+	{
+		return nullptr;
+	}
 	// Bounds from the geometry: Creator's in-memory meshes report none, and a mesh with none is never drawn.
 	FBox Bounds(ForceInit);
 	for (const FVector3f& Position : Description.GetVertexPositions().GetRawArray())
@@ -286,7 +336,7 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 	}
 	auto IsTransient = [](const UObject* Object) { return Object && (Object->HasAnyFlags(RF_Transient) || Object->GetPackage() == GetTransientPackage()); };
 	Copy->PreEditChange(nullptr);
-	Copy->SetRefSkeleton(Source.GetRefSkeleton());
+	Copy->SetRefSkeleton(Reference);
 	Copy->GetRefBasesInvMatrix().Reset();
 	Copy->CalculateInvRefMatrices();
 	// Creator's preview materials are made in memory: a saved asset can't point at them.
@@ -327,6 +377,69 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 	}
 	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT saved %s from %s"), *Copy->GetPathName(), *Source.GetPathName());
 	return Copy;
+}
+
+const TArray<TPair<FName, FName>>& FMantleGarmentOutfit::Limbs()
+{
+	static const TArray<TPair<FName, FName>> Pairs = {
+		{ FName(TEXT("clavicle_l")), FName(TEXT("upperarm_l")) }, { FName(TEXT("upperarm_l")), FName(TEXT("lowerarm_l")) }, { FName(TEXT("lowerarm_l")), FName(TEXT("hand_l")) },
+		{ FName(TEXT("clavicle_r")), FName(TEXT("upperarm_r")) }, { FName(TEXT("upperarm_r")), FName(TEXT("lowerarm_r")) }, { FName(TEXT("lowerarm_r")), FName(TEXT("hand_r")) },
+		{ FName(TEXT("thigh_l")), FName(TEXT("calf_l")) }, { FName(TEXT("calf_l")), FName(TEXT("foot_l")) },
+		{ FName(TEXT("thigh_r")), FName(TEXT("calf_r")) }, { FName(TEXT("calf_r")), FName(TEXT("foot_r")) } };
+	return Pairs;
+}
+
+TArray<FTransform> FMantleGarmentOutfit::ComponentPose(const FReferenceSkeleton& Reference)
+{
+	const TArray<FTransform>& Local = Reference.GetRawRefBonePose();
+	TArray<FTransform> Out;
+	Out.SetNum(Local.Num());
+	for (int32 Bone = 0; Bone < Local.Num(); ++Bone)
+	{
+		const int32 Parent = Reference.GetRawParentIndex(Bone);
+		Out[Bone] = Parent >= 0 && Parent < Bone ? Local[Bone] * Out[Parent] : Local[Bone];
+	}
+	return Out;
+}
+
+TArray<FTransform> FMantleGarmentOutfit::TurnToTemplate(const FReferenceSkeleton& Reference, TConstArrayView<FTransform> Component,
+	const FReferenceSkeleton& Template, TConstArrayView<FTransform> TemplateComponent, TArray<FString>& OutLines)
+{
+	TArray<FTransform> Out(Component.GetData(), Component.Num());
+	for (const TPair<FName, FName>& Limb : Limbs())
+	{
+		const int32 Bone = Reference.FindRawBoneIndex(Limb.Key);
+		const int32 Child = Reference.FindRawBoneIndex(Limb.Value);
+		const int32 TemplateBone = Template.FindRawBoneIndex(Limb.Key);
+		const int32 TemplateChild = Template.FindRawBoneIndex(Limb.Value);
+		if (!Out.IsValidIndex(Bone) || !Out.IsValidIndex(Child) || !TemplateComponent.IsValidIndex(TemplateBone) || !TemplateComponent.IsValidIndex(TemplateChild))
+		{
+			continue;
+		}
+		const FVector Joint = Out[Bone].GetLocation();
+		const FVector Now = (Out[Child].GetLocation() - Joint).GetSafeNormal();
+		const FVector Wanted = (TemplateComponent[TemplateChild].GetLocation() - TemplateComponent[TemplateBone].GetLocation()).GetSafeNormal();
+		if (Now.IsNearlyZero() || Wanted.IsNearlyZero())
+		{
+			continue;
+		}
+		const FQuat Turn = FQuat::FindBetweenNormals(Now, Wanted);
+		const double Degrees = FMath::RadiansToDegrees(Turn.GetAngle());
+		OutLines.Add(FString::Printf(TEXT("%s %.1f"), *Limb.Key.ToString(), Degrees));
+		if (Degrees < 0.01)
+		{
+			continue;
+		}
+		for (int32 Other = 0; Other < Out.Num(); ++Other)
+		{
+			if (Other == Bone || Reference.BoneIsChildOf(Other, Bone))
+			{
+				Out[Other].SetRotation((Turn * Out[Other].GetRotation()).GetNormalized());
+				Out[Other].SetLocation(Joint + Turn.RotateVector(Out[Other].GetLocation() - Joint));
+			}
+		}
+	}
+	return Out;
 }
 
 bool FMantleGarmentOutfit::PoseMesh(FMantleGlbMesh& Mesh, TConstArrayView<FTransform> Posed, const double Scale, FString& OutError)
@@ -701,22 +814,68 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 		OutRefusal = TEXT("MetaHuman Creator could not provide the conformed character's merged body and head.");
 		return false;
 	}
-	USkeletalMesh* Authoring = FMantleGarmentOutfit::SaveCopy(*Preview.MergedHeadAndBodyMesh, Folder, TEXT("SKM_") + BodyTag + TEXT("_OutfitBody"), Error);
-	if (!Authoring)
+	// The MetaHuman as conformed (its skin weights, and where the posed body lands on it), then the same turned onto
+	// MetaHuman's own A-pose: the Outfit's authored body.
+	USkeletalMesh* Conformed = FMantleGarmentOutfit::SaveCopy(*Preview.MergedHeadAndBodyMesh, Folder, TEXT("SKM_") + BodyTag + TEXT("_Conformed"), Error);
+	USkeletalMesh* Template = Conformed ? FMantleMetaHumanPose::LoadTemplateBody(Error) : nullptr;
+	if (!Conformed || !Template)
 	{
 		OutRefusalCode = TEXT("no_metahuman");
 		OutRefusal = FString::Printf(TEXT("The MetaHuman's merged body and head could not be saved: %s."), *Error);
+		return false;
+	}
+	const FReferenceSkeleton& ConformedReference = Conformed->GetRefSkeleton();
+	const TArray<FTransform> ConformedPose = ComponentPose(ConformedReference);
+	TArray<FString> TurnLines;
+	const TArray<FTransform> APose = TurnToTemplate(ConformedReference, ConformedPose, Template->GetRefSkeleton(), ComponentPose(Template->GetRefSkeleton()), TurnLines);
+	OutResult.APoseTurns = FString::Join(TurnLines, TEXT(", "));
+	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT A-pose turns (degrees): %s"), *OutResult.APoseTurns);
+	USkeletalMesh* Authoring = FMantleGarmentOutfit::SaveCopy(*Conformed, Folder, TEXT("SKM_") + BodyTag + TEXT("_OutfitBody"), Error,
+		[&ConformedPose, &APose](FMeshDescription& Description, FReferenceSkeleton& Reference, FString& OutEditError)
+		{
+			TArray<FName> Names;
+			TArray<FTransform> Local;
+			Local.SetNum(APose.Num());
+			for (int32 Bone = 0; Bone < APose.Num(); ++Bone)
+			{
+				Names.Add(Reference.GetBoneName(Bone));
+				const int32 Parent = Reference.GetRawParentIndex(Bone);
+				Local[Bone] = Parent >= 0 ? APose[Bone].GetRelativeTransform(APose[Parent]) : APose[Bone];
+			}
+			if (!FMantleAvatarRepose::RebindMeshDescription(Description, Names, ConformedPose, APose, Local, OutEditError))
+			{
+				return false;
+			}
+			FReferenceSkeletonModifier Modifier(Reference, nullptr);
+			for (int32 Bone = 0; Bone < Local.Num(); ++Bone)
+			{
+				Modifier.UpdateRefPoseTransform(Bone, Local[Bone]);
+			}
+			return true;
+		});
+	FMantleSkinnedMeshLOD AuthoringSurface;
+	if (!Authoring || !FMantleNailSeating::ReadBodySurface(*Authoring, 0, AuthoringSurface, Error))
+	{
+		OutRefusalCode = TEXT("no_metahuman");
+		OutRefusal = FString::Printf(TEXT("The MetaHuman could not be turned onto MetaHuman's A-pose: %s."), *Error);
 		return false;
 	}
 	OutResult.AuthoringBody = Authoring->GetPathName();
 	FMantleGlbMesh MetaHumanSkin;
 	TArray<UMaterialInterface*> SkinMaterials;
 	int32 Triangles = 0;
-	if (!FMantleCosmeticExport::ReadSkeletalMesh(Authoring, 0, MetaHumanSkin, SkinMaterials, Triangles, Error) || !MetaHumanSkin.IsSkinned())
+	if (!FMantleCosmeticExport::ReadSkeletalMesh(Conformed, 0, MetaHumanSkin, SkinMaterials, Triangles, Error) || !MetaHumanSkin.IsSkinned())
 	{
 		OutRefusalCode = TEXT("no_metahuman");
 		OutRefusal = FString::Printf(TEXT("The MetaHuman's merged body and head could not be read: %s."), *Error);
 		return false;
+	}
+	// The A-pose, one transform per joint of the MetaHuman's skin (its joints are the reference skeleton's raw bones).
+	TArray<FTransform> APoseJoints;
+	for (const FMantleGlbJoint& Joint : MetaHumanSkin.Joints)
+	{
+		const int32 Bone = ConformedReference.FindRawBoneIndex(Joint.Name);
+		APoseJoints.Add(APose.IsValidIndex(Bone) ? APose[Bone] : FTransform::Identity);
 	}
 
 	// The body posed by its own A-pose clip and scaled by k, as the conform's input was: the check that this pose is the
@@ -793,6 +952,20 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 			Piece.Error = Error;
 			continue;
 		}
+		// Onto MetaHuman's A-pose with the body, then out of its skin where it sits under it.
+		if (!PoseMesh(*Geometry, APoseJoints, 1.0, Error))
+		{
+			Piece.Error = Error;
+			continue;
+		}
+		FMantleRefitPushOut Pushed;
+		if (!GarmentPushOut(*Geometry, AuthoringSurface, Pushed, Error))
+		{
+			Piece.Error = Error;
+			continue;
+		}
+		Piece.PushOut = Pushed.ToString();
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT push out %s: %s"), *Garment->GetName(), *Piece.PushOut);
 		Piece.Vertices = Geometry->Positions.Num();
 		FMantleOutfitAuthoredSource Source;
 		Source.Id = TEXT("authored");
@@ -878,6 +1051,7 @@ FString FMantleGarmentOutfit::RunForAgent(const FString& BodyPath, const FString
 	Offset.Add(MakeShared<FJsonValueNumber>(Result.Offset.Z));
 	Object->SetArrayField(TEXT("offsetCm"), Offset);
 	Object->SetNumberField(TEXT("bodyGapCm"), Result.BodyGapCm);
+	Object->SetStringField(TEXT("aPoseTurns"), Result.APoseTurns);
 	TArray<TSharedPtr<FJsonValue>> Outfits;
 	for (const FMantleGarmentOutfitPiece& Piece : Result.Pieces)
 	{
@@ -888,6 +1062,7 @@ FString FMantleGarmentOutfit::RunForAgent(const FString& BodyPath, const FString
 		Row->SetNumberField(TEXT("vertices"), Piece.Vertices);
 		Row->SetNumberField(TEXT("farVertices"), Piece.FarVertices);
 		Row->SetNumberField(TEXT("meanSkinCm"), Piece.MeanSkinCm);
+		Row->SetStringField(TEXT("pushOut"), Piece.PushOut);
 		Outfits.Add(MakeShared<FJsonValueObject>(Row));
 	}
 	Object->SetArrayField(TEXT("outfits"), Outfits);
