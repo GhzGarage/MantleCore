@@ -134,16 +134,40 @@ class Player:
     """A connected player."""
     avatar: Optional[str]
     character: Optional[Entity]
+    crouch_enabled: Optional[bool]
+    crouch_speed: Optional[float]
     health: Optional[float]
+    is_crouched: Optional[bool]
+    is_ragdolled: Optional[bool]
+    is_sprinting: Optional[bool]
     jump_height: Optional[float]
+    jump_stamina_cost: Optional[float]
     max_health: Optional[float]
+    max_stamina: Optional[float]
     name: str
     position: Optional[Vector3]
+    sprint_enabled: Optional[bool]
+    sprint_speed: Optional[float]
+    stamina: Optional[float]
+    stamina_drain: Optional[float]
+    stamina_enabled: Optional[bool]
+    stamina_regen: Optional[float]
+    stamina_regen_delay: Optional[float]
     user_id: str
     walk_speed: Optional[float]
     wearing: dict[str, Any]
+    crouch_started: Signal
+    crouch_stopped: Signal
     died: Signal
     health_changed: Signal
+    ragdolled: Signal
+    recovered: Signal
+    sprint_started: Signal
+    sprint_stopped: Signal
+    stamina_changed: Signal
+    def force_crouch(self, crouched: bool) -> bool:
+        """Hold the player crouched (true) or standing (false) whatever they press, until ReleaseCrouch. A player held crouched can still walk (sprinting is off while crouched); one held standing cannot crouch or slide. CrouchEnabled false wins over a crouch hold. Returns false when the player has no character on foot. The hold ends with the character: a respawn gives the key back."""
+        ...
     def heal(self, amount: float) -> bool:
         """Raise the character's health by amount, up to MaxHealth. Never brings a dead character back (use Respawn). Returns false when the player has no character on foot, is dead, or is already at full health."""
         ...
@@ -152,6 +176,15 @@ class Player:
         ...
     def kill(self) -> bool:
         """Kill the character outright: Died fires with no killer, and the place's respawn rules take over as for any other death. Returns false when the player has no character on foot or is already dead."""
+        ...
+    def ragdoll(self, seconds: Optional[float] = ..., velocity: Optional[Vector3] = ...) -> bool:
+        """Knock the character down: it goes limp for everyone, the player cannot move or act, and when the time is up (or Recover is called) it stands back up where it lies with a get-up animation. seconds is how long to stay down, 0.1 to 300; leave it out to stay down until Recover (at most five minutes). velocity is an optional shove in centimetres per second; without it the character keeps the speed it had. Ragdolled fires now and Recovered when it gets up. Returns false when the player has no character on foot, is dead, is sitting in a vehicle or is already knocked down."""
+        ...
+    def recover(self) -> bool:
+        """Stand a knocked-down character back up now, wherever it lies; Recovered fires when it is up. Safe to call at any time. Returns false when the character was not knocked down."""
+        ...
+    def release_crouch(self) -> bool:
+        """Give the player the crouch key back after ForceCrouch. Returns false when the player has no character on foot."""
         ...
     def respawn(self, position: Optional[Vector3] = ...) -> bool:
         """Give the player a fresh character with full health right now, alive or dead: at position when given, otherwise at the spawn point the place's respawn mode picks. The old character (or a corpse waiting for its respawn) is removed. Returns false when the player is driving a vehicle (eject them first) or cannot be spawned."""

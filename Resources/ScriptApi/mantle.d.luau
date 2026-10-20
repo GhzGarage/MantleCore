@@ -145,32 +145,82 @@ declare extern type Player with
 	Avatar: string?
 	--- The player's body in the world, or nil while respawning.
 	Character: Entity?
+	--- Whether the player can crouch or slide (true unless a script changes it); nil while the player has no character. Setting it (server only) to false stands a crouching player up and the crouch key does nothing until it is true again. It lasts for the rest of the session, through respawns.
+	CrouchEnabled: boolean?
+	--- How fast the character moves while crouched, in centimetres per second (225 unless a script changes it; it scales with WalkSpeed until you set it). nil while the player has no character. Setting it (server only) clamps to 0..1500 and lasts for the rest of the session, through respawns.
+	CrouchSpeed: number?
 	--- The character's health, from 0 to MaxHealth; nil while the player has no character. Weapons and TakeDamage lower this same value. Setting it (server only) clamps to 0..MaxHealth, and 0 kills the character with no killer. Setting it on a dead player, or one driving a vehicle, does nothing: use Respawn to bring a player back.
 	Health: number?
+	--- Whether the character is crouched right now (by the key, a slide or ForceCrouch). nil while the player has no character. Read-only.
+	IsCrouched: boolean?
+	--- Whether the character is limp on the ground right now: from Ragdoll, or a hard hit, a blast or being thrown off a vehicle knocked it down. nil while the player has no character. Read-only.
+	IsRagdolled: boolean?
+	--- Whether the character is sprinting right now: holding the sprint key and moving forward fast enough. nil while the player has no character. Read-only.
+	IsSprinting: boolean?
 	--- How high the character's jump rises, in centimetres (about 90 under normal gravity unless a script changes it). nil while the player has no character. Setting it (server only) clamps to 0..1000 and lasts for the rest of the session, through respawns; 0 stops ordinary jumps.
 	JumpHeight: number?
+	--- How much stamina a jump costs (0 unless a script changes it, so jumping is free); with a cost, a character with less stamina than that cannot jump. nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session. Only counts while StaminaEnabled is true.
+	JumpStaminaCost: number?
 	--- The most health the character can have (100 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 1..10000 and lasts for the rest of the session: every respawn starts with full health at this maximum. Lowering it below Health lowers Health too; raising it does not heal.
 	MaxHealth: number?
+	--- The most stamina the character can have (100 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 1..10000 and lasts for the rest of the session, through respawns. Lowering it below Stamina lowers Stamina too; raising it does not refill.
+	MaxStamina: number?
 	--- The player's Epic display name.
 	Name: string
 	--- Where the player's character is.
 	Position: Vector3?
+	--- Whether the player can sprint (true unless a script changes it); nil while the player has no character. Setting it (server only) to false stops a sprint at once and the sprint key does nothing until it is true again. It lasts for the rest of the session, through respawns.
+	SprintEnabled: boolean?
+	--- How fast the character sprints, in centimetres per second (700 unless a script changes it; it scales with WalkSpeed until you set it). nil while the player has no character. Setting it (server only) clamps to 0..1500 and lasts for the rest of the session, through respawns.
+	SprintSpeed: number?
+	--- The stamina the character has left, from 0 to MaxStamina (it counts in small steps, the same on every machine, and moves only while StaminaEnabled is true); nil while the player has no character. Setting it (server only) clamps to 0..MaxStamina. Every new character starts full.
+	Stamina: number?
+	--- How much stamina sprinting uses each second (20 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session.
+	StaminaDrain: number?
+	--- Whether the player has a stamina pool (false unless a script turns it on, so places that never use it play as before); nil while the player has no character. With it on, sprinting drains Stamina, Stamina refills after a short rest, a sprint stops at zero and cannot restart until a tenth of MaxStamina has come back, and jumping can cost JumpStaminaCost. Turning it on starts the pool full. Setting it (server only) lasts for the rest of the session, through respawns.
+	StaminaEnabled: boolean?
+	--- How much stamina comes back each second once the character has rested (15 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session.
+	StaminaRegen: number?
+	--- How many seconds after sprinting (or a jump that cost stamina) before stamina starts coming back (1 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..60 and lasts for the rest of the session.
+	StaminaRegenDelay: number?
 	--- The player's verified Mantle account id (a plain UUID).
 	UserId: string
 	--- How fast the character runs, in centimetres per second (500 unless a script changes it); walking, sprinting and crouching scale with it. nil while the player has no character. Setting it (server only) clamps to 0..1500 and lasts for the rest of the session, through respawns; 0 stops the character moving.
 	WalkSpeed: number?
 	--- What the player is wearing: slot name ("hair", "top", "footwear", "acc_hat", ...) to item id. Empty when nothing is worn or their look has not arrived. Read-only; a fresh table on every read. (server only)
 	Wearing: {[string]: string}
+	--- The character crouched (the key, a slide or ForceCrouch). Fires on the server and on every client.
+	CrouchStarted: Signal<(Player)>
+	--- The character stood up from a crouch. Fires on the server and on every client.
+	CrouchStopped: Signal<(Player)>
 	--- The player's character died, on the server and on every client. killer is the player whose damage finished it (a weapon, or TakeDamage with a source); nil for falling out of the world, Kill, Health set to 0, or their own damage.
 	Died: Signal<(Player, Player?)>
 	--- The character's health changed: damage, healing, Health set, or a respawn's refill. Fires on the server and on every client.
 	HealthChanged: Signal<(Player, number, number)>
+	--- The character was knocked down (Ragdoll, a hard hit, a blast, or being thrown off a vehicle). Fires on the server and on every client.
+	Ragdolled: Signal<(Player)>
+	--- A knocked-down character stood back up (its time ended or Recover was called). It does not fire if the character died while down: Died does. Fires on the server and on every client.
+	Recovered: Signal<(Player)>
+	--- The character started sprinting. Fires on the server and on every client.
+	SprintStarted: Signal<(Player)>
+	--- The character stopped sprinting: the key let go, stamina ran out, SprintEnabled turned off, or it stopped moving. Fires on the server and on every client.
+	SprintStopped: Signal<(Player)>
+	--- The character's Stamina changed: sprinting, resting, a jump's cost or a script setting it. It reports steps of about half a percent of MaxStamina, not every frame. Fires on the server and on every client while StaminaEnabled is true.
+	StaminaChanged: Signal<(Player, number, number)>
+	--- Hold the player crouched (true) or standing (false) whatever they press, until ReleaseCrouch. A player held crouched can still walk (sprinting is off while crouched); one held standing cannot crouch or slide. CrouchEnabled false wins over a crouch hold. Returns false when the player has no character on foot. The hold ends with the character: a respawn gives the key back. (server only)
+	function ForceCrouch(self, crouched: boolean): boolean
 	--- Raise the character's health by amount, up to MaxHealth. Never brings a dead character back (use Respawn). Returns false when the player has no character on foot, is dead, or is already at full health. (server only)
 	function Heal(self, amount: number): boolean
 	--- Remove the player from the session with a message. (server only)
 	function Kick(self, reason: string?): ()
 	--- Kill the character outright: Died fires with no killer, and the place's respawn rules take over as for any other death. Returns false when the player has no character on foot or is already dead. (server only)
 	function Kill(self): boolean
+	--- Knock the character down: it goes limp for everyone, the player cannot move or act, and when the time is up (or Recover is called) it stands back up where it lies with a get-up animation. seconds is how long to stay down, 0.1 to 300; leave it out to stay down until Recover (at most five minutes). velocity is an optional shove in centimetres per second; without it the character keeps the speed it had. Ragdolled fires now and Recovered when it gets up. Returns false when the player has no character on foot, is dead, is sitting in a vehicle or is already knocked down. (server only)
+	function Ragdoll(self, seconds: number?, velocity: Vector3?): boolean
+	--- Stand a knocked-down character back up now, wherever it lies; Recovered fires when it is up. Safe to call at any time. Returns false when the character was not knocked down. (server only)
+	function Recover(self): boolean
+	--- Give the player the crouch key back after ForceCrouch. Returns false when the player has no character on foot. (server only)
+	function ReleaseCrouch(self): boolean
 	--- Give the player a fresh character with full health right now, alive or dead: at position when given, otherwise at the spawn point the place's respawn mode picks. The old character (or a corpse waiting for its respawn) is removed. Returns false when the player is driving a vehicle (eject them first) or cannot be spawned. (server only)
 	function Respawn(self, position: Vector3?): boolean
 	--- Hurt the character through the same path weapons use, so the game's damage rules apply. source is the player to credit: if this hit kills, Died names them as the killer. Returns false when the player has no character on foot (respawning or driving), is already dead, or the damage was refused. (server only)
