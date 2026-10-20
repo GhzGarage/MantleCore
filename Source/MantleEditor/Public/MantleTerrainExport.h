@@ -48,8 +48,12 @@ struct MANTLEEDITOR_API FMantleTerrainSource
 	 */
 	TMap<FName, const UPhysicalMaterial*> LayerPhysMaterials;
 
-	/** Part of the landscape is a hole (its visibility layer is painted), which Mantle cannot publish yet. */
+	/**
+	 * Part of the landscape is a hole (its visibility layer is painted), and how many samples. The heightfield has no hole mask, so the
+	 * heights and weights are published as they are, filling the holes: the landscape itself is never changed. ChooseLayers says so.
+	 */
 	bool bHasHoles = false;
+	int32 HoleSamples = 0;
 
 	/**
 	 * What the landscape's own material says each paint layer looks like (#628), read when a painted layer has no
@@ -128,7 +132,8 @@ struct FMantleTerrainFold
  * layer of its own. A landscape with no painted layer whose material picks its ground from the slope and
  * height (FMantleLandscapeAutoChain) has each of that chain's layers baked from the heightfield, and then
  * goes through the same choosing, folding and weightmaps as painted layers. More painted layers than fit
- * are folded into the nearest kept ones. Holes are refused for now.
+ * are folded into the nearest kept ones. Holes painted in the visibility layer are filled in the published data (the format has no hole
+ * mask), with a warning and an approximated coverage line; the landscape is only read.
  */
 class MANTLEEDITOR_API FMantleTerrainExport
 {
@@ -181,8 +186,10 @@ public:
 	 * with bSlopeOverlay set and a slot of its own, so one fewer painted layer is kept.
 	 * Warnings (a fold, something the landscape material does that Mantle cannot keep) go in OutIssues and
 	 * Coverage (when given), and do not fail it.
-	 * False, with each blocking problem in OutIssues under Label: holes, a painted layer with neither an entry
-	 * nor a look in a landscape material that could not be read, no layer at all.
+	 * A landscape with nothing painted and no Place Settings entry gets a default layer (the first look its landscape material states, else
+	 * plain grey) with a warning. Holes are warned about, never refused (Source.bHasHoles).
+	 * False, with each blocking problem in OutIssues under Label: a painted layer with neither an entry
+	 * nor a look in a landscape material that could not be read, or a default layer that could not be made.
 	 */
 	static bool ChooseLayers(UWorld* World, const FMantleTerrainSource& Source, const FString& Label,
 		TArray<FMantleTerrainLayerChoice>& OutLayers, TArray<FMantleValidationIssue>& OutIssues, FMantleCoverage* Coverage = nullptr);

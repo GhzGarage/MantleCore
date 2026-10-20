@@ -308,6 +308,13 @@ bool FMantleTerrainExport::ReadLandscape(const AActor* Actor, FMantleTerrainSour
 		Holes.SetNumZeroed(Out.Width * Out.Height);
 		Edit.GetWeightDataFast(Visibility, MinX, MinY, MaxX, MaxY, Holes.GetData(), Out.Width);
 		Out.bHasHoles = TerrainAnyNonZero(Holes);
+		if (Out.bHasHoles)
+		{
+			for (const uint8 Hole : Holes)
+			{
+				Out.HoleSamples += Hole != 0 ? 1 : 0;
+			}
+		}
 	}
 
 	// What the landscape's own material says its layers look like, read only when a painted layer has no
@@ -466,8 +473,13 @@ bool FMantleTerrainExport::ChooseLayers(UWorld* World, const FMantleTerrainSourc
 
 	if (Source.bHasHoles)
 	{
-		Refuse(TEXT("has holes painted in it (its visibility layer), which Mantle cannot publish yet."),
-			TEXT("Erase the holes with the landscape's Visibility tool, or cover them with meshes, then publish again."));
+		// The heightfield format has no hole mask, but the heights under a hole are still there: the published terrain simply draws them. The landscape itself is only read.
+		const FString HoleCount = Source.HoleSamples > 0
+			? FString::Printf(TEXT("%d of its %d samples"), Source.HoleSamples, Source.Width * Source.Height) : FString(TEXT("part of it"));
+		Warn(FString::Printf(TEXT("has holes painted in it (its visibility layer, %s), which Mantle terrain cannot carry yet, so the published terrain is filled across them."), *HoleCount),
+			TEXT("It still publishes, and your landscape is not changed. To keep an opening (a cave mouth, a tunnel), model it as a mesh over the filled ground."));
+		Report(MantleCoverageCategory::Terrain, EMantleCoverageOutcome::Approximated, Label,
+			FString::Printf(TEXT("holes painted in the landscape's visibility layer (%s) are filled: Mantle terrain has no holes, so the ground is drawn across them."), *HoleCount));
 	}
 
 	const AMantlePlaceSettingsActor* Settings = AMantlePlaceSettingsActor::Find(World);
@@ -476,8 +488,28 @@ bool FMantleTerrainExport::ChooseLayers(UWorld* World, const FMantleTerrainSourc
 		const FMantleTerrainLayerSetting* First = Settings && Settings->TerrainLayers.Num() > 0 ? &Settings->TerrainLayers[0] : nullptr;
 		if (!First || !First->Material)
 		{
-			Refuse(TEXT("has no painted layer and no material to draw it with, so players would see nothing on it."),
-				FString::Printf(TEXT("In %s, add an entry with the material the ground should look like."), Where));
+			// Nothing painted and nothing in Place Settings: the first look the landscape's material states, else plain grey, so the ground is still there.
+			const FMantleLandscapeLayerLook* Look = Source.bMaterialRead && Source.MaterialRead.Layers.Num() > 0 ? &Source.MaterialRead.Layers[0] : nullptr;
+			FMantleLandscapeLayerLook Plain;
+			Plain.Layer = TEXT("Ground");
+			FMantleTerrainLayerChoice& Choice = OutLayers.AddDefaulted_GetRef();
+			Choice.Layer = Look ? Look->Layer : Plain.Layer;
+			Choice.bDerived = Look != nullptr;
+			Choice.Material = FMantleLandscapeMaterialReader::MakeLayerMaterial(Look ? *Look : Plain);
+			Choice.TilingCm = FMath::Clamp(Look && Look->TilingCm() > 0.0 ? Look->TilingCm() : 400.0, 1.0, 100000.0);
+			if (!Choice.Material)
+			{
+				Refuse(TEXT("has no painted layer and no material to draw it with, so players would see nothing on it."),
+					FString::Printf(TEXT("In %s, add an entry with the material the ground should look like."), Where));
+			}
+			else
+			{
+				const FString What = Look ? FString::Printf(TEXT("the first look its landscape material states ('%s')"), *Look->Layer.ToString()) : FString(TEXT("plain grey"));
+				Warn(FString::Printf(TEXT("has no painted layer and no material in Mantle Place Settings to draw it with, so it is drawn with %s."), *What),
+					FString::Printf(TEXT("It still publishes. To draw the ground differently, add an entry in %s with the material it should look like."), Where));
+				Report(MantleCoverageCategory::TerrainLayers, EMantleCoverageOutcome::Approximated, Choice.Layer.ToString(),
+					FString::Printf(TEXT("nothing is painted on '%s' and Place Settings gives no material: drawn with %s."), *Label, *What));
+			}
 		}
 		else
 		{
