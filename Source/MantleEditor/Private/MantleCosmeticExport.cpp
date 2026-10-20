@@ -4893,8 +4893,8 @@ void FMantleCosmeticExport::AddDetectedClothingColors(FMantleCosmeticPackage& Pa
 {
 	using namespace MantleCosmeticExportPrivate;
 	Package.DetectedClothingColors.Reset();
-	if (!Draft.bDetectClothingColors || !Draft.ClothingColors.IsEmpty() || Draft.Class != EMantleCosmeticClass::Garment
-		|| (Draft.Slot != TEXT("top") && Draft.Slot != TEXT("bottom") && Draft.Slot != TEXT("footwear")))
+	const bool bClothing = Draft.Class == EMantleCosmeticClass::Garment && (Draft.Slot == TEXT("top") || Draft.Slot == TEXT("bottom") || Draft.Slot == TEXT("footwear"));
+	if (!Draft.bDetectClothingColors || !Draft.ClothingColors.IsEmpty() || (!bClothing && Draft.Class != EMantleCosmeticClass::Accessory))
 	{
 		return;
 	}
@@ -6055,6 +6055,10 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			Package.Notes.Add(FString::Printf(TEXT("Accessory: %d LODs; rigid, opaque albedo material with an optional normal map; no collision or physics."), LODs.Num()));
 			// An accessory takes an optional normal map within the class's normalMax, as a garment does.
 			AddSectionMaterials(Package, Mesh, Class.NormalMax > 0, false, Class, TArray<FString>(), TEXT("Accessory"), Package.Materials, Contract);
+			// Colour areas players can change, found and measured as clothing's are.
+			Package.MaterialNames = Mesh.Glb.MaterialNames;
+			AddClothingColors(Package, Mesh, Draft.ClothingColors, Class, Contract);
+			AddDetectedClothingColors(Package, Mesh.Glb, Mesh.Materials, Draft, Class.AlbedoMax, Contract);
 			Package.bAttach = Draft.bAttach;
 			Package.AttachLocation = FMantleCosmeticPackage::ClampAttachLocation(Draft.AttachLocation);
 			Package.AttachRotation = FMantleCosmeticPackage::ClampAttachRotation(Draft.AttachRotation);

@@ -394,7 +394,7 @@ public:
 	 * texture (FMantleClothingColorDetect), applies Draft.ClothingColorChoices, measures each kept area against the
 	 * exported albedo (Package.Materials[i].AlbedoKey) and adds the clean area map and regions to Package.Materials[i].
 	 * Every material's result, found or not, goes to Package.DetectedClothingColors. Off for anything but a top, bottom
-	 * or footwear garment, when Draft.bDetectClothingColors is false, or when Draft.ClothingColors declares any by hand.
+	 * or footwear garment or a rigid accessory, when Draft.bDetectClothingColors is false, or when Draft.ClothingColors declares any by hand.
 	 * Build calls it; public for tests.
 	 */
 	static void AddDetectedClothingColors(FMantleCosmeticPackage& Package, const FMantleGlbMesh& Mesh, TConstArrayView<UMaterialInterface*> Materials,
