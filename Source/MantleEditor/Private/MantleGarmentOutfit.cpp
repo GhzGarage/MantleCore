@@ -269,6 +269,12 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 		OutError = FString::Printf(TEXT("%s has no geometry to copy"), *Source.GetName());
 		return nullptr;
 	}
+	// Bounds from the geometry: Creator's in-memory meshes report none, and a mesh with none is never drawn.
+	FBox Bounds(ForceInit);
+	for (const FVector3f& Position : Description.GetVertexPositions().GetRawArray())
+	{
+		Bounds += FVector(Position);
+	}
 	const FString PackageName = FMantleMetaHumanSteps::UniquePackageName(Folder, Name);
 	const FString AssetName = FPackageName::GetShortName(PackageName);
 	UPackage* Package = CreatePackage(*PackageName);
@@ -300,7 +306,7 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 	Copy->GetImportedModel()->LODModels.Add(new FSkeletalMeshLODModel);
 	Copy->CreateMeshDescription(0, MoveTemp(Description));
 	Copy->CommitMeshDescription(0);
-	Copy->SetImportedBounds(Source.GetImportedBounds());
+	Copy->SetImportedBounds(FBoxSphereBounds(Bounds));
 	USkeleton* Skeleton = Source.GetSkeleton();
 	if (Skeleton && !IsTransient(Skeleton))
 	{
