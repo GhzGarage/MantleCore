@@ -4,6 +4,7 @@
 #include "MantleEnvironmentExport.h"
 #include "MantlePlaceExporter.h"
 #include "MantlePlaceValidator.h"
+#include "MantleTargetFeatures.h"
 
 #include "Components/ExponentialHeightFogComponent.h"
 #include "Dom/JsonObject.h"
@@ -353,7 +354,7 @@ bool FMantleCoveragePostProcessVolumeTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMantleCoverageTextRenderActorTest,
-	"Mantle.Editor.Coverage.TextRenderActorIsAWarning",
+	"Mantle.Editor.Coverage.TextRenderActorIsAWarningWithoutWorldText",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
 bool FMantleCoverageTextRenderActorTest::RunTest(const FString& Parameters)
@@ -364,6 +365,8 @@ bool FMantleCoverageTextRenderActorTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	// GhzGarage/mantle#724: the actor publishes as a Text entity; it is only a warning for a target that cannot read world text.
+	const FMantleTargetFeaturesScope Scope(FMantleTargetFeatures::None());
 	ATextRenderActor* Text = Test.Spawn<ATextRenderActor>(TEXT("SignLabel"));
 	if (!TestNotNull(TEXT("the text render actor"), Text))
 	{
@@ -382,6 +385,7 @@ bool FMantleCoverageTextRenderActorTest::RunTest(const FString& Parameters)
 	const FMantleExportResult Exported = FMantlePlaceExporter::Export(Test.World, FMantleExportOptions());
 	TestFalse(TEXT("Export has no error about it"), ErrorMentions(Exported, TEXT("TextRenderActor")));
 	TestEqual(TEXT("the report lists it as dropped"), Exported.Coverage.Count(MantleCoverageCategory::OtherActors, EOutcome::Dropped), static_cast<int64>(1));
+	TestTrue(TEXT("saying the target needs a newer client"), What.Contains(FMantleTargetFeatures::NeedsNewerClient));
 	return true;
 }
 

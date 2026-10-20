@@ -25,6 +25,7 @@
 #include "MantleScriptPoint.h"
 #include "MantleSplineMeshBake.h"
 #include "MantleTargetFeatures.h"
+#include "MantleTextExport.h"
 #include "MantleTerrainExport.h"
 #include "MantleVehicleConverter.h"
 #include "MantleVehicleSource.h"
@@ -185,7 +186,7 @@ namespace
 	{
 		return TEXT("Supported types are static meshes, instanced meshes and foliage, skeletal meshes playing one animation, groups, "
 					"player starts, point/spot/rect/directional lights, decals, trigger volumes, ambient sounds, Mantle crowd spawners, Mantle vehicle spawns, "
-					"Mantle weapon spawns, Mantle script points, Mantle effects, Mantle scatter volumes, box and sphere reflection captures and physics constraints (a weld, hinge or rope between physics objects).");
+					"Mantle weapon spawns, Mantle script points, Mantle effects, Mantle scatter volumes, box and sphere reflection captures, text render actors (world text) and physics constraints (a weld, hinge or rope between physics objects).");
 	}
 
 	void ValidatorCheckPrefabParts(const AActor* Actor, const TArray<FMantlePrefabPart>& Parts, FMantleValidationResult& Result);
@@ -193,7 +194,7 @@ namespace
 	void CheckComponents(const AActor* Actor, EMantleEntityType Type, FMantleValidationResult& Result)
 	{
 		// A reflection capture (#628) publishes as its one capture component; its preview boxes are the editor's.
-		if (Type == EMantleEntityType::ReflectionProbe)
+		if (Type == EMantleEntityType::ReflectionProbe || Type == EMantleEntityType::Text)
 		{
 			return;
 		}
@@ -1630,6 +1631,7 @@ FMantleValidationResult FMantlePlaceValidator::Validate(UWorld* World, const boo
 	int64 ScatterInstances = 0;
 	int32 Constraints = 0;
 	int32 ReflectionProbes = 0;
+	int32 Texts = 0;
 	bool bWarnedSun = false;
 	// #838: checked after the loop, once the level's packages and storage are known.
 	TArray<const AMantleScriptPoint*> ScriptPoints;
@@ -1765,6 +1767,7 @@ FMantleValidationResult FMantlePlaceValidator::Validate(UWorld* World, const boo
 		ValidatorCheckScatter(Actor, Type, ScatterInstances, Result);
 		CheckConstraint(Actor, Type, Constraints, Result);
 		FMantleReflectionProbeExport::Check(Actor, Type, ReflectionProbes, Result);
+		FMantleTextExport::Check(Actor, Type, Texts, Result);
 		if (const AMantleCrowdSpawner* Spawner = Type == EMantleEntityType::CrowdSpawner ? Cast<AMantleCrowdSpawner>(Actor) : nullptr)
 		{
 			// The per-place totals, counted in the exporter's order so the same spawner is named.

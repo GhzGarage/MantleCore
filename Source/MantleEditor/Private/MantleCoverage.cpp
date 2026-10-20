@@ -20,7 +20,7 @@ namespace MantleCoverageCpp
 			MantleCoverageCategory::Terrain, MantleCoverageCategory::TerrainLayers, MantleCoverageCategory::LandscapeMaterial,
 			MantleCoverageCategory::LandscapeGrass, MantleCoverageCategory::Lights, MantleCoverageCategory::Sky,
 			MantleCoverageCategory::Fog, MantleCoverageCategory::PostProcess, MantleCoverageCategory::Volumes,
-			MantleCoverageCategory::Particles, MantleCoverageCategory::Decals, MantleCoverageCategory::Sounds,
+			MantleCoverageCategory::Particles, MantleCoverageCategory::Decals, MantleCoverageCategory::Sounds, MantleCoverageCategory::Text,
 			MantleCoverageCategory::SubLevels, MantleCoverageCategory::BlueprintLogic, MantleCoverageCategory::GameplayActors,
 			MantleCoverageCategory::OtherComponents, MantleCoverageCategory::OtherActors };
 		return Order;
