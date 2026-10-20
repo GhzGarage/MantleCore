@@ -695,8 +695,11 @@ bool MantleCosmetic::ParseItemBatch(const FString& Json, TArray<FMantleCosmeticI
             if (Material.NativeHair.IsSet() && (Item.Kind != EMantleCosmeticKind::Skinned
                 || (Item.Slot != TEXT("hair") && Item.Slot != TEXT("eyebrows") && Item.Slot != TEXT("eyelashes") && Item.Slot != TEXT("facial_hair"))))
             { OutWhyNot = Where + TEXT("nativeHair only belongs to one of the four skinned hair slots"); return false; }
-			if (!Material.ColorRegions.IsEmpty() && (Item.Kind != EMantleCosmeticKind::Skinned || (Item.Slot != TEXT("top") && Item.Slot != TEXT("bottom") && Item.Slot != TEXT("footwear"))))
-			{ OutWhyNot = Where + TEXT("only clothing items declare colour regions"); return false; }
+			// Clothing, and (#966) a rigid item in an accessory slot (acc_hat, acc_face, ...), as the API accepts them.
+			const bool bClothingColors = Item.Kind == EMantleCosmeticKind::Skinned && (Item.Slot == TEXT("top") || Item.Slot == TEXT("bottom") || Item.Slot == TEXT("footwear"));
+			const bool bAccessoryColors = Item.Kind == EMantleCosmeticKind::Rigid && Item.Slot.StartsWith(TEXT("acc_"));
+			if (!Material.ColorRegions.IsEmpty() && !bClothingColors && !bAccessoryColors)
+			{ OutWhyNot = Where + TEXT("only clothing and accessory items declare colour regions"); return false; }
 		}
 		if (const TSharedPtr<FJsonValue> ManifestValue = Object->TryGetField(TEXT("garmentVariants")); ManifestValue.IsValid() && ManifestValue->Type != EJson::Null)
 		{
