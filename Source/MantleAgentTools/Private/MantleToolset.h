@@ -210,4 +210,28 @@ public:
 	 */
 	UFUNCTION(meta = (AICallable))
 	static FString ConvertCosmetic(const FString& AssetPath, const FString& Slot, bool bApply, const FString& TurnOff = TEXT(""), const FString& Confirm = TEXT(""));
+
+	/**
+	 * Make a MetaHuman Outfit from a third-party character's clothing: the garment meshes plus that character's bare
+	 * body. The body goes through Convert's MetaHuman steps only (strip to bare skin, MetaHuman's A-pose, conform; no
+	 * build, no Epic sign-in); each garment is posed and scaled the way the body was, takes the MetaHuman's skin weights,
+	 * and becomes an Outfit whose authored size is that MetaHuman. Check or upload each Outfit with CheckCosmetic /
+	 * UploadCosmetic (slot top, bottom, ...): it is resized onto Epic's standard bodies like any MetaHuman Outfit. Writes
+	 * NEW assets under <body folder>/Converted/<body>_Outfit (the creator's assets are never changed; a body made a
+	 * MetaHuman there before is replaced). Nothing is uploaded. Takes minutes (the conform).
+	 * @param BodyPath The character's bare body skeletal mesh (the whole body with its head, no clothing), e.g.
+	 * /Game/Pack/SK_Hero_Nude. A body with clothing on it works when Strip can remove the clothing slots.
+	 * @param GarmentPaths One or more of that character's clothing skeletal meshes, comma-separated.
+	 * @param TurnOff Comma-separated Convert fix keys to leave alone, as ConvertCosmetic (e.g. "Strip.0.Slot3" keeps that
+	 * slot, for a skin slot whose material isn't named like skin). "" for none. Always pass it.
+	 * @param Confirm Comma-separated fix keys to tick, as ConvertCosmetic: "Strip.0.BareSkin" when the person asking says the
+	 * kept parts are bare skin. Only confirm what they told you is true. "" for none. Always pass it.
+	 * @return JSON: {"ok", "body", "outputFolder", "character", "authoringBody", "inputScale", "offsetCm", "bodyGapCm" (how far
+	 * the MetaHuman's skin is from the original body's on average), "outfits": [{"garment", "outfit" (the Outfit's path;
+	 * empty when it failed), "error", "vertices", "farVertices", "meanSkinCm"}], "notes", "convert" (ConvertCosmetic's fix
+	 * list and result)}, or a refusal (not_found, no_garment, no_contract, no_skeleton, not_convertible, convert_failed
+	 * with "convert": e.g. the bare-skin line not confirmed, no_metahuman, pose_failed).
+	 */
+	UFUNCTION(meta = (AICallable))
+	static FString MakeOutfitFromGarment(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff = TEXT(""), const FString& Confirm = TEXT(""));
 };

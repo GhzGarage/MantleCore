@@ -32,13 +32,13 @@ namespace MantleOutfitAuthoringPrivate
 		return true;
 	}
 
-	bool ReadCollection(USkeletalMesh& Source, int32 LOD, TSharedRef<FManagedArrayCollection>& Collection, FString& Error)
+	/** Mesh (skinned to Source's bones by joint name) as one LOD of render-only cloth whose skeletal mesh is Source. */
+	bool WriteCollection(USkeletalMesh& Source, const FMantleGlbMesh& Mesh, TConstArrayView<UMaterialInterface*> Materials,
+		TSharedRef<FManagedArrayCollection>& Collection, FString& Error)
 	{
 		using namespace UE::Chaos::ClothAsset;
-		FMantleGlbMesh Mesh;
-		TArray<UMaterialInterface*> Materials;
 		int32 Triangles = 0;
-		if (!FMantleCosmeticExport::ReadSkeletalMesh(&Source, LOD, Mesh, Materials, Triangles, Error)) { return false; }
+		for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives) { Triangles += Primitive.Indices.Num() / 3; }
 		if (!Mesh.IsSkinned() || Mesh.Positions.IsEmpty() || Triangles == 0 || Mesh.Primitives.IsEmpty())
 		{ Error = TEXT("the authored garment must contain skinned render geometry"); return false; }
 		TArray<int32> JointToBone;
@@ -109,6 +109,15 @@ namespace MantleOutfitAuthoringPrivate
 		if (!Cloth.HasValidRenderData()) { Error = TEXT("native cloth collection rejected the garment render data"); return false; }
 		return true;
 	}
+
+	bool ReadCollection(USkeletalMesh& Source, int32 LOD, TSharedRef<FManagedArrayCollection>& Collection, FString& Error)
+	{
+		FMantleGlbMesh Mesh;
+		TArray<UMaterialInterface*> Materials;
+		int32 Triangles = 0;
+		if (!FMantleCosmeticExport::ReadSkeletalMesh(&Source, LOD, Mesh, Materials, Triangles, Error)) { return false; }
+		return WriteCollection(Source, Mesh, Materials, Collection, Error);
+	}
 }
 
 UChaosOutfitAsset* FMantleParametricOutfitAuthoring::Create(TConstArrayView<FMantleOutfitAuthoredSource> Sources,
@@ -122,16 +131,20 @@ UChaosOutfitAsset* FMantleParametricOutfitAuthoring::Create(TConstArrayView<FMan
 	{
 		USkeletalMesh* Garment = Row.Garment.Get();
 		USkeletalMesh* Body = Row.CombinedBodyHead.Get();
-		if (!IsId(Row.Id) || Ids.Contains(Row.Id) || !Garment || !Body || Garment == Body)
+		const bool bGeometry = Row.Geometry.IsValid();
+		if (!IsId(Row.Id) || Ids.Contains(Row.Id) || (!Garment && !bGeometry) || !Body || Garment == Body)
 		{ Error = TEXT("each authored size needs a unique ID, its garment, and its matching combined body/head"); return nullptr; }
 		Ids.Add(Row.Id);
-		Finish(Garment); Finish(Body);
+		if (Garment) { Finish(Garment); }
+		Finish(Body);
 		if (!Body->GetMeshDescription(0))
 		{ Error = TEXT("the combined authoring body/head must retain its native LOD0 MeshDescription for resizing"); return nullptr; }
 	}
 	UObject* Owner = Outer ? Outer : GetTransientPackage();
 	const EObjectFlags Flags = Owner == GetTransientPackage() ? RF_Transient : (RF_Public | RF_Standalone | RF_Transactional);
-	UChaosOutfitAsset* Asset = NewObject<UChaosOutfitAsset>(Owner, MakeUniqueObjectName(Owner, UChaosOutfitAsset::StaticClass(), Name), Flags);
+	// The asking name when it is free (a new package's asset is named as its package), else a unique one.
+	const FName AssetName = StaticFindObjectFast(nullptr, Owner, Name) ? MakeUniqueObjectName(Owner, UChaosOutfitAsset::StaticClass(), Name) : Name;
+	UChaosOutfitAsset* Asset = NewObject<UChaosOutfitAsset>(Owner, AssetName, Flags);
 	KeepAlive.Emplace(Asset);
 	UChaosOutfit* Outfit = NewObject<UChaosOutfit>(Asset);
 	KeepAlive.Emplace(Outfit);
@@ -140,15 +153,26 @@ UChaosOutfitAsset* FMantleParametricOutfitAuthoring::Create(TConstArrayView<FMan
 	{
 		USkeletalMesh* Garment = Row.Garment.Get();
 		UChaosClothAsset* Cloth = NewObject<UChaosClothAsset>(Asset, FName(*(TEXT("CA_") + Row.Id)));
-		KeepAlive.Emplace(Cloth); KeepAlive.Emplace(Garment); KeepAlive.Emplace(Row.CombinedBodyHead.Get());
+		KeepAlive.Emplace(Cloth); KeepAlive.Emplace(Row.CombinedBodyHead.Get());
+		if (Garment) { KeepAlive.Emplace(Garment); }
 		TArray<TSharedRef<const FManagedArrayCollection>> Collections;
-		const int32 LODCount = UMantleBodyTopologyData::GetNumLODs(Garment);
-		if (LODCount < 1) { Error = TEXT("the authored garment has no render LOD"); return nullptr; }
-		for (int32 LOD = 0; LOD < LODCount; ++LOD)
+		if (Row.Geometry.IsValid())
 		{
+			// Made in memory on the body's own bones: one LOD, the cloth's skeletal mesh the body.
 			TSharedRef<FManagedArrayCollection> Collection = MakeShared<FManagedArrayCollection>();
-			if (!ReadCollection(*Garment, LOD, Collection, Error)) { return nullptr; }
+			if (!WriteCollection(*Row.CombinedBodyHead.Get(), *Row.Geometry, Row.Materials, Collection, Error)) { return nullptr; }
 			Collections.Add(Collection);
+		}
+		else
+		{
+			const int32 LODCount = UMantleBodyTopologyData::GetNumLODs(Garment);
+			if (LODCount < 1) { Error = TEXT("the authored garment has no render LOD"); return nullptr; }
+			for (int32 LOD = 0; LOD < LODCount; ++LOD)
+			{
+				TSharedRef<FManagedArrayCollection> Collection = MakeShared<FManagedArrayCollection>();
+				if (!ReadCollection(*Garment, LOD, Collection, Error)) { return nullptr; }
+				Collections.Add(Collection);
+			}
 		}
 		FText BuildError, BuildDetails;
 		Cloth->Build(Collections, nullptr, &BuildError, &BuildDetails);
