@@ -25,7 +25,11 @@
 #include "Engine/TextureCube.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Dom/JsonObject.h"
 #include "Misc/AutomationTest.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 
 #include <limits>
 
@@ -1045,31 +1049,80 @@ bool FMantleEnvironmentLightingKeysTest::RunTest(const FString& Parameters)
 	Place.Revision.State = EMantleRevisionState::Draft;
 	Place.Metadata.Name = TEXT("Lighting keys");
 	Place.Metadata.AuthorId = TEXT("usr_test");
-	FString Json = FMantlePlaceExporter::ToJson(Place);
-	TestFalse(TEXT("a place that sets neither writes neither"), Json.Contains(TEXT("skyLight")) || Json.Contains(TEXT("\"sun\"")));
+	// The place file is read as JSON, not as text: how it is spaced is the writer's business.
+	auto EnvironmentOf = [](const FString& Text) -> TSharedPtr<FJsonObject>
+	{
+		TSharedPtr<FJsonObject> Root;
+		if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) && Root.IsValid())
+		{
+			const TSharedPtr<FJsonObject>* Settings = nullptr;
+			const TSharedPtr<FJsonObject>* Environment = nullptr;
+			if (Root->TryGetObjectField(TEXT("settings"), Settings) && (*Settings)->TryGetObjectField(TEXT("environment"), Environment))
+			{
+				return *Environment;
+			}
+		}
+		return nullptr;
+	};
+
+	const FString Plain = FMantlePlaceExporter::ToJson(Place);
+	const TSharedPtr<FJsonObject> PlainEnvironment = EnvironmentOf(Plain);
+	TestFalse(TEXT("a place that sets neither writes neither"),
+		PlainEnvironment.IsValid() && (PlainEnvironment->HasField(TEXT("skyLight")) || PlainEnvironment->HasField(TEXT("sun"))));
 
 	Place.Settings.Environment = Chosen;
-	Json = FMantlePlaceExporter::ToJson(Place);
-	TestTrue(TEXT("a place that sets both writes skyLight.intensity"), Json.Contains(TEXT("\"skyLight\"")) && Json.Contains(TEXT("\"intensity\": 0.25")));
-	TestTrue(TEXT("and sun.direct false"), Json.Contains(TEXT("\"sun\"")) && Json.Contains(TEXT("\"direct\": false")));
+	const FString Json = FMantlePlaceExporter::ToJson(Place);
+	const TSharedPtr<FJsonObject> Environment = EnvironmentOf(Json);
+	if (!TestTrue(TEXT("a place that sets both writes an environment block"), Environment.IsValid()))
+	{
+		return false;
+	}
+	const TSharedPtr<FJsonObject>* SkyLight = nullptr;
+	if (TestTrue(TEXT("with skyLight"), Environment->TryGetObjectField(TEXT("skyLight"), SkyLight)))
+	{
+		TestEqual(TEXT("and its intensity"), (*SkyLight)->GetNumberField(TEXT("intensity")), 0.25);
+	}
+	const TSharedPtr<FJsonObject>* Sun = nullptr;
+	if (TestTrue(TEXT("and sun"), Environment->TryGetObjectField(TEXT("sun"), Sun)))
+	{
+		TestTrue(TEXT("with direct false"), (*Sun)->HasTypedField<EJson::Boolean>(TEXT("direct")) && !(*Sun)->GetBoolField(TEXT("direct")));
+	}
 	auto InEnvironment = [](const FMantleParseError& Error) { return Error.Path.StartsWith(TEXT("/settings/environment")); };
 	const FMantleParseResult Parsed = FMantlePlaceParser::ParseFromString(Json);
 	TestFalse(TEXT("the parser has no complaint about the environment block"), Parsed.Errors.ContainsByPredicate(InEnvironment));
 	TestTrue(TEXT("it reads the strength back"), Parsed.Place.Settings.Environment.SkyLightIntensity.IsSet() && *Parsed.Place.Settings.Environment.SkyLightIntensity == 0.25);
 	TestTrue(TEXT("and the sun"), Parsed.Place.Settings.Environment.bNoDirectSun);
 
-	// Refused: a scale past 1, a sun that is not a bool and a key the block does not know.
-	const TCHAR* const Edits[][2] = {
-		{ TEXT("\"intensity\": 0.25"), TEXT("\"intensity\": 1.5") },
-		{ TEXT("\"direct\": false"), TEXT("\"direct\": \"no\"") },
-		{ TEXT("\"direct\": false"), TEXT("\"colour\": 1") },
-	};
-	for (const TCHAR* const (&Edit)[2] : Edits)
+	// Refused: a scale past 1, a sun that is not a bool and a key the block does not know. Each edits the parsed file and writes it again.
+	auto Refused = [&Json](const TFunctionRef<void(const TSharedPtr<FJsonObject>& Environment)>& Edit)
 	{
-		const FString Edited = Json.Replace(Edit[0], Edit[1]);
-		TestNotEqual(FString::Printf(TEXT("%s is in the file"), Edit[0]), Edited, Json);
-		TestTrue(FString::Printf(TEXT("%s is refused"), Edit[1]), FMantlePlaceParser::ParseFromString(Edited).Errors.ContainsByPredicate(InEnvironment));
-	}
+		TSharedPtr<FJsonObject> Root;
+		FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Root);
+		const TSharedPtr<FJsonObject>* Settings = nullptr;
+		const TSharedPtr<FJsonObject>* Env = nullptr;
+		Root->TryGetObjectField(TEXT("settings"), Settings);
+		(*Settings)->TryGetObjectField(TEXT("environment"), Env);
+		Edit(*Env);
+		FString Edited;
+		FJsonSerializer::Serialize(Root.ToSharedRef(), TJsonWriterFactory<>::Create(&Edited));
+		return FMantlePlaceParser::ParseFromString(Edited).Errors.ContainsByPredicate([](const FMantleParseError& Error)
+		{
+			return Error.Path.StartsWith(TEXT("/settings/environment"));
+		});
+	};
+	TestTrue(TEXT("an intensity of 1.5 is refused"), Refused([](const TSharedPtr<FJsonObject>& Env)
+	{
+		Env->GetObjectField(TEXT("skyLight"))->SetNumberField(TEXT("intensity"), 1.5);
+	}));
+	TestTrue(TEXT("a direct of \"no\" is refused"), Refused([](const TSharedPtr<FJsonObject>& Env)
+	{
+		Env->GetObjectField(TEXT("sun"))->SetStringField(TEXT("direct"), TEXT("no"));
+	}));
+	TestTrue(TEXT("an unknown key is refused"), Refused([](const TSharedPtr<FJsonObject>& Env)
+	{
+		Env->GetObjectField(TEXT("skyLight"))->SetNumberField(TEXT("colour"), 1.0);
+	}));
+	TestFalse(TEXT("and the unedited file is not"), Refused([](const TSharedPtr<FJsonObject>&) {}));
 	return true;
 }
 
