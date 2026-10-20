@@ -163,7 +163,7 @@ namespace MantleWeaponBuilderExportPrivate
 		if (Existing)
 		{
 			Existing->ClearFlags(RF_Public | RF_Standalone);
-			if (!Existing->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders))
+			if (!Existing->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional))
 			{
 				Existing->SetFlags(ExistingFlags);
 				Messages.Add(FText::FromString(FString::Printf(TEXT("Could not prepare the existing %s asset for replacement."), *Name)));
@@ -174,7 +174,7 @@ namespace MantleWeaponBuilderExportPrivate
 		{
 			if (Existing)
 			{
-				Existing->Rename(*Name, Package, REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
+				Existing->Rename(*Name, Package, REN_DontCreateRedirectors | REN_NonTransactional);
 				Existing->SetFlags(ExistingFlags);
 			}
 		};
@@ -190,7 +190,7 @@ namespace MantleWeaponBuilderExportPrivate
 		if (!UPackage::SavePackage(Package, Copy, *Filename, Args))
 		{
 			Copy->ClearFlags(RF_Public | RF_Standalone);
-			Copy->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
+			Copy->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
 			Copy->MarkAsGarbage();
 			RestoreExisting();
 			Messages.Add(FText::Format(LOCTEXT("AuxSaveFailed", "Could not save the weapon's {0} asset. Check that its folder is writable."), FText::FromString(Name)));

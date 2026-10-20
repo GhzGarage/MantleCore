@@ -48,7 +48,7 @@ namespace MantleWeaponPublishPartsTestPrivate
 			{
 				FAssetRegistryModule::AssetDeleted(Asset);
 				Asset->ClearFlags(RF_Public | RF_Standalone);
-				Asset->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
+				Asset->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
 				Asset->MarkAsGarbage();
 			}
 			IFileManager::Get().DeleteDirectory(*Folder(), /*RequireExists*/ false, /*Tree*/ true);
