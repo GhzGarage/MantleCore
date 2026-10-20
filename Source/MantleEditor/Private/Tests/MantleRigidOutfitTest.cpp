@@ -2,6 +2,11 @@
 #include "MantleParametricOutfit.h"
 #include "MantleAvatarContract.h"
 #include "MantleCosmeticValidation.h"
+#include "MantleCosmeticThumbnail.h"
+
+#include "Engine/StaticMesh.h"
+#include "MeshDescription.h"
+#include "StaticMeshAttributes.h"
 
 #include "Misc/AutomationTest.h"
 
@@ -71,6 +76,55 @@ bool FMantleRigidOutfitSocketBoneTest::RunTest(const FString& Parameters)
 	TestEqual(FString::Printf(TEXT("from the pelvis it is within acc_waist's reach (%s)"), FromPelvis.IsEmpty() ? TEXT("") : *FromPelvis[0].ToString()),
 		FromPelvis.Num(), 0);
 	TestTrue(TEXT("from the head (the old route) it is out of reach"), FromHead.Num() > 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleRigidOutfitBackFacesTest,
+	"Mantle.Editor.ParametricOutfit.ThumbnailBackFaces",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+// Cloth made rigid shows its inside: the thumbnail draws a copy facing the other way (winding reversed, normals turned round).
+bool FMantleRigidOutfitBackFacesTest::RunTest(const FString& Parameters)
+{
+	FMeshDescription Description;
+	FStaticMeshAttributes Attributes(Description);
+	Attributes.Register();
+	const FPolygonGroupID Group = Description.CreatePolygonGroup();
+	Attributes.GetPolygonGroupMaterialSlotNames()[Group] = TEXT("Cloth");
+	TArray<FVertexInstanceID> Corners;
+	for (const FVector3f& Position : { FVector3f(0, 0, 0), FVector3f(10, 0, 0), FVector3f(0, 10, 0) })
+	{
+		const FVertexID Vertex = Description.CreateVertex();
+		Attributes.GetVertexPositions()[Vertex] = Position;
+		Corners.Add(Description.CreateVertexInstance(Vertex));
+		Attributes.GetVertexInstanceNormals()[Corners.Last()] = FVector3f(0, 0, 1);
+	}
+	Description.CreateTriangle(Group, Corners);
+	UStaticMesh* Mesh = NewObject<UStaticMesh>(GetTransientPackage(), NAME_None, RF_Transient);
+	Mesh->GetStaticMaterials().Add(FStaticMaterial(nullptr, TEXT("Cloth"), TEXT("Cloth")));
+	Mesh->SetNumSourceModels(1);
+	Mesh->GetSourceModel(0).BuildSettings.bRecomputeNormals = false;
+	UStaticMesh::FBuildMeshDescriptionsParams Params;
+	Params.bMarkPackageDirty = false;
+	if (!TestTrue(TEXT("the triangle builds"), Mesh->BuildFromMeshDescriptions({ &Description }, Params))) { return false; }
+
+	UStaticMesh* Back = FMantleCosmeticThumbnail::BackFaces(Mesh);
+	if (!TestNotNull(TEXT("the back faces build"), Back)) { return false; }
+	const FMeshDescription* Out = Back->GetMeshDescription(0);
+	if (!TestNotNull(TEXT("they keep a mesh description"), Out) || !TestEqual(TEXT("one triangle"), Out->Triangles().Num(), 1)) { return false; }
+	FStaticMeshConstAttributes OutAttributes(*Out);
+	const FTriangleID Triangle = *Out->Triangles().GetElementIDs().CreateConstIterator();
+	TArray<FVector3f> Positions;
+	for (const FVertexInstanceID Instance : Out->GetTriangleVertexInstances(Triangle))
+	{
+		Positions.Add(OutAttributes.GetVertexPositions()[Out->GetVertexInstanceVertex(Instance)]);
+		TestTrue(TEXT("each normal is turned round"), OutAttributes.GetVertexInstanceNormals()[Instance].Equals(FVector3f(0, 0, -1), 1e-5f));
+	}
+	const FVector3f Facing = FVector3f::CrossProduct(Positions[1] - Positions[0], Positions[2] - Positions[0]);
+	const FVector3f Was = FVector3f::CrossProduct(FVector3f(10, 0, 0), FVector3f(0, 10, 0));
+	TestTrue(TEXT("the winding is reversed"), FVector3f::DotProduct(Facing, Was) < 0.0f);
+	TestEqual(TEXT("the material slots are kept"), Back->GetStaticMaterials().Num(), 1);
 	return true;
 }
 

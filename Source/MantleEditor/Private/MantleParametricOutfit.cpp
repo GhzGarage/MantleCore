@@ -1101,6 +1101,7 @@ bool FMantleParametricOutfit::PrepareRigid(const FMantleCosmeticDraft& Draft, co
 		*Asset->GetName(), *Selected, *Pivot.Bone, After, bMeasured ? 1 : 0, *Fit.Scale.ToString(), *Fit.Offset.ToString(), *Rigid->GetBoundingBox().ToString());
 	OutDraft.Source = Rigid;
 	OutDraft.AccessoryWorn = Pose.GetRotation();
+	OutDraft.bAccessoryBackFaces = true;
 	OutDraft.KeepSlots.Reset();
 	OutDraft.OutfitSourceSize = Selected;
 	if (OutNote) { *OutNote = FString::Join(Notes, TEXT(" ")); }

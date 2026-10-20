@@ -60,7 +60,7 @@ namespace MantleDevRenderOutfitFitsPrivate
 		// The catalog thumbnail, as the upload renders it, and the same from behind.
 		for (const TCHAR* View : { TEXT("thumbnail"), TEXT("thumbnail_back") })
 		{
-			FMantleThumbnailSubject Shot = FMantleCosmeticThumbnail::AccessorySubject(Rigid, Prepared.AccessoryWorn);
+			FMantleThumbnailSubject Shot = FMantleCosmeticThumbnail::AccessorySubject(Rigid, Prepared.AccessoryWorn, Prepared.bAccessoryBackFaces);
 			if (FCString::Strcmp(View, TEXT("thumbnail_back")) == 0) { Shot.View.Yaw += 180.0f; }
 			const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), *Slot, View));
 			const bool bWritten = Save(Shot, Size, File, Error);
@@ -97,6 +97,7 @@ namespace MantleDevRenderOutfitFitsPrivate
 			Parts.IsValidIndex(2) ? Parts[2] : nullptr, nullptr, Worn);
 		Subject.StaticMesh = Rigid;
 		Subject.StaticTransform = Socket.GetValue();
+		if (Prepared.bAccessoryBackFaces) { Subject.StaticBackFaces.Reset(FMantleCosmeticThumbnail::BackFaces(Rigid)); }
 		for (const TCHAR* View : { TEXT("front"), TEXT("back") })
 		{
 			FMantleThumbnailSubject Shot = Subject;
