@@ -77,6 +77,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Sound/AmbientSound.h"
 #include "Sound/SoundCue.h"
+#include "Sound/SoundNodeWavePlayer.h"
 #include "Sound/SoundWave.h"
 #include "Sound/SoundWaveProcedural.h"
 #include "StaticMeshResources.h"
@@ -1831,8 +1832,9 @@ void FMantlePlaceDependencies::AddSoundComponent(const UAudioComponent* Audio, c
 
 void FMantlePlaceDependencies::AddSound(const USoundBase* Sound, const FString& Label)
 {
-	USoundWave* Wave = const_cast<USoundWave*>(Cast<USoundWave>(Sound));
-	// Cues, MetaSounds (a procedural wave) and generated waves are not uploads: Check says why.
+	// A Sound Cue uploads as the sound wave it publishes as (#818).
+	USoundWave* Wave = const_cast<USoundWave*>(Cast<USoundWave>(FMantlePlaceAssets::PublishedSound(Sound)));
+	// MetaSounds (a procedural wave) and generated waves are not uploads: Check says why.
 	if (!Wave || Wave->IsA<USoundWaveProcedural>() || FMantlePlaceAssets::IsLibraryAsset(Wave))
 	{
 		return;
@@ -2277,6 +2279,34 @@ bool FMantlePlaceAssets::CheckSoundRule(const USoundBase* Sound, const FMantlePl
 		return false;
 	}
 	return true;
+}
+
+const USoundBase* FMantlePlaceAssets::PublishedSound(const USoundBase* Sound)
+{
+	const USoundCue* Cue = Cast<USoundCue>(Sound);
+	if (!Cue)
+	{
+		return Sound;
+	}
+	TArray<const USoundNodeWavePlayer*> Players;
+	Cue->RecursiveFindNode<USoundNodeWavePlayer>(Cue->FirstNode.Get(), Players);
+	const FMantlePlaceAssetLimits Limits = FMantlePlaceAssetLimits::FromContract();
+	const USoundWave* Fallback = nullptr;
+	for (const USoundNodeWavePlayer* Player : Players)
+	{
+		const USoundWave* Wave = Player ? Player->GetSoundWave() : nullptr;
+		if (!Wave)
+		{
+			continue;
+		}
+		FString Why, Fix;
+		if (IsLibraryAsset(Wave) || CheckSoundRule(Wave, Limits, Why, Fix))
+		{
+			return Wave;
+		}
+		Fallback = Fallback ? Fallback : Wave;
+	}
+	return Fallback;
 }
 
 int64 FMantlePlaceAssets::SoundDecodedBytes(const USoundWave* Sound)
