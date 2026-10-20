@@ -704,7 +704,7 @@ namespace
 		case ECollisionEnabled::QueryOnly:   Props.Collision = EMantleCollision::Overlap; break;
 		default:                             Props.Collision = EMantleCollision::Blocking; break;
 		}
-		Props.bCastShadow = Component->CastShadow;
+		Props.bCastShadow = FMantleEnvironmentExport::CastsShadowInPlace(Component);
 		// #596: the surface a creator picked with one of Mantle's surface physical materials. A physics
 		// entity's caller clears it again: its physics.material carries the body's surface.
 		Props.Surface = FMantlePlaceExporter::ReadSurface(Component);
@@ -940,7 +940,7 @@ namespace
 				Props.Materials.Add(Material ? Uploads.IdFor(FMantlePlaceAssets::MaterialKey(Material), EMantleAssetKind::Material, Material) : FString());
 			}
 		}
-		Props.bCastShadow = Component->CastShadow;
+		Props.bCastShadow = FMantleEnvironmentExport::CastsShadowInPlace(Component);
 
 		if (Playback.Sequence)
 		{
@@ -4973,6 +4973,19 @@ FString FMantlePlaceExporter::ToJson(const FMantlePlace& Place)
 			{
 				WriteLuminance(TEXT("directionalInscatteringColor"), *Fog.DirectionalInscatteringColor);
 			}
+			Writer->WriteObjectEnd();
+		}
+		// The sky light's scale and a sun that never reaches the place (#722): only when they differ from Mantle's own.
+		if (Environment.SkyLightIntensity.IsSet())
+		{
+			Writer->WriteObjectStart(TEXT("skyLight"));
+			Writer->WriteValue(TEXT("intensity"), *Environment.SkyLightIntensity);
+			Writer->WriteObjectEnd();
+		}
+		if (Environment.bNoDirectSun)
+		{
+			Writer->WriteObjectStart(TEXT("sun"));
+			Writer->WriteValue(TEXT("direct"), false);
 			Writer->WriteObjectEnd();
 		}
 		Writer->WriteObjectEnd();

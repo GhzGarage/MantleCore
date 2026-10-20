@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleSplineMeshBake.h"
 
+#include "MantleEnvironmentExport.h"
 #include "MantleMeshReduce.h"
 #include "MantlePlaceAssets.h"
 #include "MantlePlaceExporter.h"
@@ -552,7 +553,7 @@ FMantleSplineBakeResult FMantleSplineMeshBake::BakeComponents(TConstArrayView<US
 		Source.WorldBounds = Component->CalcBounds(Component->GetComponentTransform()).GetBox();
 		Source.Collision = CollisionOf(Component);
 		Source.Surface = FMantlePlaceExporter::ReadSurface(Component);
-		Source.bCastShadow = Component->CastShadow;
+		Source.bCastShadow = FMantleEnvironmentExport::CastsShadowInPlace(Component);
 		Source.Materials.Sort([](const UMaterialInterface& A, const UMaterialInterface& B) { return A.GetPathName() < B.GetPathName(); });
 
 		FString Key = FString::Printf(TEXT("%s|%d|%d|%d"), *Owner->GetPathName(), static_cast<int32>(Source.Collision), static_cast<int32>(Source.Surface), Source.bCastShadow ? 1 : 0);
