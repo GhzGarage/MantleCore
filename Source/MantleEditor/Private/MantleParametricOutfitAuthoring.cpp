@@ -142,7 +142,9 @@ UChaosOutfitAsset* FMantleParametricOutfitAuthoring::Create(TConstArrayView<FMan
 	}
 	UObject* Owner = Outer ? Outer : GetTransientPackage();
 	const EObjectFlags Flags = Owner == GetTransientPackage() ? RF_Transient : (RF_Public | RF_Standalone | RF_Transactional);
-	UChaosOutfitAsset* Asset = NewObject<UChaosOutfitAsset>(Owner, MakeUniqueObjectName(Owner, UChaosOutfitAsset::StaticClass(), Name), Flags);
+	// The asking name when it is free (a new package's asset is named as its package), else a unique one.
+	const FName AssetName = StaticFindObjectFast(nullptr, Owner, Name) ? MakeUniqueObjectName(Owner, UChaosOutfitAsset::StaticClass(), Name) : Name;
+	UChaosOutfitAsset* Asset = NewObject<UChaosOutfitAsset>(Owner, AssetName, Flags);
 	KeepAlive.Emplace(Asset);
 	UChaosOutfit* Outfit = NewObject<UChaosOutfit>(Asset);
 	KeepAlive.Emplace(Outfit);
