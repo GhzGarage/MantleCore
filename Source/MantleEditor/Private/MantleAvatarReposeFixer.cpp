@@ -514,7 +514,7 @@ USkeletalMesh* FMantleAvatarRepose::WriteWithPose(USkeletalMesh* Source, TConstA
 	if (Source->HasAnyFlags(RF_Transient))
 	{
 		Mesh->ClearFlags(RF_Transient);
-		ForEachObjectWithOuter(Mesh, [](UObject* Inner) { Inner->ClearFlags(RF_Transient); }, /*bIncludeNestedObjects*/ true);
+		ForEachObjectWithOuter(Mesh, [](UObject* Inner) { Inner->ClearFlags(RF_Transient); }, EGetObjectsFlags::IncludeNestedObjects);
 	}
 	Mesh->SetFlags(RF_Public | RF_Standalone | RF_Transactional);
 	FAssetRegistryModule::AssetCreated(Mesh);

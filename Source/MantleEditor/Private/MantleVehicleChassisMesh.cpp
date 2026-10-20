@@ -101,7 +101,7 @@ namespace MantleVehicleChassisMeshPrivate
 			// Still in memory after the delete (something held it): move it aside so the new asset can take the name.
 			FAssetRegistryModule::AssetDeleted(Old);
 			Old->ClearFlags(RF_Public | RF_Standalone);
-			Old->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
+			Old->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
 			Old->MarkAsGarbage();
 		}
 		return Package;
