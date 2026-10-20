@@ -16,8 +16,8 @@ namespace MantleReflectionProbePrivate
 {
 	TAutoConsoleVariable<int32> CVarProbes(
 		TEXT("Mantle.ReflectionProbes"),
-		0,
-		TEXT("Capture a place's reflection probes at run time (1) or leave them out (0, the default until their brightness matches the editor). Read when a place is built.\n"),
+		1,
+		TEXT("Capture a place's reflection probes at run time (1, the default since their brightness matches the editor, #722) or leave them out (0). Read when a place is built.\n"),
 		ECVF_Default);
 
 	/** An int cvar of the engine's by name, or Fallback when this build does not have it. */
@@ -38,6 +38,11 @@ bool FMantleReflectionProbes::IsEnabled()
 bool FMantleReflectionProbes::IsRuntimeCaptureOn()
 {
 	return MantleReflectionProbePrivate::ProbeEngineInt(TEXT("r.ReflectionCapture.Runtime"), 0) != 0;
+}
+
+bool FMantleReflectionProbes::IsLightmapMixingOn()
+{
+	return MantleReflectionProbePrivate::ProbeEngineInt(TEXT("r.ReflectionEnvironmentLightmapMixing"), 0) != 0;
 }
 
 FString FMantleReflectionProbes::WhyNotDrawn(const UWorld* World)
@@ -258,6 +263,10 @@ void UMantleReflectionProbeSubsystem::StartCapture()
 	}
 	Pending.Reset();
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_PLACE_REFLECTION spawned=%d"), Captures.Num());
+	if (!Captures.IsEmpty() && FMantleReflectionProbes::IsLightmapMixingOn())
+	{
+		UE_LOG(LogMantle, Warning, TEXT("MANTLE_PLACE_REFLECTION r.ReflectionEnvironmentLightmapMixing is on: runtime captures have no average brightness, so rough surfaces will read far too bright"));
+	}
 	if (Captures.IsEmpty())
 	{
 		Phase = EPhase::Idle;
