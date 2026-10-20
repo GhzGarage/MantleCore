@@ -42,7 +42,7 @@ ENGINE_LABEL = "UE5.8"
 PLATFORMS = ["Win64"]
 CREATED_BY = "Joshua Eger"
 FAB_LISTING_ID = "0ab720ef-e3da-4dc7-81ee-7eafb573c6bc"
-FAB_URL = f"https://www.fab.com/listings/{FAB_LISTING_ID}"
+FAB_URL = f"com.epicgames.launcher://ue/Fab/product/{FAB_LISTING_ID}"
 
 # Folders never shipped, anywhere in the tree, plus every file or folder whose name starts with "."
 # (.git, .github, .claude, .gitattributes, .gitignore, .vs).
