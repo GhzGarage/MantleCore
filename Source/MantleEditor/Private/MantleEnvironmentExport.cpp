@@ -891,6 +891,12 @@ void FMantleEnvironmentExport::Apply(UWorld* World, const TMap<const AActor*, FS
 	}
 	if (bNaturalChosen)
 	{
+		// Natural is no weather key: the place's absent weather is the natural cycle, so older clients and backends read it as before.
+		if (bOwnSky && !bWeatherSetByPlace)
+		{
+			Coverage.Add(Cat::Sky, EOutcome::Approximated, TEXT("Weather"),
+				TEXT("Mantle Place Settings chooses Natural, so the place holds no weather and it changes on its own, though the level has a sky of its own."));
+		}
 		Held.Reset();
 		HeldReason.Reset();
 	}
