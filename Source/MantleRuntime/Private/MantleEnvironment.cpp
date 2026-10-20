@@ -248,6 +248,9 @@ void FMantleEnvironment::Apply(UWorld* World, const FMantlePlace& Place, FMantle
 	// `settings.skybox` is not read yet: every place gets the default sky.
 
 	FMantleSkyBinding Binding;
+	// Indoor levels (#722): the place's scale on the sky light, and a sun that never reaches it.
+	Binding.SkyLightIntensityScale = static_cast<float>(Place.Settings.Environment.SkyLightIntensity.Get(1.0));
+	Binding.bNoDirectSun = Place.Settings.Environment.bNoDirectSun;
 
 	if (AActor* Atmosphere = SpawnEnvironmentActor<ASkyAtmosphere>(World, TEXT("MantleDefaultSkyAtmosphere")))
 	{

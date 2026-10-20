@@ -55,6 +55,18 @@ struct FMantleSkyBinding
 	 */
 	AStaticMeshActor* StarDome = nullptr;
 	AStaticMeshActor* Moon = nullptr;
+
+	/**
+	 * The place's settings.environment.skyLight.intensity (#722): a scale, 0 to 1, on the sky light's own intensity,
+	 * applied to its base before the weather's. An indoor level lowers it so its walls are not lit by the open sky.
+	 */
+	float SkyLightIntensityScale = 1.0f;
+
+	/**
+	 * The place's settings.environment.sun.direct false (#722): the sun and the moon light nothing in the place. The
+	 * light keeps its intensity, so the atmosphere, the clouds and the sky light's capture of them are unchanged.
+	 */
+	bool bNoDirectSun = false;
 };
 
 /**
@@ -454,6 +466,8 @@ private:
 	double HeadingYawDegrees = 0.0;
 	float DayIntensity = 0.0f;
 	FColor DayColor = FColor::White;
+	/** FMantleSkyBinding::bNoDirectSun for the bound place (#722). */
+	bool bNoDirectSun = false;
 
 	/** What UpdateSky last applied, so it can step instead of re-aiming every frame. */
 	bool bSkyApplied = false;

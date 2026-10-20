@@ -49,6 +49,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerStart.h"
 #include "GameFramework/WorldSettings.h"
+#include "HAL/PlatformMemory.h"
 #include "HAL/PlatformTime.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/PackageName.h"
@@ -1783,6 +1784,17 @@ FMantleBuildResult FMantlePlaceBuilder::Build(
 		LoadStats.Count,
 		LoadStats.LongestSeconds * 1000.0,
 		LoadStats.LongestId.IsEmpty() ? TEXT("-") : *LoadStats.LongestId);
+
+	// The process's memory once the place stands (#630), for the large-place benchmark (tools/bench) on a
+	// client and a dedicated server alike: what is in use now, and the most the process has held so far.
+	const FPlatformMemoryStats MemoryStats = FPlatformMemory::GetStats();
+	UE_LOG(LogMantle, Log,
+		TEXT("MANTLE_PLACE_BUILD_MEMORY place=%s used_physical_mb=%.1f peak_physical_mb=%.1f used_virtual_mb=%.1f peak_virtual_mb=%.1f"),
+		*Place.PlaceId,
+		static_cast<double>(MemoryStats.UsedPhysical) / (1024.0 * 1024.0),
+		static_cast<double>(MemoryStats.PeakUsedPhysical) / (1024.0 * 1024.0),
+		static_cast<double>(MemoryStats.UsedVirtual) / (1024.0 * 1024.0),
+		static_cast<double>(MemoryStats.PeakUsedVirtual) / (1024.0 * 1024.0));
 
 	return Result;
 }

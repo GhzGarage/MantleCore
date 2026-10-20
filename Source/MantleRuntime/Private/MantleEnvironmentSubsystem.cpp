@@ -298,7 +298,9 @@ void UMantleEnvironmentSubsystem::BindSky(const FMantleSkyBinding& Binding)
 	// The fog's own colour, which a script's Environment.FogColor replaces and nil restores.
 	BaseFogColor = BoundFog ? BoundFog->FogInscatteringLuminance : FLinearColor::Black;
 	const USkyLightComponent* BoundSkyLight = SkyLightComponent.Get();
-	BaseSkyLightIntensity = BoundSkyLight ? BoundSkyLight->Intensity : 0.0f;
+	// The place's own scale (#722) is part of the base, so the weather scales from it.
+	const float SkyLightScale = FMath::Clamp(Binding.SkyLightIntensityScale, 0.0f, 1.0f);
+	BaseSkyLightIntensity = BoundSkyLight ? BoundSkyLight->Intensity * SkyLightScale : 0.0f;
 	bWeatherSkyApplied = false;
 	UpdateWeatherSky(/*bForce*/ true);
 	if (HasWeatherSky())
@@ -314,16 +316,28 @@ void UMantleEnvironmentSubsystem::BindSky(const FMantleSkyBinding& Binding)
 	// The night sky turns around the same heading, so it is set even without a light.
 	UDirectionalLightComponent* Light = SunLight.Get();
 	HeadingYawDegrees = (Light && Binding.bPlaceSun) ? Binding.Sun->GetActorRotation().Yaw : 0.0;
+	bNoDirectSun = Binding.bNoDirectSun;
 	if (Light)
 	{
 		DayIntensity = Light->Intensity;
 		DayColor = Light->LightColor;
+		if (bNoDirectSun)
+		{
+			// A sealed level's sun (#722). The atmosphere and the clouds read the light's intensity and colour (its
+			// outer-space illuminance), so those stay as they are and the sky light still captures a lit sky. What
+			// the light adds to the place goes: its direct diffuse and specular light (Lumen's surface cache reads
+			// the same scales), its indirect light and its light in the volumetric fog.
+			Light->SetDiffuseScale(0.0f);
+			Light->SetSpecularScale(0.0f);
+			Light->SetIndirectLightingIntensity(0.0f);
+			Light->SetVolumetricScatteringIntensity(0.0f);
+		}
 
 		UpdateSky(/*bForce*/ true);
 
 		UE_LOG(LogMantle, Log,
-			TEXT("MANTLE_ENV_SKY bound place_sun=%d heading=%.2f day_intensity=%.3f hour=%.4f"),
-			Binding.bPlaceSun ? 1 : 0, HeadingYawDegrees, DayIntensity, GetTimeOfDay());
+			TEXT("MANTLE_ENV_SKY bound place_sun=%d heading=%.2f day_intensity=%.3f direct_sun=%d sky_light_scale=%.3f hour=%.4f"),
+			Binding.bPlaceSun ? 1 : 0, HeadingYawDegrees, DayIntensity, bNoDirectSun ? 0 : 1, SkyLightScale, GetTimeOfDay());
 	}
 
 	UpdateNightSky(/*bForce*/ true);
