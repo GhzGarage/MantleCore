@@ -73,7 +73,7 @@ class Entity:
         """Push a physics entity: impulse is in kg*cm/s along the world axes, so its velocity changes by impulse / Mass. Does nothing while it is Anchored. Errors on an entity with no physics block."""
         ...
     def clone(self) -> Entity:
-        """Make a copy (same look, tags and place). On the server the copy appears for everyone; on a client only for that player. Tip: keep a hidden template and clone it."""
+        """Make a copy (same look, tags and place). On the server the copy appears for everyone; on a client only for that player. Tip: keep a hidden template and clone it. A physics entity, a Constraint or an NPC can't be cloned (it errors, and says how to make another)."""
         ...
     def destroy(self) -> None:
         """Remove the entity. On the server it disappears for everyone; on a client only for that player."""
@@ -127,23 +127,56 @@ class Entity:
         """Sound emitters only: stop the emitter's sound, fading it out over fadeOut seconds (0 by default). It stays silent until PlaySound, from a server script for players who join later too."""
         ...
     def tween(self, goal: dict[str, Any], seconds: float, style: Optional[str] = ..., direction: Optional[str] = ...) -> Signal:
-        """Smoothly move/rotate/scale to the goal. Since script API 1.8 the goal can also fade a light's LightColor or LightIntensity, or a mesh's Color; those errors like setting them would. style: Linear, Sine, Quad, Cubic, Quart, Quint, Exponential, Circular, Back, Bounce, Elastic. direction: In, Out, InOut. Returns a Completed signal."""
+        """Smoothly move/rotate/scale to the goal. Since script API 1.8 the goal can also fade a light's LightColor or LightIntensity, or a mesh's Color; those errors like setting them would. style: Linear, Sine, Quad, Cubic, Quart, Quint, Exponential, Circular, Back, Bounce, Elastic. direction: In, Out, InOut. Returns a Completed signal. A Position, Rotation or Scale goal on an entity the place did not mark dynamic is a script error, like setting them."""
         ...
 
 class Player:
     """A connected player."""
+    armor: Optional[float]
     avatar: Optional[str]
     character: Optional[Entity]
+    crouch_enabled: Optional[bool]
+    crouch_speed: Optional[float]
     health: Optional[float]
+    is_crouched: Optional[bool]
+    is_ragdolled: Optional[bool]
+    is_sprinting: Optional[bool]
     jump_height: Optional[float]
+    jump_stamina_cost: Optional[float]
     max_health: Optional[float]
+    max_shield: Optional[float]
+    max_stamina: Optional[float]
     name: str
     position: Optional[Vector3]
+    regen_delay: Optional[float]
+    regen_rate: Optional[float]
+    shield: Optional[float]
+    shield_regen_rate: Optional[float]
+    sprint_enabled: Optional[bool]
+    sprint_speed: Optional[float]
+    stamina: Optional[float]
+    stamina_drain: Optional[float]
+    stamina_enabled: Optional[bool]
+    stamina_regen: Optional[float]
+    stamina_regen_delay: Optional[float]
+    team: Optional[str]
     user_id: str
     walk_speed: Optional[float]
     wearing: dict[str, Any]
+    crouch_started: Signal
+    crouch_stopped: Signal
+    damaged: Signal
     died: Signal
     health_changed: Signal
+    ragdolled: Signal
+    recovered: Signal
+    respawned: Signal
+    sprint_started: Signal
+    sprint_stopped: Signal
+    stamina_changed: Signal
+    def force_crouch(self, crouched: bool) -> bool:
+        """Hold the player crouched (true) or standing (false) whatever they press, until ReleaseCrouch. A player held crouched can still walk (sprinting is off while crouched); one held standing cannot crouch or slide. CrouchEnabled false wins over a crouch hold. Returns false when the player has no character on foot. The hold ends with the character: a respawn gives the key back."""
+        ...
     def heal(self, amount: float) -> bool:
         """Raise the character's health by amount, up to MaxHealth. Never brings a dead character back (use Respawn). Returns false when the player has no character on foot, is dead, or is already at full health."""
         ...
@@ -153,11 +186,20 @@ class Player:
     def kill(self) -> bool:
         """Kill the character outright: Died fires with no killer, and the place's respawn rules take over as for any other death. Returns false when the player has no character on foot or is already dead."""
         ...
+    def ragdoll(self, seconds: Optional[float] = ..., velocity: Optional[Vector3] = ...) -> bool:
+        """Knock the character down: it goes limp for everyone, the player cannot move or act, and when the time is up (or Recover is called) it stands back up where it lies with a get-up animation. seconds is how long to stay down, 0.1 to 300; leave it out to stay down until Recover (at most five minutes). velocity is an optional shove in centimetres per second; without it the character keeps the speed it had. Ragdolled fires now and Recovered when it gets up. Returns false when the player has no character on foot, is dead, is sitting in a vehicle or is already knocked down."""
+        ...
+    def recover(self) -> bool:
+        """Stand a knocked-down character back up now, wherever it lies; Recovered fires when it is up. Safe to call at any time. Returns false when the character was not knocked down."""
+        ...
+    def release_crouch(self) -> bool:
+        """Give the player the crouch key back after ForceCrouch. Returns false when the player has no character on foot."""
+        ...
     def respawn(self, position: Optional[Vector3] = ...) -> bool:
         """Give the player a fresh character with full health right now, alive or dead: at position when given, otherwise at the spawn point the place's respawn mode picks. The old character (or a corpse waiting for its respawn) is removed. Returns false when the player is driving a vehicle (eject them first) or cannot be spawned."""
         ...
-    def take_damage(self, amount: float, source: Optional[Player] = ...) -> bool:
-        """Hurt the character through the same path weapons use, so the game's damage rules apply. source is the player to credit: if this hit kills, Died names them as the killer. Returns false when the player has no character on foot (respawning or driving), is already dead, or the damage was refused."""
+    def take_damage(self, amount: float, source: Optional[Player] = ..., damageType: Optional[str] = ...) -> bool:
+        """Hurt the character through the same path weapons use, so the game's damage rules apply: friendly fire, Armor, then Shield, then health. source is the player to credit: if this hit kills, Died names them as the killer. damageType tags the hit for Damaged and Died ('Generic' when left out); use a built-in such as 'Bullet', 'Melee', 'Explosion', 'Fall', 'Vehicle' or 'Area', or any word of your own up to 32 characters, such as 'Poison'. Returns false when the player has no character on foot (respawning or driving), is already dead, or nothing got through (friendly fire off, or Armor 100)."""
         ...
     def teleport(self, position: Vector3) -> bool:
         """Move the player's character instantly. Always lands exactly at position, even inside solid geometry; returns false only when the player has no character to move right now."""
@@ -236,10 +278,10 @@ class NPC:
         """Walk to position along the ground, around walls and obstacles, replacing any walk in progress. Returns false at once when position is more than 500 m away or the NPC is dead; otherwise true, and MoveCompleted fires when the walk ends: true when the NPC arrived, false when there is no way there (no walkable ground, a blocked or too long path). The first walk in a place waits for its navigation to build, which can take a few seconds."""
         ...
     def play_asset_clip(self, clipAssetId: str, params: Optional[dict[str, Any]] = ...) -> None:
-        """Play one of the place's AnimClip assets on the NPC, starting now, on every player's screen and in step, players who join later included. params: Loop (false by default: the clip plays once and the NPC goes back to walking and standing on its own; true keeps it playing until StopClip or the next PlayClip), PlayRate (clip seconds per second, 1 by default, clamped to 0..10) and StartOffset (seconds into the clip to start at, 0 by default, clamped to 0..3600). The clip must be authored on the skeleton of the NPC's body (the avatars' MetaHuman body). Errors when the id is not an AnimClip in the place's assets or, where the server draws the NPC, the clip is on another skeleton; a dedicated server never loads clips, so there that last one shows on each player's screen as the NPC walking and standing on its own instead."""
+        """Play one of the place's AnimClip assets on the NPC, starting now, on every player's screen and in step, players who join later included. params: Loop (false by default: the clip plays once and the NPC goes back to walking and standing on its own; true keeps it playing until StopClip or the next PlayClip), PlayRate (clip seconds per second, 1 by default, clamped to 0..10) and StartOffset (seconds into the clip to start at, 0 by default, clamped to 0..3600). The clip must be authored on the skeleton of the NPC's body (the avatars' MetaHuman body). Errors when the id is not an AnimClip in the place's assets or, where the server draws the NPC, the clip is on another skeleton; a dedicated server never loads clips, so it cannot check the skeleton: there a clip on another skeleton shows on each player's screen as the NPC walking and standing on its own instead, with no error for the script."""
         ...
     def play_clip(self, clip: str, loop: Optional[bool] = ...) -> None:
-        """Play one of the NPC clips on every player's screen: 'walk', 'idle', 'turn_left' or 'turn_right', or (script API 1.23) one of the place's AnimClip asset ids at normal speed (PlayAssetClip also sets its speed and start). It plays once and the NPC goes back to walking and standing on its own, or with loop true keeps playing until StopClip or the next PlayClip. Players who join later see it too."""
+        """Play one of the NPC clips on every player's screen: 'walk', 'idle', 'turn_left' or 'turn_right', or (script API 1.23) one of the place's AnimClip asset ids at normal speed (PlayAssetClip also sets its speed and start). It plays once and the NPC goes back to walking and standing on its own, or with loop true keeps playing until StopClip or the next PlayClip. Players who join later see it too. A clip on another skeleton than the NPC's body can't be checked on a dedicated server, which never loads clips; each player's screen then shows the NPC walking and standing on its own instead."""
         ...
     def respawn(self, position: Optional[Vector3] = ...) -> bool:
         """Bring the NPC back with full health, dead or alive: standing at position (its feet) when given, otherwise where NPCs:Spawn first put it. Its clip stops, and a walk in progress ends without MoveCompleted. Returns false when it could not be put there."""
@@ -307,8 +349,14 @@ class UiNode:
     id: float
     text: str
     activated: Signal
+    def attach_to_world(self, target: Entity | Player | NPC, options: dict[str, Any] = ...) -> bool:
+        """Make this top-level node float over an entity, a player or an NPC in the world, on this player's screen only: a nameplate, a health bar, a marker. Build the node and its children as usual, then attach the top one; it stops being part of the screen's layout and follows the target, bottom-centre on the point above it. It is only drawn, never clicked. Attaching it again changes the options. Returns false if the node is not a top-level node of this script (call SetParent(nil) first) or the script already has 32 nodes floating; the nodes still count toward the node budget (256). If the target is destroyed, or a player has no character, the node hides. options: Bone (a bone or socket of the target's skeletal mesh, such as 'head'; without it, or when the target has no such bone, the node sits over the top of the target), Offset (a Vector3 in centimetres, in world axes, added to that point, such as Vector3.new(0, 0, 30)), ScreenOffsetX and ScreenOffsetY (pixels, x right and y down), MaxDistance (centimetres from the camera, default 3000, at most 50000: farther is hidden), FadeDistance (centimetres: it fades out over the last FadeDistance before MaxDistance; default 0 cuts off at MaxDistance), HideWhenOccluded (hide while world geometry is between the camera and the point; one cheap check a tenth of a second; default false: it draws over everything), HideForSelf (hide when the target is the local player's own character, for a nameplate you do not want over yourself), ScaleWithDistance (default false: constant size on screen; true makes it smaller with distance), MinScale and MaxScale (0.05 to 4, defaults 0.4 and 1; the limits when it scales), ScaleDistance (centimetres where it draws at scale 1, default 1000), OffScreen ('Hide', the default, or 'Clamp' to keep it on the edge of the screen pointing towards the target, for a marker). Example: nameplate:AttachToWorld(player, {Bone = 'head', Offset = Vector3.new(0, 0, 30), MaxDistance = 2500, FadeDistance = 500, HideForSelf = true})"""
+        ...
     def destroy(self) -> None:
         """Remove this node and every descendant."""
+        ...
+    def detach_from_world(self) -> bool:
+        """Stop floating this node: it goes back to the screen's layout, as a top-level node. Returns false if it was not attached. Destroy the node instead to remove it altogether."""
         ...
     def set_action(self, action: str) -> bool:
         """Name the action this node fires on Activated when clicked, tapped or confirmed."""
@@ -611,6 +659,29 @@ class _LightsService:
 
 Lights: _LightsService
 
+class _MatchService:
+    """A small round lifecycle you drive yourself: start a round, end it (by calling EndRound or when its timer runs out), and read the round number and clock. The server runs it; State, Round and TimeRemaining are readable from client scripts too, for a HUD. It does not pick winners, move players or restart anything by itself: connect to RoundStarted and RoundEnded and do what your game needs. The match is Waiting before a round and between rounds, InProgress during one, and Ended after EndMatch."""
+    round: float
+    state: str
+    time_remaining: Optional[float]
+    round_ended: Signal
+    round_started: Signal
+    state_changed: Signal
+    def end_match(self, winner: Optional[str] = ...) -> bool:
+        """End the whole match. A running round ends first (RoundEnded fires with reason 'MatchEnded'), then State becomes Ended. Returns false when the match has already ended."""
+        ...
+    def end_round(self, winner: Optional[str] = ...) -> bool:
+        """End the running round: RoundEnded fires with winner (a team name, a player's name, anything up to 64 characters, or nil for none) and reason 'Ended', and State goes back to Waiting. Returns false when no round is running."""
+        ...
+    def reset(self) -> None:
+        """Start over: a running round ends first (reason 'MatchEnded'), then State is Waiting and Round is 0. Teams and players are not touched."""
+        ...
+    def start_round(self, seconds: Optional[float] = ...) -> bool:
+        """Begin the next round: Round goes up by one, State becomes InProgress, and RoundStarted fires. With seconds (up to 86400) the round ends by itself when the time is up, with reason 'Time' and no winner; without, it runs until EndRound. Returns false, changing nothing, while a round is already running or after EndMatch (call Reset first)."""
+        ...
+
+Match: _MatchService
+
 class _NPCsService:
     """Spawn characters the server walks around the place and animates (server only)."""
     def from_entity(self, entity: Entity) -> Optional[NPC]:
@@ -646,6 +717,13 @@ class _PlayersService:
         ...
 
 Players: _PlayersService
+
+class _RespawnService:
+    """How a death becomes a respawn. By default a dead player respawns on their own after a short wait at a spawn point the place picks. Change the wait, or turn automatic respawning off to run rounds where the dead stay down until you bring them back with Player:Respawn. The server decides; there is nothing for a client script here. Player.Respawned fires when a player gets a fresh character."""
+    auto_respawn: bool
+    delay: float
+
+Respawn: _RespawnService
 
 class _ScriptService:
     """Facts about the running script."""
@@ -703,6 +781,28 @@ class _StorageService:
         ...
 
 Storage: _StorageService
+
+class _TeamsService:
+    """Teams for a place: define them, put players on them, and decide whether teammates can hurt each other. The server decides everything; which team a player is on replicates, so client scripts and HUDs can read it. A team is named by its name (not case-sensitive) and has a colour. Friendly fire is off by default: once a player is on a team, damage from a teammate is ignored until Teams.FriendlyFire is set to true."""
+    friendly_fire: bool
+    player_team_changed: Signal
+    def create(self, name: str, color: Optional[str] = ...) -> None:
+        """Define a team. name is 1 to 32 characters and must be new. color is '#RRGGBB' (white when left out), for a HUD or a nameplate to use. Up to 16 teams. Example: Teams:Create('Red', '#E53935')"""
+        ...
+    def get_color(self, name: str) -> Optional[str]:
+        """The team's colour as '#RRGGBB', or nil when there is no such team."""
+        ...
+    def get_players(self, name: str) -> list[Player]:
+        """The players on the team right now (an empty list for a team nobody is on, or one that does not exist)."""
+        ...
+    def list(self) -> list[str]:
+        """The names of the teams, in the order they were created."""
+        ...
+    def remove(self, name: str) -> None:
+        """Delete a team. Its players are taken off it first, so PlayerTeamChanged fires for each."""
+        ...
+
+Teams: _TeamsService
 
 class _TimeService:
     """Clocks for scripts."""

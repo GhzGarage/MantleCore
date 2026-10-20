@@ -69,7 +69,7 @@ declare extern type Entity with
 	Name: string
 	--- A physics entity's surface: "default", "rubber" (bouncy), "ice" (slippery), "metal", "wood" or "stone"; the place's physics.material says how it starts. Set it on the server, anchored or not, and every player sees the change. nil for an entity with no physics block, and setting it on one errors, as does any other name.
 	PhysicsMaterial: string?
-	--- World location in centimetres. Setting it on the server replicates to everyone; on a client it only changes that client's view.
+	--- World location in centimetres. Setting it on the server replicates to everyone; on a client it only changes that client's view. Setting it (or Rotation or Scale) on an entity the place did not mark dynamic is a script error; clones are always dynamic.
 	Position: Vector3
 	--- Rotation in degrees as (pitch, yaw, roll).
 	Rotation: Vector3
@@ -99,7 +99,7 @@ declare extern type Entity with
 	function ApplyAngularImpulse(self, impulse: Vector3): ()
 	--- Push a physics entity: impulse is in kg*cm/s along the world axes, so its velocity changes by impulse / Mass. Does nothing while it is Anchored. Errors on an entity with no physics block. (server only)
 	function ApplyImpulse(self, impulse: Vector3): ()
-	--- Make a copy (same look, tags and place). On the server the copy appears for everyone; on a client only for that player. Tip: keep a hidden template and clone it.
+	--- Make a copy (same look, tags and place). On the server the copy appears for everyone; on a client only for that player. Tip: keep a hidden template and clone it. A physics entity, a Constraint or an NPC can't be cloned (it errors, and says how to make another).
 	function Clone(self): Entity
 	--- Remove the entity. On the server it disappears for everyone; on a client only for that player.
 	function Destroy(self): ()
@@ -135,46 +135,114 @@ declare extern type Entity with
 	function StopEffect(self): ()
 	--- Sound emitters only: stop the emitter's sound, fading it out over fadeOut seconds (0 by default). It stays silent until PlaySound, from a server script for players who join later too.
 	function StopSound(self, fadeOut: number?): ()
-	--- Smoothly move/rotate/scale to the goal. Since script API 1.8 the goal can also fade a light's LightColor or LightIntensity, or a mesh's Color; those errors like setting them would. style: Linear, Sine, Quad, Cubic, Quart, Quint, Exponential, Circular, Back, Bounce, Elastic. direction: In, Out, InOut. Returns a Completed signal.
+	--- Smoothly move/rotate/scale to the goal. Since script API 1.8 the goal can also fade a light's LightColor or LightIntensity, or a mesh's Color; those errors like setting them would. style: Linear, Sine, Quad, Cubic, Quart, Quint, Exponential, Circular, Back, Bounce, Elastic. direction: In, Out, InOut. Returns a Completed signal. A Position, Rotation or Scale goal on an entity the place did not mark dynamic is a script error, like setting them.
 	function Tween(self, goal: {Position: Vector3?, Rotation: Vector3?, Scale: Vector3?, LightColor: string?, LightIntensity: number?, Color: string?}, seconds: number, style: string?, direction: string?): Signal
 end
 
 --- A connected player.
 declare extern type Player with
+	--- How much of every hit the character shrugs off, as a percent from 0 (none, the default) to 100 (all of it). Armor works before the Shield and health. nil while the player has no character. Setting it (server only) clamps to 0..100 and lasts for the rest of the session, through respawns.
+	Armor: number?
 	--- The item id of the avatar (body) the player has on, or nil before their look has arrived. Read-only. (server only)
 	Avatar: string?
 	--- The player's body in the world, or nil while respawning.
 	Character: Entity?
+	--- Whether the player can crouch or slide (true unless a script changes it); nil while the player has no character. Setting it (server only) to false stands a crouching player up and the crouch key does nothing until it is true again. It lasts for the rest of the session, through respawns.
+	CrouchEnabled: boolean?
+	--- How fast the character moves while crouched, in centimetres per second (225 unless a script changes it; it scales with WalkSpeed until you set it). nil while the player has no character. Setting it (server only) clamps to 0..1500 and lasts for the rest of the session, through respawns.
+	CrouchSpeed: number?
 	--- The character's health, from 0 to MaxHealth; nil while the player has no character. Weapons and TakeDamage lower this same value. Setting it (server only) clamps to 0..MaxHealth, and 0 kills the character with no killer. Setting it on a dead player, or one driving a vehicle, does nothing: use Respawn to bring a player back.
 	Health: number?
+	--- Whether the character is crouched right now (by the key, a slide or ForceCrouch). nil while the player has no character. Read-only.
+	IsCrouched: boolean?
+	--- Whether the character is limp on the ground right now: from Ragdoll, or a hard hit, a blast or being thrown off a vehicle knocked it down. nil while the player has no character. Read-only.
+	IsRagdolled: boolean?
+	--- Whether the character is sprinting right now: holding the sprint key and moving forward fast enough. nil while the player has no character. Read-only.
+	IsSprinting: boolean?
 	--- How high the character's jump rises, in centimetres (about 90 under normal gravity unless a script changes it). nil while the player has no character. Setting it (server only) clamps to 0..1000 and lasts for the rest of the session, through respawns; 0 stops ordinary jumps.
 	JumpHeight: number?
+	--- How much stamina a jump costs (0 unless a script changes it, so jumping is free); with a cost, a character with less stamina than that cannot jump. nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session. Only counts while StaminaEnabled is true.
+	JumpStaminaCost: number?
 	--- The most health the character can have (100 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 1..10000 and lasts for the rest of the session: every respawn starts with full health at this maximum. Lowering it below Health lowers Health too; raising it does not heal.
 	MaxHealth: number?
+	--- The size of the shield pool (0, no shield, unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session. A shield above the new size drops to it; raising an existing shield does not fill the pool (set Shield for that), but giving a shield to a player who had none starts it full.
+	MaxShield: number?
+	--- The most stamina the character can have (100 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 1..10000 and lasts for the rest of the session, through respawns. Lowering it below Stamina lowers Stamina too; raising it does not refill.
+	MaxStamina: number?
 	--- The player's Epic display name.
 	Name: string
 	--- Where the player's character is.
 	Position: Vector3?
+	--- Seconds the character must go without being hurt before health and shield start coming back (5 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..60 and lasts for the rest of the session.
+	RegenDelay: number?
+	--- Health the character gets back per second once RegenDelay seconds have passed since it was last hurt (0, no regeneration, unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..1000 and lasts for the rest of the session.
+	RegenRate: number?
+	--- The character's shield: a pool that soaks up damage (after Armor) before health is touched. 0 to MaxShield; nil while the player has no character. Setting it (server only) changes the pool now and clamps to 0..MaxShield; every respawn starts with it full.
+	Shield: number?
+	--- Shield the character gets back per second after the same RegenDelay (0, none, unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..1000 and lasts for the rest of the session.
+	ShieldRegenRate: number?
+	--- Whether the player can sprint (true unless a script changes it); nil while the player has no character. Setting it (server only) to false stops a sprint at once and the sprint key does nothing until it is true again. It lasts for the rest of the session, through respawns.
+	SprintEnabled: boolean?
+	--- How fast the character sprints, in centimetres per second (700 unless a script changes it; it scales with WalkSpeed until you set it). nil while the player has no character. Setting it (server only) clamps to 0..1500 and lasts for the rest of the session, through respawns.
+	SprintSpeed: number?
+	--- The stamina the character has left, from 0 to MaxStamina (it counts in small steps, the same on every machine, and moves only while StaminaEnabled is true); nil while the player has no character. Setting it (server only) clamps to 0..MaxStamina. Every new character starts full.
+	Stamina: number?
+	--- How much stamina sprinting uses each second (20 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session.
+	StaminaDrain: number?
+	--- Whether the player has a stamina pool (false unless a script turns it on, so places that never use it play as before); nil while the player has no character. With it on, sprinting drains Stamina, Stamina refills after a short rest, a sprint stops at zero and cannot restart until a tenth of MaxStamina has come back, and jumping can cost JumpStaminaCost. Turning it on starts the pool full. Setting it (server only) lasts for the rest of the session, through respawns.
+	StaminaEnabled: boolean?
+	--- How much stamina comes back each second once the character has rested (15 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session.
+	StaminaRegen: number?
+	--- How many seconds after sprinting (or a jump that cost stamina) before stamina starts coming back (1 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..60 and lasts for the rest of the session.
+	StaminaRegenDelay: number?
+	--- The name of the team the player is on, or nil for none. Setting it (server only) puts the player on that team, which must exist (Teams:Create); set nil to take them off. Fires Teams.PlayerTeamChanged. Team membership replicates, so client scripts can read it, and it lasts while the player is in the session.
+	Team: string?
 	--- The player's verified Mantle account id (a plain UUID).
 	UserId: string
 	--- How fast the character runs, in centimetres per second (500 unless a script changes it); walking, sprinting and crouching scale with it. nil while the player has no character. Setting it (server only) clamps to 0..1500 and lasts for the rest of the session, through respawns; 0 stops the character moving.
 	WalkSpeed: number?
 	--- What the player is wearing: slot name ("hair", "top", "footwear", "acc_hat", ...) to item id. Empty when nothing is worn or their look has not arrived. Read-only; a fresh table on every read. (server only)
 	Wearing: {[string]: string}
-	--- The player's character died, on the server and on every client. killer is the player whose damage finished it (a weapon, or TakeDamage with a source); nil for falling out of the world, Kill, Health set to 0, or their own damage.
-	Died: Signal<(Player, Player?)>
+	--- The character crouched (the key, a slide or ForceCrouch). Fires on the server and on every client.
+	CrouchStarted: Signal<(Player)>
+	--- The character stood up from a crouch. Fires on the server and on every client.
+	CrouchStopped: Signal<(Player)>
+	--- The character was hurt, on the server. amount is what got through Armor (the Shield and health took it between them), so a hit the shield soaked up still counts; a killing hit fires Damaged first and then Died. damageType is the hit's tag ("Bullet", "Melee", "Explosion", ..., or your own) and attacker the player who dealt it, or nil. Not fired for a hit a held guard blocked, friendly fire that was switched off, or Health set directly.
+	Damaged: Signal<(Player, number, string, Player?)>
+	--- The player's character died, on the server and on every client. killer is the player whose damage finished it (a weapon, or TakeDamage with a source); nil for falling out of the world, Kill, Health set to 0, or their own damage. damageType is the tag of the killing hit ("Bullet", "Melee", "Explosion", ..., or your own); "Generic" when nothing named one.
+	Died: Signal<(Player, Player?, string)>
 	--- The character's health changed: damage, healing, Health set, or a respawn's refill. Fires on the server and on every client.
 	HealthChanged: Signal<(Player, number, number)>
+	--- The character was knocked down (Ragdoll, a hard hit, a blast, or being thrown off a vehicle). Fires on the server and on every client.
+	Ragdolled: Signal<(Player)>
+	--- A knocked-down character stood back up (its time ended or Recover was called). It does not fire if the character died while down: Died does. Fires on the server and on every client.
+	Recovered: Signal<(Player)>
+	--- The player got a fresh character after a death or a Respawn call, on the server. Not fired for the first character a player gets when they join.
+	Respawned: Signal<(Player)>
+	--- The character started sprinting. Fires on the server and on every client.
+	SprintStarted: Signal<(Player)>
+	--- The character stopped sprinting: the key let go, stamina ran out, SprintEnabled turned off, or it stopped moving. Fires on the server and on every client.
+	SprintStopped: Signal<(Player)>
+	--- The character's Stamina changed: sprinting, resting, a jump's cost or a script setting it. It reports steps of about half a percent of MaxStamina, not every frame. Fires on the server and on every client while StaminaEnabled is true.
+	StaminaChanged: Signal<(Player, number, number)>
+	--- Hold the player crouched (true) or standing (false) whatever they press, until ReleaseCrouch. A player held crouched can still walk (sprinting is off while crouched); one held standing cannot crouch or slide. CrouchEnabled false wins over a crouch hold. Returns false when the player has no character on foot. The hold ends with the character: a respawn gives the key back. (server only)
+	function ForceCrouch(self, crouched: boolean): boolean
 	--- Raise the character's health by amount, up to MaxHealth. Never brings a dead character back (use Respawn). Returns false when the player has no character on foot, is dead, or is already at full health. (server only)
 	function Heal(self, amount: number): boolean
 	--- Remove the player from the session with a message. (server only)
 	function Kick(self, reason: string?): ()
 	--- Kill the character outright: Died fires with no killer, and the place's respawn rules take over as for any other death. Returns false when the player has no character on foot or is already dead. (server only)
 	function Kill(self): boolean
+	--- Knock the character down: it goes limp for everyone, the player cannot move or act, and when the time is up (or Recover is called) it stands back up where it lies with a get-up animation. seconds is how long to stay down, 0.1 to 300; leave it out to stay down until Recover (at most five minutes). velocity is an optional shove in centimetres per second; without it the character keeps the speed it had. Ragdolled fires now and Recovered when it gets up. Returns false when the player has no character on foot, is dead, is sitting in a vehicle or is already knocked down. (server only)
+	function Ragdoll(self, seconds: number?, velocity: Vector3?): boolean
+	--- Stand a knocked-down character back up now, wherever it lies; Recovered fires when it is up. Safe to call at any time. Returns false when the character was not knocked down. (server only)
+	function Recover(self): boolean
+	--- Give the player the crouch key back after ForceCrouch. Returns false when the player has no character on foot. (server only)
+	function ReleaseCrouch(self): boolean
 	--- Give the player a fresh character with full health right now, alive or dead: at position when given, otherwise at the spawn point the place's respawn mode picks. The old character (or a corpse waiting for its respawn) is removed. Returns false when the player is driving a vehicle (eject them first) or cannot be spawned. (server only)
 	function Respawn(self, position: Vector3?): boolean
-	--- Hurt the character through the same path weapons use, so the game's damage rules apply. source is the player to credit: if this hit kills, Died names them as the killer. Returns false when the player has no character on foot (respawning or driving), is already dead, or the damage was refused. (server only)
-	function TakeDamage(self, amount: number, source: Player?): boolean
+	--- Hurt the character through the same path weapons use, so the game's damage rules apply: friendly fire, Armor, then Shield, then health. source is the player to credit: if this hit kills, Died names them as the killer. damageType tags the hit for Damaged and Died ("Generic" when left out); use a built-in such as "Bullet", "Melee", "Explosion", "Fall", "Vehicle" or "Area", or any word of your own up to 32 characters, such as "Poison". Returns false when the player has no character on foot (respawning or driving), is already dead, or nothing got through (friendly fire off, or Armor 100). (server only)
+	function TakeDamage(self, amount: number, source: Player?, damageType: string?): boolean
 	--- Move the player's character instantly. Always lands exactly at position, even inside solid geometry; returns false only when the player has no character to move right now. (server only)
 	function Teleport(self, position: Vector3): boolean
 end
@@ -261,9 +329,9 @@ declare extern type NPC with
 	function Kill(self): boolean
 	--- Walk to position along the ground, around walls and obstacles, replacing any walk in progress. Returns false at once when position is more than 500 m away or the NPC is dead; otherwise true, and MoveCompleted fires when the walk ends: true when the NPC arrived, false when there is no way there (no walkable ground, a blocked or too long path). The first walk in a place waits for its navigation to build, which can take a few seconds. (server only)
 	function MoveTo(self, position: Vector3): boolean
-	--- Play one of the place's AnimClip assets on the NPC, starting now, on every player's screen and in step, players who join later included. params: Loop (false by default: the clip plays once and the NPC goes back to walking and standing on its own; true keeps it playing until StopClip or the next PlayClip), PlayRate (clip seconds per second, 1 by default, clamped to 0..10) and StartOffset (seconds into the clip to start at, 0 by default, clamped to 0..3600). The clip must be authored on the skeleton of the NPC's body (the avatars' MetaHuman body). Errors when the id is not an AnimClip in the place's assets or, where the server draws the NPC, the clip is on another skeleton; a dedicated server never loads clips, so there that last one shows on each player's screen as the NPC walking and standing on its own instead. (server only)
+	--- Play one of the place's AnimClip assets on the NPC, starting now, on every player's screen and in step, players who join later included. params: Loop (false by default: the clip plays once and the NPC goes back to walking and standing on its own; true keeps it playing until StopClip or the next PlayClip), PlayRate (clip seconds per second, 1 by default, clamped to 0..10) and StartOffset (seconds into the clip to start at, 0 by default, clamped to 0..3600). The clip must be authored on the skeleton of the NPC's body (the avatars' MetaHuman body). Errors when the id is not an AnimClip in the place's assets or, where the server draws the NPC, the clip is on another skeleton; a dedicated server never loads clips, so it cannot check the skeleton: there a clip on another skeleton shows on each player's screen as the NPC walking and standing on its own instead, with no error for the script. (server only)
 	function PlayAssetClip(self, clipAssetId: string, params: {Loop: boolean?, PlayRate: number?, StartOffset: number?}?): ()
-	--- Play one of the NPC clips on every player's screen: "walk", "idle", "turn_left" or "turn_right", or (script API 1.23) one of the place's AnimClip asset ids at normal speed (PlayAssetClip also sets its speed and start). It plays once and the NPC goes back to walking and standing on its own, or with loop true keeps playing until StopClip or the next PlayClip. Players who join later see it too. (server only)
+	--- Play one of the NPC clips on every player's screen: "walk", "idle", "turn_left" or "turn_right", or (script API 1.23) one of the place's AnimClip asset ids at normal speed (PlayAssetClip also sets its speed and start). It plays once and the NPC goes back to walking and standing on its own, or with loop true keeps playing until StopClip or the next PlayClip. Players who join later see it too. A clip on another skeleton than the NPC's body can't be checked on a dedicated server, which never loads clips; each player's screen then shows the NPC walking and standing on its own instead. (server only)
 	function PlayClip(self, clip: string, loop: boolean?): ()
 	--- Bring the NPC back with full health, dead or alive: standing at position (its feet) when given, otherwise where NPCs:Spawn first put it. Its clip stops, and a walk in progress ends without MoveCompleted. Returns false when it could not be put there. (server only)
 	function Respawn(self, position: Vector3?): boolean
@@ -325,8 +393,12 @@ declare extern type UiNode with
 	Text: string
 	--- This node was activated: a mouse click, Enter, Space, or a focused gamepad Accept on a button, toggle or prompt. Only reaches handlers connected by the script that created this node -- nothing else ever holds its handle.
 	Activated: Signal<(number, string)>
+	--- Make this top-level node float over an entity, a player or an NPC in the world, on this player's screen only: a nameplate, a health bar, a marker. Build the node and its children as usual, then attach the top one; it stops being part of the screen's layout and follows the target, bottom-centre on the point above it. It is only drawn, never clicked. Attaching it again changes the options. Returns false if the node is not a top-level node of this script (call SetParent(nil) first) or the script already has 32 nodes floating; the nodes still count toward the node budget (256). If the target is destroyed, or a player has no character, the node hides. options: Bone (a bone or socket of the target's skeletal mesh, such as "head"; without it, or when the target has no such bone, the node sits over the top of the target), Offset (a Vector3 in centimetres, in world axes, added to that point, such as Vector3.new(0, 0, 30)), ScreenOffsetX and ScreenOffsetY (pixels, x right and y down), MaxDistance (centimetres from the camera, default 3000, at most 50000: farther is hidden), FadeDistance (centimetres: it fades out over the last FadeDistance before MaxDistance; default 0 cuts off at MaxDistance), HideWhenOccluded (hide while world geometry is between the camera and the point; one cheap check a tenth of a second; default false: it draws over everything), HideForSelf (hide when the target is the local player's own character, for a nameplate you do not want over yourself), ScaleWithDistance (default false: constant size on screen; true makes it smaller with distance), MinScale and MaxScale (0.05 to 4, defaults 0.4 and 1; the limits when it scales), ScaleDistance (centimetres where it draws at scale 1, default 1000), OffScreen ("Hide", the default, or "Clamp" to keep it on the edge of the screen pointing towards the target, for a marker). Example: nameplate:AttachToWorld(player, {Bone = "head", Offset = Vector3.new(0, 0, 30), MaxDistance = 2500, FadeDistance = 500, HideForSelf = true}) (client only)
+	function AttachToWorld(self, target: Entity | Player | NPC, options: {Bone: string?, Offset: Vector3?, ScreenOffsetX: number?, ScreenOffsetY: number?, MaxDistance: number?, FadeDistance: number?, HideWhenOccluded: boolean?, HideForSelf: boolean?, ScaleWithDistance: boolean?, MinScale: number?, MaxScale: number?, ScaleDistance: number?, OffScreen: string?}?): boolean
 	--- Remove this node and every descendant. (client only)
 	function Destroy(self): ()
+	--- Stop floating this node: it goes back to the screen's layout, as a top-level node. Returns false if it was not attached. Destroy the node instead to remove it altogether. (client only)
+	function DetachFromWorld(self): boolean
 	--- Name the action this node fires on Activated when clicked, tapped or confirmed. (client only)
 	function SetAction(self, action: string): boolean
 	--- Attach caption text shown underneath this node when the player has captions on. (client only)
@@ -598,6 +670,31 @@ declare extern type LightsService with
 end
 declare Lights: LightsService
 
+--- A small round lifecycle you drive yourself: start a round, end it (by calling EndRound or when its timer runs out), and read the round number and clock. The server runs it; State, Round and TimeRemaining are readable from client scripts too, for a HUD. It does not pick winners, move players or restart anything by itself: connect to RoundStarted and RoundEnded and do what your game needs. The match is Waiting before a round and between rounds, InProgress during one, and Ended after EndMatch.
+declare extern type MatchService with
+	--- The number of the current round, or of the last one while Waiting: 0 before any round has started, 1 for the first. Reset puts it back to 0.
+	Round: number
+	--- "Waiting" (before the first round and between rounds), "InProgress" (a round is running) or "Ended" (EndMatch was called; Reset starts over).
+	State: string
+	--- Seconds left in the running round, counting down to 0, or nil when no round is running or the round has no time limit. On a client this follows the server's clock, so it can be a fraction of a second off.
+	TimeRemaining: number?
+	--- A round ended, on the server. winner is what EndRound or EndMatch was given (nil for none, and always nil when the time ran out). reason is "Ended" (EndRound), "Time" (the round's timer ran out) or "MatchEnded" (EndMatch or Reset cut it short).
+	RoundEnded: Signal<(number, string?, string)>
+	--- A round began (StartRound), on the server. round is its number, starting at 1.
+	RoundStarted: Signal<(number)>
+	--- State changed, on the server. Arguments are the old state, then the new one (each "Waiting", "InProgress" or "Ended"), the same order as PlayerTeamChanged. Fires after RoundStarted or RoundEnded.
+	StateChanged: Signal<(string, string)>
+	--- End the whole match. A running round ends first (RoundEnded fires with reason "MatchEnded"), then State becomes Ended. Returns false when the match has already ended. (server only)
+	function EndMatch(self, winner: string?): boolean
+	--- End the running round: RoundEnded fires with winner (a team name, a player's name, anything up to 64 characters, or nil for none) and reason "Ended", and State goes back to Waiting. Returns false when no round is running. (server only)
+	function EndRound(self, winner: string?): boolean
+	--- Start over: a running round ends first (reason "MatchEnded"), then State is Waiting and Round is 0. Teams and players are not touched. (server only)
+	function Reset(self): ()
+	--- Begin the next round: Round goes up by one, State becomes InProgress, and RoundStarted fires. With seconds (up to 86400) the round ends by itself when the time is up, with reason "Time" and no winner; without, it runs until EndRound. Returns false, changing nothing, while a round is already running or after EndMatch (call Reset first). (server only)
+	function StartRound(self, seconds: number?): boolean
+end
+declare Match: MatchService
+
 --- Spawn characters the server walks around the place and animates (server only).
 declare extern type NPCsService with
 	--- The NPC an Entity is (a World:Raycast hit, or NPC:GetEntity()), or nil when it is not a live NPC. (server only)
@@ -630,6 +727,15 @@ declare extern type PlayersService with
 	function OnPlayer(self, handler: (player: Player) -> ()): Connection
 end
 declare Players: PlayersService
+
+--- How a death becomes a respawn. By default a dead player respawns on their own after a short wait at a spawn point the place picks. Change the wait, or turn automatic respawning off to run rounds where the dead stay down until you bring them back with Player:Respawn. The server decides; there is nothing for a client script here. Player.Respawned fires when a player gets a fresh character.
+declare extern type RespawnService with
+	--- Whether a dead player respawns by themselves after Delay (true by default). Set it false and the dead stay dead until a script calls Player:Respawn on them. Applies to deaths from then on. (server only)
+	AutoRespawn: boolean
+	--- Seconds a dead player waits before the game respawns them (5 unless the place or a script changes it). Setting it clamps to 0..600 and applies to deaths from then on, not to a respawn already counting down. (server only)
+	Delay: number
+end
+declare Respawn: RespawnService
 
 --- Facts about the running script.
 declare extern type ScriptService with
@@ -691,6 +797,25 @@ declare extern type StorageService with
 	function Get(self, name: string): string
 end
 declare Storage: StorageService
+
+--- Teams for a place: define them, put players on them, and decide whether teammates can hurt each other. The server decides everything; which team a player is on replicates, so client scripts and HUDs can read it. A team is named by its name (not case-sensitive) and has a colour. Friendly fire is off by default: once a player is on a team, damage from a teammate is ignored until Teams.FriendlyFire is set to true.
+declare extern type TeamsService with
+	--- Whether players on the same team can hurt each other (false by default). When false, damage between teammates is ignored everywhere damage goes through the health system: weapons, melee, explosions and Player:TakeDamage. Hits from nobody, and a player's own hits, still count. Setting it is server only.
+	FriendlyFire: boolean
+	--- A player joined, left or switched team, on the server and on every client. Arguments are the player, the old team, then the new team (team names; nil means no team).
+	PlayerTeamChanged: Signal<(Player, string?, string?)>
+	--- Define a team. name is 1 to 32 characters and must be new. color is "#RRGGBB" (white when left out), for a HUD or a nameplate to use. Up to 16 teams. Example: Teams:Create("Red", "#E53935") (server only)
+	function Create(self, name: string, color: string?): ()
+	--- The team's colour as "#RRGGBB", or nil when there is no such team.
+	function GetColor(self, name: string): string?
+	--- The players on the team right now (an empty list for a team nobody is on, or one that does not exist).
+	function GetPlayers(self, name: string): {Player}
+	--- The names of the teams, in the order they were created.
+	function List(self): {string}
+	--- Delete a team. Its players are taken off it first, so PlayerTeamChanged fires for each. (server only)
+	function Remove(self, name: string): ()
+end
+declare Teams: TeamsService
 
 --- Clocks for scripts.
 declare extern type TimeService with
