@@ -435,6 +435,7 @@ void FMantleCosmeticUploadSession::Tick()
 				// The same item from the same files was already created (or this version already
 				// published) by an earlier run.
 				ItemId = RememberedItem;
+				bFollowingRemembered = true;
 				AddLog(FString::Printf(TEXT("This item was already published (%s); following it"), *ItemId));
 				Phase = EMantleUploadPhase::Screening;
 				ScreeningSince = Now;
@@ -905,6 +906,18 @@ void FMantleCosmeticUploadSession::HandleGetItem(const FMantleApiResult& Result)
 	}
 	if (ItemStatus == TEXT("delisted"))
 	{
+		if (bFollowingRemembered && Package.TargetItemId.IsEmpty())
+		{
+			// An earlier run's item that has been delisted since: publish a new one in this run.
+			ForgetResume();
+			AddLog(FString::Printf(TEXT("The item %s was delisted; creating a new one"), *ItemId));
+			ItemId.Reset();
+			ItemIdempotencyKey.Reset();
+			bFollowingRemembered = false;
+			Phase = EMantleUploadPhase::CreatingItem;
+			NextActionAt = Now;
+			return;
+		}
 		Fail(FString::Printf(TEXT("The item %s was delisted. Upload it again to publish a new one."), *ItemId));
 		ForgetResume();
 		return;

@@ -284,6 +284,8 @@ private:
 	 */
 	FString ItemIdempotencyKey;
 	FString ItemId;
+	/** ItemId came from the resume note (an earlier run's item), not from a create this run made. */
+	bool bFollowingRemembered = false;
 	FString ItemStatus;
 	FString ItemModerationState;
 	bool bItemMayClipInMotion = false;
