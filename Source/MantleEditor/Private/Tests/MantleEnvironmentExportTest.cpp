@@ -26,6 +26,8 @@
 #include "EngineUtils.h"
 #include "Misc/AutomationTest.h"
 
+#include <limits>
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 // The level's sun, sky, fog, clouds and post-process mapped onto the place: the sky clock's hour and heading for a
@@ -826,7 +828,7 @@ bool FMantleEnvironmentSkyLightScaleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the same room is a bigger share of a darker sky"),
 		FMantleEnvironmentExport::SkyLightScaleFor(Midnight * 0.5, 0.0) > FMantleEnvironmentExport::SkyLightScaleFor(Midnight * 0.5, 12.0));
 	TestEqual(TEXT("a black capture is no sky light"), FMantleEnvironmentExport::SkyLightScaleFor(0.0, 12.0), 0.0);
-	TestEqual(TEXT("and a bad number is none"), FMantleEnvironmentExport::SkyLightScaleFor(TNumericLimits<double>::quiet_NaN(), 12.0), 0.0);
+	TestEqual(TEXT("and a bad number is none"), FMantleEnvironmentExport::SkyLightScaleFor(std::numeric_limits<double>::quiet_NaN(), 12.0), 0.0);
 	return true;
 }
 
