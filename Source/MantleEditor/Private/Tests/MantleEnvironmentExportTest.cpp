@@ -764,4 +764,39 @@ bool FMantlePlaceWeatherChoiceTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleEnvironmentNaturalWeatherExportTest,
+	"Mantle.Editor.EnvironmentExport.NaturalWeatherExport",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleEnvironmentNaturalWeatherExportTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleEnvironmentExportTestPrivate;
+	// #718: a level with a sky of its own holds its weather by default, and Natural in Place Settings lets it change on its own.
+	FTestWorld Test;
+	if (!TestNotNull(TEXT("a test world"), Test.World) || !TestNotNull(TEXT("a cloud"), Test.Spawn<AVolumetricCloud>(TEXT("Clouds"))))
+	{
+		return false;
+	}
+	TMap<const AActor*, FString> IdByActor;
+	{
+		FMantlePlace Place;
+		FMantleCoverage Coverage;
+		FMantleEnvironmentExport::Apply(Test.World, IdByActor, Place, Coverage);
+		TestTrue(TEXT("by default the weather is held"), Place.Settings.Environment.Weather.IsSet());
+	}
+	AMantlePlaceSettingsActor* Settings = Test.Spawn<AMantlePlaceSettingsActor>(TEXT("Settings"));
+	if (!TestNotNull(TEXT("place settings"), Settings))
+	{
+		return false;
+	}
+	Settings->Weather = EMantlePlaceWeather::Natural;
+	FMantlePlace Place;
+	FMantleCoverage Coverage;
+	FMantleEnvironmentExport::Apply(Test.World, IdByActor, Place, Coverage);
+	TestFalse(TEXT("with Natural no weather is written"), Place.Settings.Environment.Weather.IsSet());
+	TestTrue(TEXT("and the report says Natural was chosen"), DetailsOf(Coverage, MantleCoverageCategory::Sky, EOutcome::Approximated).Contains(TEXT("chooses Natural")));
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
