@@ -563,6 +563,35 @@ class _InputService:
 
 Input: _InputService
 
+class _InteractionService:
+    """Let players walk up to an object and act on it with a key press, and hear when they do. A place can mark an object interactable itself; here a script makes one, changes what players can do to it, and reacts. The server decides everything: change things and listen to Interacted on the server. The client events are for the local player and only for effects such as a sound or a glow."""
+    cancelled: Signal
+    interacted: Signal
+    progress: Signal
+    selected: Signal
+    started: Signal
+    unselected: Signal
+    def remove(self, entity: Entity) -> None:
+        """Make the entity not interactable any more, for everyone: no prompt, no key. SetOptions makes it interactable again with the options you give."""
+        ...
+    def set_display(self, entity: Entity, display: dict[str, Any]) -> None:
+        """Change how the entity's prompt looks, for everyone. Only the fields you give change. Style is 'Default' (the key and text of each option, stacked), 'Balanced' (a panel with the Title on top and the options under it) or 'Informative' (like Balanced, with the Description beside the options and an accent line); Balanced and Informative need a Title and show as Default without one. Title is up to 80 characters, Description up to 200, and AccentColor is '#RRGGBB'."""
+        ...
+    def set_enabled(self, entity: Entity, action: str, enabled: bool, part: str = ...) -> None:
+        """Turn one option of the entity off or back on, for everyone. action is 'Primary' or 'Secondary', the input the option uses. Turning an option on also ends its cooldown early. An option with AfterUse 'OneShot' that was used stays used. Pass a part's id for an object with several parts; leave it out for the object as a whole."""
+        ...
+    def set_options(self, entity: Entity, options: dict[str, Any], part: str = ...) -> None:
+        """Make the entity interactable and set what players can do to it, for everyone. options is a list of at most two tables, one for each input: Key ('Primary' by default, or 'Secondary'), Text (what the prompt says beside the key, such as 'Open door'; leave it out to show the key alone), HoldSeconds (hold the key this long; 0 is a tap), PressCount (mash the key this many times instead; wins over HoldSeconds), PressDrainPerSecond (how fast a mash's progress drains, 0 to 10), AfterUse ('None', 'DisableUntilEnabled', 'Cooldown' or 'OneShot') and CooldownSeconds (needed above 0 for 'Cooldown'). Pass a part's id to change only that part of an object the place gave several parts; leave it out for the object as a whole. An empty list leaves the object with nothing to do. Example: Interaction:SetOptions(door, {{Key = 'Primary', Text = 'Open door'}})"""
+        ...
+    def set_range(self, entity: Entity, range: float) -> None:
+        """Set how close a player must stand to the entity, in centimetres, for the prompt to show and the key to work. Clamped to 50..5000. A place's default is 250."""
+        ...
+    def start_cooldown(self, entity: Entity, action: str, seconds: float, part: str = ...) -> None:
+        """Make one option of the entity unusable for this many seconds (up to 3600), for everyone, as if it had just been used with AfterUse 'Cooldown'. action is 'Primary' or 'Secondary'. SetEnabled ends it early. Pass a part's id for an object with several parts; leave it out for the object as a whole."""
+        ...
+
+Interaction: _InteractionService
+
 class _LeaderboardService:
     """The built-in leaderboard panel: players press Tab (or pick Leaderboard in the game menu) to see the top 10 of one of this place's ordered stores, with each player's name and picture (server only)."""
     def clear(self) -> None:
