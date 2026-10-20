@@ -23,6 +23,7 @@
 #include "Materials/MaterialInterface.h"
 #include "MetaHumanCharacter.h"
 #include "MetaHumanCharacterEditorSubsystem.h"
+#include "PhysicsEngine/PhysicsAsset.h"
 #include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
 #include "PreviewScene.h"
