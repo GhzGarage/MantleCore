@@ -10,6 +10,8 @@
 #include "Engine/ExponentialHeightFog.h"
 #include "Engine/PointLight.h"
 #include "Engine/PostProcessVolume.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/TextRenderActor.h"
 #include "Engine/World.h"
@@ -396,7 +398,11 @@ bool FMantleCoverageExportTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	Test.Spawn<AStaticMeshActor>(TEXT("Crate"));
+	// A mesh actor with no mesh is skipped (#818), so the crate gets the engine cube.
+	if (AStaticMeshActor* Crate = Test.Spawn<AStaticMeshActor>(TEXT("Crate")))
+	{
+		Crate->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")));
+	}
 	Test.Spawn<APointLight>(TEXT("Lamp"));
 	// A fog the creator tuned in a way the place has no setting for (its density, falloff, colours and start are carried): it is dropped (an untouched one is kept, see the Mantle.Editor.EnvironmentExport tests).
 	if (AExponentialHeightFog* Mist = Test.Spawn<AExponentialHeightFog>(TEXT("Mist")))
