@@ -2351,7 +2351,7 @@ bool FMantlePlaceExporter::ResolveCrowdPoints(const AActor* Actor, const TMap<co
 
 bool FMantlePlaceExporter::IsMantleDecalMaterial(const UMaterialInterface* Material)
 {
-	// Up the instance chain to the master: an instance of an instance of M_MantleDecal counts.
+	// Up the instance chain to the master: an instance of the game's decal material, however deep, counts.
 	for (const UMaterialInterface* Current = Material; Current;)
 	{
 		const FSoftObjectPath Path(Current);
@@ -2384,7 +2384,7 @@ bool FMantlePlaceExporter::ReadDecal(const AActor* Actor, FMantleDecalProps& Out
 	OutProps.FadeScreenSize = Decal->FadeScreenSize;
 
 	// What to do, whatever is wrong with the material: a published decal is a texture Mantle draws.
-	const TCHAR* const Remedy = TEXT("Make a Material Instance of M_MantleDecal (MantleCore Content > Materials; M_MantleDecal_Normal for a normal map), set its BaseColor texture (its alpha is the decal's shape), and give the decal that.");
+	const TCHAR* const Remedy = TEXT("Give the decal a decal material (Material Domain: Deferred Decal) with a texture parameter named BaseColor: its alpha is the decal's shape. Add a texture parameter named Normal for a normal map and a scalar parameter named Opacity to fade it.");
 	const UMaterialInterface* Material = Decal->GetDecalMaterial();
 	if (!Material)
 	{

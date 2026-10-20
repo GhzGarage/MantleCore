@@ -472,7 +472,7 @@ namespace
 				FString::Printf(
 					TEXT("uses its own decal material '%s'. Mantle publishes a decal as its BaseColor%s texture drawn by Mantle's decal material, so anything else this material does is dropped."),
 					*Material->GetName(), Normal ? TEXT(" and Normal") : TEXT("")),
-				TEXT("Fine if the material only shows that texture. Otherwise, use a Material Instance of M_MantleDecal (M_MantleDecal_Normal for a normal map).") });
+				TEXT("Fine if the material only shows that texture. Otherwise, only the BaseColor and Normal textures and the Opacity value are kept: move anything else into them.") });
 		}
 
 		if (HasNonPositiveComponent(Props.Size))

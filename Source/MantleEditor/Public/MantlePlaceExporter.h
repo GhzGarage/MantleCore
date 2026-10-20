@@ -444,8 +444,8 @@ public:
 	 * is made of, OutBaseColor and (when the material has one set) OutNormal. OutProps names no
 	 * texture: Export turns the two into upload ids. A published decal is a texture drawn by
 	 * Mantle's decal material, so the decal's material must be a deferred-decal material with its
-	 * BaseColor texture parameter set: best an instance of M_MantleDecal (or M_MantleDecal_Normal
-	 * for a normal map); anything else is refused, with OutProblem phrased to follow the actor's
+	 * BaseColor texture parameter set (a Normal texture parameter and an Opacity scalar parameter
+	 * are optional); anything else is refused, with OutProblem phrased to follow the actor's
 	 * name and saying what to do. Export and the validator both call this.
 	 */
 	static bool ReadDecal(const AActor* Actor, FMantleDecalProps& OutProps, UTexture*& OutBaseColor, UTexture*& OutNormal, FString& OutProblem);
