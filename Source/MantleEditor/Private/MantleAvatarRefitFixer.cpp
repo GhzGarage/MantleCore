@@ -7,6 +7,7 @@
 #include "MantleBodyTopologyData.h"
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticValidation.h"
+#include "MantleGarmentClearance.h"
 #include "MantleRBFInterpolation.h"
 #include "MantleMetaHumanBuild.h"
 #include "MantleReferenceBodies.h"
@@ -189,6 +190,12 @@ const TCHAR* LexToString(const EMantleRefitCorrespondence Path)
 	default:
 		return TEXT("identity");
 	}
+}
+
+FString FMantleRefitPushOut::ToString() const
+{
+	return FString::Printf(TEXT("%d of %d under the skin (deepest %.2f cm), %d moved (largest %.2f cm), %d left under (%d deeper than %.0f cm)"),
+		InsideBefore, Tracked, DeepestCm, Moved, MaxMoveCm, InsideAfter, TooDeep, FMantleAvatarRefit::MaxPushDepthCm);
 }
 
 FVector3f FMantleRefitPlan::Warp(const FVector3f& P) const
@@ -822,8 +829,116 @@ bool FMantleAvatarRefit::RefitMeshDescription(FMeshDescription& Mesh, const FMan
 	return true;
 }
 
+bool FMantleAvatarRefit::PushOutOfBody(FMeshDescription& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError)
+{
+	Out = FMantleRefitPushOut();
+	FSkeletalMeshAttributes Attributes(Mesh);
+	TVertexAttributesRef<FVector3f> Positions = Attributes.GetVertexPositions();
+	TVertexInstanceAttributesConstRef<FVector3f> Normals = Attributes.GetVertexInstanceNormals();
+	if (!Positions.IsValid())
+	{
+		OutError = TEXT("the refitted mesh has no vertex positions");
+		return false;
+	}
+
+	// The garment as the clearance code reads it: one point per vertex, its instances' normals summed, the triangles.
+	FMantleSkinnedMeshLOD Garment;
+	TArray<FVertexID> Vertices;
+	TArray<int32> IndexOf;
+	IndexOf.Init(INDEX_NONE, Mesh.Vertices().GetArraySize());
+	for (const FVertexID Vertex : Mesh.Vertices().GetElementIDs())
+	{
+		IndexOf[Vertex.GetValue()] = Vertices.Num();
+		Vertices.Add(Vertex);
+		Garment.Positions.Add(Positions.Get(Vertex));
+	}
+	Garment.Normals.Init(FVector3f::ZeroVector, Vertices.Num());
+	for (const FTriangleID Triangle : Mesh.Triangles().GetElementIDs())
+	{
+		for (const FVertexInstanceID Instance : Mesh.GetTriangleVertexInstances(Triangle))
+		{
+			const int32 Vertex = IndexOf[Mesh.GetVertexInstanceVertex(Instance).GetValue()];
+			Garment.Indices.Add(static_cast<uint32>(Vertex));
+			if (Normals.IsValid())
+			{
+				Garment.Normals[Vertex] += Normals.Get(Instance);
+			}
+		}
+	}
+	for (FVector3f& Normal : Garment.Normals)
+	{
+		Normal = Normal.GetSafeNormal();
+	}
+	if (Garment.NumTriangles() == 0)
+	{
+		return true;
+	}
+
+	// Each vertex's clearance over the body; the target is at least PushOutCm, where it is not too deep to be meant.
+	FMantleGarmentClearance Target;
+	if (!FMantleGarmentClearance::Compute(Garment.Positions, Body, Target, FMantleGarmentClearance::DefaultSearchCm, &OutError))
+	{
+		return false;
+	}
+	Target.UntrackBoundary(Body);
+	for (int32 Vertex = 0; Vertex < Garment.NumVertices(); ++Vertex)
+	{
+		if (!Target.IsTracked(Vertex))
+		{
+			continue;
+		}
+		++Out.Tracked;
+		const float Clearance = Target.ClearanceCm[Vertex];
+		if (Clearance < 0.0f)
+		{
+			++Out.InsideBefore;
+			Out.DeepestCm = FMath::Max(Out.DeepestCm, -Clearance);
+		}
+		if (Clearance < -MaxPushDepthCm)
+		{
+			++Out.TooDeep;
+			Target.Untrack(Vertex);
+			continue;
+		}
+		Target.ClearanceCm[Vertex] = FMath::Max(Clearance, PushOutCm);
+	}
+
+	const FMantleSkinnedMeshLOD Before = Garment;
+	FMantleClearanceRestoreStats Stats;
+	FString Error;
+	if (!FMantleClearanceRestore::Restore(Garment, Target, Body.Positions, &Before, /*SlackCm*/ 0.02f, /*MinKeptCm*/ 0.0f,
+		FMantleGarmentClearance::DefaultSmoothIters, &Stats, &Error))
+	{
+		OutError = FString::Printf(TEXT("the push out of the body failed: %s"), *Error);
+		return false;
+	}
+	for (int32 Vertex = 0; Vertex < Vertices.Num(); ++Vertex)
+	{
+		const double Move = FVector3f::Dist(Garment.Positions[Vertex], Before.Positions[Vertex]);
+		if (Move > 1.e-4)
+		{
+			++Out.Moved;
+			Out.MaxMoveCm = FMath::Max(Out.MaxMoveCm, Move);
+			Positions.Set(Vertices[Vertex], Garment.Positions[Vertex]);
+		}
+	}
+
+	// What it came to.
+	FMantleGarmentClearance After;
+	if (FMantleGarmentClearance::Compute(Garment.Positions, Body, After, FMantleGarmentClearance::DefaultSearchCm))
+	{
+		After.UntrackBoundary(Body);
+		for (int32 Vertex = 0; Vertex < Garment.NumVertices(); ++Vertex)
+		{
+			Out.InsideAfter += After.IsTracked(Vertex) && After.ClearanceCm[Vertex] < -0.05f ? 1 : 0;
+		}
+	}
+	return true;
+}
+
 USkeletalMesh* FMantleAvatarRefit::WriteRefit(USkeletalMesh* Garment, const FMantleRefitPlan& InPlan, const FString& PackagePath, const FString& AssetName,
-	double& OutMaxMoveCm, FString& OutError, const FMantleSkinnedMeshLOD* SeatBody, FMantleNailSeatingResult* OutSeating)
+	double& OutMaxMoveCm, FString& OutError, const FMantleSkinnedMeshLOD* SeatBody, FMantleNailSeatingResult* OutSeating,
+	const FMantleSkinnedMeshLOD* PushOutBody, FMantleRefitPushOut* OutPushOut)
 {
 	const FMantleRefitPlan& Refit = InPlan;
 	OutMaxMoveCm = 0.0;
@@ -843,7 +958,7 @@ USkeletalMesh* FMantleAvatarRefit::WriteRefit(USkeletalMesh* Garment, const FMan
 	}
 	double MaxMove = 0.0;
 	USkeletalMesh* Mesh = FMantleAvatarRepose::WriteWithPose(Garment, Refit.TargetLocal, PackagePath, AssetName,
-		[&Refit, &MaxMove, SeatBody, OutSeating](const int32 LOD, FMeshDescription& Description, FString& OutLODError)
+		[&Refit, &MaxMove, SeatBody, OutSeating, PushOutBody, OutPushOut](const int32 LOD, FMeshDescription& Description, FString& OutLODError)
 		{
 			double Move = 0.0;
 			if (!RefitMeshDescription(Description, Refit, Move, OutLODError))
@@ -857,6 +972,19 @@ USkeletalMesh* FMantleAvatarRefit::WriteRefit(USkeletalMesh* Garment, const FMan
 				return false;
 			}
 			MaxMove = FMath::Max(MaxMove, Move);
+			if (PushOutBody && !Refit.bOnBones)
+			{
+				FMantleRefitPushOut Pushed;
+				if (!PushOutOfBody(Description, *PushOutBody, Pushed, OutLODError))
+				{
+					return false;
+				}
+				UE_LOG(LogMantle, Log, TEXT("MANTLE_AVATAR_REFIT push out LOD %d: %s"), LOD, *Pushed.ToString());
+				if (OutPushOut && LOD == 0)
+				{
+					*OutPushOut = Pushed;
+				}
+			}
 			if (SeatBody)
 			{
 				FMantleNailSeatingResult Seated;
@@ -1171,20 +1299,21 @@ bool FMantleAvatarRefitFixer::Apply(const FMantleConvertFix& Fix, FMantleConvert
 	FMantleSkinnedMeshLOD SeatBody;
 	FMantleNailSeatingResult Seating;
 	const bool bSeat = FMantleAvatarRefit::IsOverlaySlot(Part.Slot);
-	if (bSeat)
+	// Every other piece is pushed out of the authoring body's skin where the warp left it under (the same surface).
+	FMantleRefitPushOut PushOut;
 	{
 		const int32 BodyLOD = FMantleCosmeticExport::FindReferenceLOD(Bodies.Target, *Contract);
 		if (BodyLOD == INDEX_NONE || !FMantleNailSeating::ReadBodySurface(*Bodies.Target, BodyLOD, SeatBody, OutError))
 		{
 			if (BodyLOD == INDEX_NONE)
 			{
-				OutError = FString::Printf(TEXT("%s has no LOD with Mantle's reference topology to seat the nails on"), *Bodies.Target->GetName());
+				OutError = FString::Printf(TEXT("%s has no LOD with Mantle's reference topology to fit the piece against"), *Bodies.Target->GetName());
 			}
 			return false;
 		}
 	}
 	USkeletalMesh* Refit = FMantleAvatarRefit::WriteRefit(Mesh, Plan, FPackageName::GetLongPackagePath(PackageName), AssetName, Moved, OutError,
-		bSeat ? &SeatBody : nullptr, &Seating);
+		bSeat ? &SeatBody : nullptr, &Seating, bSeat ? nullptr : &SeatBody, &PushOut);
 	if (!Refit)
 	{
 		return false;
@@ -1206,6 +1335,11 @@ bool FMantleAvatarRefitFixer::Apply(const FMantleConvertFix& Fix, FMantleConvert
 	Context.Notes.Add(FString::Printf(TEXT("%s: refitted from %s onto %s as %s (%s correspondence, %d landmarks); the largest vertex move is %.1f cm."),
 		*Part.Name, Bodies.Source ? *Bodies.Source->GetName() : TEXT("its own reference pose"), *Bodies.Target->GetName(), *Refit->GetName(),
 		LexToString(Plan.Path), Plan.NumLandmarks, Moved));
+	if (!bSeat && PushOut.Tracked > 0)
+	{
+		Context.Notes.Add(FString::Printf(TEXT("%s: pushed out of %s's skin to %.1f cm where the refit left it under: %s."), *Part.Name,
+			*Bodies.Target->GetName(), FMantleAvatarRefit::PushOutCm, *PushOut.ToString()));
+	}
 	if (Plan.Folded.Num() > 0)
 	{
 		TArray<FString> Folds;

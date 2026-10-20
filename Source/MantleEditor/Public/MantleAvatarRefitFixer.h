@@ -24,6 +24,28 @@ enum class EMantleRefitCorrespondence : uint8
 
 MANTLEEDITOR_API const TCHAR* LexToString(EMantleRefitCorrespondence Path);
 
+/** What pushing one refitted LOD out of the authoring body did (FMantleAvatarRefit::PushOutOfBody). */
+struct MANTLEEDITOR_API FMantleRefitPushOut
+{
+	/** Garment vertices with the body within the search, and of those the ones under its skin before and after. */
+	int32 Tracked = 0;
+	int32 InsideBefore = 0;
+	int32 InsideAfter = 0;
+
+	/** The deepest a vertex sat under the skin before, cm (0 when none did). */
+	float DeepestCm = 0.0f;
+
+	/** Vertices deeper than FMantleAvatarRefit::MaxPushDepthCm, left where they are (the client's coverage hides the skin there). */
+	int32 TooDeep = 0;
+
+	/** Vertices moved, and the largest move, cm. */
+	int32 Moved = 0;
+	double MaxMoveCm = 0.0;
+
+	/** "312 of 5120 under the skin (deepest 2.41 cm), 340 moved (largest 2.70 cm), 3 left under". */
+	FString ToString() const;
+};
+
 /** What refitting one garment or hair mesh onto an authoring body does (FMantleAvatarRefit::Plan). */
 struct MANTLEEDITOR_API FMantleRefitPlan
 {
@@ -186,6 +208,20 @@ public:
 	 */
 	static bool RefitMeshDescription(FMeshDescription& Mesh, const FMantleRefitPlan& InPlan, double& OutMaxMoveCm, FString& OutError);
 
+	/** Garment vertices left under the authoring body's skin by the warp are pushed out to this clearance, cm. */
+	static constexpr float PushOutCm = 0.3f;
+
+	/** ... unless they sit deeper than this, cm: a part made to pass under the skin (the client's coverage hides it). */
+	static constexpr float MaxPushDepthCm = 6.0f;
+
+	/**
+	 * After the warp: every vertex of Mesh under Body's skin (FMantleGarmentClearance, the open neck ring left out) is
+	 * pushed out to PushOutCm, and every vertex at the skin up to it, by the client's clearance restore
+	 * (FMantleClearanceRestore: a smoothed push field, layer twins moved together, triangles never turned over). Vertices
+	 * deeper than MaxPushDepthCm stay. Positions only. False with why on bad inputs.
+	 */
+	static bool PushOutOfBody(FMeshDescription& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError);
+
 	/**
 	 * A NEW skeletal mesh, PackagePath/AssetName, Garment refitted by InPlan on every LOD (FMantleAvatarRepose::
 	 * WriteWithPose), with InPlan.TargetLocal as its reference pose. Garment is never modified. Null with why when a LOD
@@ -193,9 +229,11 @@ public:
 	 * SeatBody (#740, nails): when given, each LOD is then seated on it (FMantleNailSeating), after the move check;
 	 * OutSeating gets the last LOD's result. A bOnBones plan needs it, and fails when a nail is not seated or its seat
 	 * moves it more than FMantleNailSeating::MaxSeatMoveCm (the nail is not where its finger bone puts a fingertip).
+	 * PushOutBody (not bOnBones): when given, each LOD is then pushed out of it (PushOutOfBody); OutPushOut gets LOD 0's result.
 	 */
 	static USkeletalMesh* WriteRefit(USkeletalMesh* Garment, const FMantleRefitPlan& InPlan, const FString& PackagePath, const FString& AssetName,
-		double& OutMaxMoveCm, FString& OutError, const FMantleSkinnedMeshLOD* SeatBody = nullptr, FMantleNailSeatingResult* OutSeating = nullptr);
+		double& OutMaxMoveCm, FString& OutError, const FMantleSkinnedMeshLOD* SeatBody = nullptr, FMantleNailSeatingResult* OutSeating = nullptr,
+		const FMantleSkinnedMeshLOD* PushOutBody = nullptr, FMantleRefitPushOut* OutPushOut = nullptr);
 
 	/**
 	 * The fix list's words when Mantle's reference body cannot be measured or loaded and no more specific
