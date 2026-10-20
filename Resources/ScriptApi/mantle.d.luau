@@ -45,6 +45,8 @@ declare extern type Entity with
 	CanCollide: boolean
 	--- How many seconds into its clip a SkeletalMesh is now, the same on every screen; nil when it plays no clip, while the clip is still downloading, and always on a dedicated server (it never loads clips). Read-only. Errors when the entity is not a SkeletalMesh.
 	ClipTime: number?
+	--- The collision layer the object is on ("Default" until you set it). Set it to the name of a layer made with Collision:CreateLayer, or to "Default" to take it off its layer. Only the objects of your place can be put on a layer, not players, vehicles or NPCs. Server only. (server only)
+	CollisionLayer: string
 	--- A mesh's tint as "#RRGGBB", multiplied into its materials; "#FFFFFF" is none. Setting it on the server changes it for everyone, players who join later included; on a client it only changes that client's view. Only materials uploaded with the place can be tinted: errors on an entity with none of those, or that is not a mesh.
 	Color: string
 	--- False once the entity has been destroyed.
@@ -303,8 +305,14 @@ declare extern type NPC with
 	Position: Vector3
 	--- Which way the NPC faces, in degrees as (pitch, yaw, roll). It turns to face the way it walks. Read-only. (server only)
 	Rotation: Vector3
+	--- The entity the NPC is attacking now (a player's character entity, or an NPC's entity), or nil. Read-only; set it with Attack and ClearTarget. TargetPlayer gives the player when the target is one. (server only)
+	Target: Entity?
+	--- The player the NPC is attacking now, or nil when it has no target or the target is not a player. Read-only. (server only)
+	TargetPlayer: Player?
 	--- How fast the NPC walks, in centimetres per second (150 unless a script changes it; a player runs at 500). Clamped to 0..1500; 0 stops it where it is. The walk clip speeds up and slows down with it. (server only)
 	WalkSpeed: number
+	--- The NPC swung or fired at its target. damage is the hit's damage (the projectile's, for a ranged NPC) and damageType its tag. Fires at the moment of the attack, on the server only. Use it to play an attack clip or a sound.
+	Attacked: Signal<(NPC, Entity?, Player?, number, string)>
 	--- The NPC died: its health reached 0. killer is the player whose damage finished it (a weapon, or TakeDamage with a source); nil for Kill, Health set to 0, or damage nobody is credited with. A dead NPC stops, falls limp (or plays the clip a Died handler starts with PlayClip or PlayAssetClip, holding its last frame) and stays where it fell, still counting toward the 50, until Respawn or Destroy. Fires on the server only.
 	Died: Signal<(NPC, Player?)>
 	--- A drive DriveTo or DriveAlong started ended: result is "arrived" when the car stopped within ArriveRadius of the last point, "stuck" when it could not get further (it reversed and tried again, then gave up), or "cancelled" (StopDriving, a new drive, ExitVehicle, the NPC dying or being destroyed, or the car going away). Fires on the server only, once per drive.
@@ -313,6 +321,12 @@ declare extern type NPC with
 	HealthChanged: Signal<(NPC, number, number)>
 	--- A MoveTo walk ended: success is true when the NPC arrived, false when it could not get there. Fires on the server only, once per walk; a walk replaced by another MoveTo, or ended by Stop or Destroy, never fires.
 	MoveCompleted: Signal<(boolean)>
+	--- The NPC's attack target changed: Attack started, its aggro range picked someone, or the target died, left or was cleared. entity and player describe the new target as Raycast results do (player only when it is a player), and are both nil when the NPC no longer has one. Fires on the server only.
+	TargetChanged: Signal<(NPC, Entity?, Player?)>
+	--- Make target the NPC's enemy: it walks up to it and hurts it every Interval until it dies, goes away or you call ClearTarget. TargetChanged fires now, and Attacked fires at every swing or shot. It replaces whatever the NPC was doing. Melee by default: options Range (how close it gets before it swings, centimetres, 150 by default; 50 to 500), Damage (10 by default), DamageType ("Melee" by default) and Interval (seconds between swings, 1 by default; 0.1 to 60). The damage goes through the weapons' path, so armour, shield and the Damaged and Died signals apply to a player it hits; a kill credits nobody (the NPC is not a player), and friendly fire does not protect against an NPC. Chase (true by default): false makes it stand still and attack only what comes into Range. Give Projectile (the options of Projectiles:Fire, minus Position, Velocity, Target and Attacker) to make it a ranged attacker: it stops within Range (2000 by default, up to 5000) with a clear line to the target and fires that projectile at it, aimed for gravity, every Interval; Damage and DamageType then come from the projectile. Once a player target dies the NPC stops and TargetChanged fires with no target; attack them again after they respawn, or let SetAggroRange do it. Example: zombie:Attack(player, {Damage = 15, Interval = 1.2}) or turret:Attack(player, {Range = 3000, Interval = 0.5, Projectile = {Speed = 4000, Damage = 8, Look = "Ball"}}) (server only)
+	function Attack(self, target: Entity | Player | NPC, options: {Range: number?, Damage: number?, DamageType: string?, Interval: number?, Chase: boolean?, Projectile: {Speed: number?, GravityScale: number?, Lifetime: number?, Look: string?, Color: string?, Scale: number?, Damage: number?, DamageType: string?, Explosion: {Radius: number?, Damage: number?, InnerRadius: number?, Falloff: number?, DamageType: string?, Impulse: number?, Ragdoll: boolean?, RagdollSeconds: number?, LineOfSight: boolean?, Effect: string?, Sound: boolean?}?, ExplodeOnExpire: boolean?, Tag: string?}?}?): ()
+	--- Call the NPC off: it stops attacking or following and stands where it is, and TargetChanged fires with no target. Returns false when it had nothing to stop. An aggro range (SetAggroRange) stays on and may pick a new target. (server only)
+	function ClearTarget(self): boolean
 	--- Remove the NPC for everyone. Its walk ends without MoveCompleted, and it no longer counts toward the 50. (server only)
 	function Destroy(self): ()
 	--- As DriveTo, through points in order (one to 64 positions): the car drives each leg in turn, passing the points on the way without stopping, and ends at the last, which is where it arrives. ArriveRadius is the last point's radius. (server only)
@@ -321,6 +335,8 @@ declare extern type NPC with
 	function DriveTo(self, vehicle: Entity, position: Vector3, options: {MaxSpeed: number?, ArriveRadius: number?}?): ()
 	--- Get the NPC out of the car it is driving, standing beside it, and free the seat. A drive in progress ends as "cancelled". Returns false when the NPC is not in a car, the car is still moving faster than a walk (3 m/s; StopDriving, then try again once it has stopped) or there is nowhere to stand beside it. (server only)
 	function ExitVehicle(self): boolean
+	--- Walk after target and keep about distance (centimetres) away from it, 200 by default; 50 to 5000. The NPC follows a player through respawns, going where they go as the server's navigation mesh allows, and stands still once it is close enough. It replaces whatever the NPC was doing (a MoveTo, an earlier Follow or an Attack) and carries on until StopFollowing, ClearTarget, a MoveTo, or the NPC or the target going away; a MoveTo you give it yourself takes over and ends the follow. The walk does not fire MoveCompleted. Example: guard:Follow(player, 300) (server only)
+	function Follow(self, target: Entity | Player | NPC, distance: number?): ()
 	--- The NPC as an Entity: what a raycast that hits it reports. Tag it or give it attributes like any entity. (server only)
 	function GetEntity(self): Entity
 	--- Raise the NPC's health by amount, up to MaxHealth. Never brings a dead NPC back (use Respawn). Returns false when the NPC is dead or already at full health. (server only)
@@ -335,12 +351,16 @@ declare extern type NPC with
 	function PlayClip(self, clip: string, loop: boolean?): ()
 	--- Bring the NPC back with full health, dead or alive: standing at position (its feet) when given, otherwise where NPCs:Spawn first put it. Its clip stops, and a walk in progress ends without MoveCompleted. Returns false when it could not be put there. (server only)
 	function Respawn(self, position: Vector3?): boolean
+	--- Let the NPC pick its own enemies: whenever it has no target and a living player comes within range (centimetres, up to 5000) it attacks the nearest one, as if you had called Attack with options (the same table as Attack's). 0 turns it off. It looks a few times a second, a ranged attacker ignores players it has no clear line to, and an NPC drops a target that gets more than twice range away. Players only; attack other NPCs with Attack. Example: zombie:SetAggroRange(1500, {Damage = 12}) (server only)
+	function SetAggroRange(self, range: number, options: {Range: number?, Damage: number?, DamageType: string?, Interval: number?, Chase: boolean?, Projectile: {Speed: number?, GravityScale: number?, Lifetime: number?, Look: string?, Color: string?, Scale: number?, Damage: number?, DamageType: string?, Explosion: {Radius: number?, Damage: number?, InnerRadius: number?, Falloff: number?, DamageType: string?, Impulse: number?, Ragdoll: boolean?, RagdollSeconds: number?, LineOfSight: boolean?, Effect: string?, Sound: boolean?}?, ExplodeOnExpire: boolean?, Tag: string?}?}?): ()
 	--- Stop walking where the NPC is. The walk it abandons never fires MoveCompleted. (server only)
 	function Stop(self): ()
 	--- End the clip PlayClip started: the NPC walks and stands on its own again. (server only)
 	function StopClip(self): ()
 	--- End the drive the NPC is on: the car brakes to a stop with the NPC still in the seat, and DriveFinished fires with "cancelled". Does nothing when the NPC is not driving. (server only)
 	function StopDriving(self): ()
+	--- End the follow Follow started: the NPC stops where it is. Returns false when the NPC was not following. An Attack is ended with ClearTarget. (server only)
+	function StopFollowing(self): boolean
 	--- Hurt the NPC through the same path weapons use. source is the player to credit: if this hit kills, Died names them as the killer. Returns false when the NPC is already dead or the damage was refused. (server only)
 	function TakeDamage(self, amount: number, source: Player?): boolean
 end
@@ -477,14 +497,41 @@ declare extern type CameraService with
 end
 declare Camera: CameraService
 
---- React to what players say in chat, and post lines from the place.
+--- React to what players say in chat, post lines from the place, and run private team chat and whispers.
 declare extern type ChatService with
 	--- A player said something in chat. text is what everyone saw: already filtered, so masked words stay masked. On the server it fires for every player's line, a second or so after it was sent; on a client, for each player line this player's chat box shows (so never for someone they blocked). Lines from Chat:SendSystemMessage never fire it.
 	MessagePosted: Signal<(Player, string)>
+	--- A player's whisper was delivered. You learn who whispered to whom, never what was said: whispers are private to their two players. Server only. Use it to log or limit whispering (Chat:SetWhisperBlocked). Example: Chat.WhisperSent:Connect(function(from, to) print(from.Name .. " whispered to " .. to.Name) end)
+	WhisperSent: Signal<(Player, Player)>
+	--- The whisper mode set with Chat:SetWhisperMode: "Everyone", "Team" or "Nobody". (server only)
+	function GetWhisperMode(self): string
 	--- Post a line from the place into chat, drawn apart from what players say: to everyone, or only to player when you pass one. It goes through the same chat filter as player text, so a line with words that aren't allowed is masked or never shown. At most 500 characters, and at most 10 lines a minute per server. Returns false when it cannot be sent right now: over that limit, the player has no verified account yet, or this server has no session chat (a local test run). (server only)
 	function SendSystemMessage(self, text: string, player: Player?): boolean
+	--- Post a private line from the place to a list of players, drawn apart from what players say, and seen by nobody else: a team message, a hint to the people holding the flag. It goes through the same chat filter as everything else. At most 10 players and 500 characters, and every player it reaches counts as one of the server's 10 place lines a minute (Chat:SendSystemMessage shares that limit), so it sends nothing at all when they would not all fit. Players with no verified account yet are skipped. Returns false when it cannot be sent right now. Example: Chat:SendToPlayers(Teams:GetPlayers("Red"), "Your flag was taken!") (server only)
+	function SendToPlayers(self, players: {Player}, text: string): boolean
+	--- Make what a player types in chat reach only the players in recipients (and the player themselves): a team channel. Leave recipients out, or pass nil, to let everyone see their lines again. The chat filter still checks every line, a player's own blocks still hide them, and every line can still be reported; this only ever shows a line to fewer people. It does not make the line secret from Mantle's moderators or from anyone running a modified game, so it is for running a game, not for secrets. At most 128 recipients. Returns false when the player is not verified yet or the list is too long. Lasts until the player leaves. Example: Chat:SetAudience(p, Teams:GetPlayers(p.Team)) -- p now talks to their team only (server only)
+	function SetAudience(self, player: Player, recipients: {Player}?): boolean
+	--- Stop (true) or allow (false) one player sending or receiving whispers, whatever the mode: for players who are dead, jailed or out of the round. A refused whisper tells the sender so. Returns false when the player is not verified yet. Lasts until the player leaves. Example: Chat:SetWhisperBlocked(deadPlayer, true) (server only)
+	function SetWhisperBlocked(self, player: Player, blocked: boolean): boolean
+	--- Choose who players may whisper to: "Everyone" (the default), "Team" (only to someone on their own team, see Teams) or "Nobody" (whispers are off). Players whisper by typing /w name message in the chat box (the name in quotes if it has spaces). A whisper is filtered, rate-limited, reportable and hidden by blocks like any chat line, is shown only to the sender and the recipient, and is never given to Chat.MessagePosted. A refused whisper tells the sender so. Like all chat they are kept for moderation, so they are for talking, not for secrets. Example: Chat:SetWhisperMode("Team") (server only)
+	function SetWhisperMode(self, mode: string): ()
 end
 declare Chat: ChatService
+
+--- Collision layers: sort the objects of your place into named layers and decide which layers bump into which. Make a layer with CreateLayer (up to 8), put an object on it with entity.CollisionLayer = "Name", then use SetLayerCollides to let two layers pass through each other. Every object starts on the "Default" layer, which collides with everything, and players stay on Default: layers sort your props and never let a player through a wall (to let teammates pass through each other use Teams.TeammatesCollide). A layer also narrows World:Raycast, Spherecast, Blockcast, GetEntitiesInRadius and GetEntitiesInBox with params.Layers and params.ExcludeLayers. Server only.
+declare extern type CollisionService with
+	--- Make a collision layer. name is 1 to 32 characters (not case-sensitive), must be new and cannot be "Default". A place can have 8 layers. A new layer collides with every layer, itself included, until you change a pair. Example: Collision:CreateLayer("Debris") (server only)
+	function CreateLayer(self, name: string): ()
+	--- Whether objects on layer a and objects on layer b bump into each other (true unless SetLayerCollides turned it off). "Default" collides with everything. (server only)
+	function GetLayerCollides(self, a: string, b: string): boolean
+	--- The names of the layers you made ("Default" is always there and not listed). (server only)
+	function GetLayers(self): {string}
+	--- Delete a layer. Objects on it go back to the Default layer. (server only)
+	function RemoveLayer(self, name: string): ()
+	--- Say whether objects on layer a and objects on layer b bump into each other. false lets them pass through one another (a and b can be the same layer, to make its objects pass through each other). Both layers must exist, and "Default" cannot be changed: it always collides with everything, so objects still meet players and the world. Example: Collision:SetLayerCollides("Debris", "Debris", false) (server only)
+	function SetLayerCollides(self, a: string, b: string, collides: boolean): ()
+end
+declare Collision: CollisionService
 
 --- Join physics entities with welds, hinges and ropes while the place runs (server only).
 declare extern type ConstraintsService with
@@ -527,9 +574,13 @@ declare extern type DataStoreService with
 end
 declare DataStore: DataStoreService
 
---- Show Mantle's built-in particle effects anywhere in the world: smoke, fire, sparks, dust and glow.
+--- Show Mantle's built-in visual effects anywhere in the world. Play makes a puff of particles (smoke, fire, sparks, dust, glow, explosion, impact, muzzle flash, blood, splash, confetti, heal), Beam draws a short tracer line between two points, and Decal leaves a mark such as a bullet hole or a scorch on a surface. All are cosmetic: they do not hurt anyone or change the world. Example: Effects:Play("Explosion", Vector3.new(0, 5, 0))
 declare extern type EffectsService with
-	--- Show a built-in effect at position for a moment: archetype is "Smoke", "Fire", "Sparks", "Dust" or "Glow" (any case). It emits for params.Duration seconds (1 by default, 0 to 10) and is gone once its last particles are. params tune its look, each the archetype's own by default: Color ("#RRGGBB"), Size (particle size, 1 to 1000 cm), Rate (particles a second, 0 to 200), Speed (0 to 5000 cm/s), Lifetime (how long each particle lives, 0.05 to 10 seconds); numbers out of range are clamped. Particles leave along +Z, or along Rotation's up (a Vector3 of pitch, yaw and roll). From a client script only this player sees it; from a server script every player does, but not one who joins later. A dedicated server shows nothing. At most 10 plays a frame per script, and a server script at most 10 a second (bursts of 20); past either the script stops.
+	--- Draw a short-lived glowing beam (a tracer or a zap) from one point to another, then it fades. params: Color ("#RRGGBB", the beam's own look by default), Width (how thick, 0.5 to 100 cm, 4 by default) and Duration (how long it shows, 0 to 5 seconds, 0.15 by default); numbers out of range are clamped. A line longer than 1000 m is cut short. A client or a server holds at most 16 beams at once; a new one past that replaces the oldest. Use it for tracers, lightning bolts, lasers or showing a link between two things. Example: Effects:Beam(Vector3.new(0, 2, 0), Vector3.new(0, 2, 40), {Color = "#FF3030", Duration = 0.2}). From a client script only this player sees it; from a server script every player does, but not one who joins later. A dedicated server shows nothing. At most 10 effect calls a frame per script (Play, Beam and Decal count together), and a server script at most 10 a second (bursts of 20); past either the script stops.
+	function Beam(self, from: Vector3, to: Vector3, params: {Color: string?, Width: number?, Duration: number?}?): ()
+	--- Leave a mark on a surface at position, facing along normal (the direction the surface faces, such as a raycast hit's normal; it does not need to be exactly length 1). params.Style picks the mark: "BulletHole" (a dark hole with a scuffed ring, the default), "Scorch" (a ragged soot patch) or "Splat" (a paint-like blob with droplets, blue by default). Color ("#RRGGBB") tints it, Size is how wide it is (2 to 500 cm, 30 by default) and Lifetime how many seconds it stays before fading away (0.1 to 60, 20 by default); numbers out of range are clamped. A player's machine keeps at most 64 script decals at once (fewer on a low Effects quality setting); a new one past that removes the oldest. Example: local hit = World:Raycast(origin, direction); if hit then Effects:Decal(hit.Position, hit.Normal, {Style = "Scorch", Size = 80}) end. From a client script only this player sees it; from a server script every player does, but not one who joins later. A dedicated server shows nothing. At most 10 effect calls a frame per script (Play, Beam and Decal count together), and a server script at most 10 a second (bursts of 20); past either the script stops.
+	function Decal(self, position: Vector3, normal: Vector3, params: {Style: string?, Color: string?, Size: number?, Lifetime: number?}?): ()
+	--- Show a built-in particle effect at position for a moment, then it is gone. archetype is one of (any case; "Muzzle Flash" and "muzzle_flash" work too): "Smoke" (a soft grey column), "Fire" (flames), "Sparks" (a spray of hot sparks), "Dust" (a slow brown puff), "Glow" (a soft light mist), "Explosion" (a fireball with smoke and sparks), "Impact" (sparks and dust where something hits), "MuzzleFlash" (the flash at a gun's mouth), "Blood" (a small stylised red spray for a hit), "Splash" (water droplets), "Confetti" (a party burst in three colours) or "Heal" (green sparkles rising). The bursts (Explosion, Impact, MuzzleFlash, Blood, Splash, Confetti) play for a fraction of a second; the others for params.Duration seconds (1 by default, 0 to 10). params tune the look, each the archetype's own by default: Color ("#RRGGBB"; on Confetti it is the first of the three colours), Size (particle size, 1 to 1000 cm; a bigger Size makes a bigger explosion all through), Rate (particles a second, 0 to 200), Speed (0 to 5000 cm/s), Lifetime (how long each particle lives, 0.05 to 10 seconds) and Duration; numbers out of range are clamped. Particles leave along +Z, or along Rotation's up (a Vector3 of pitch, yaw and roll). On a low Effects quality setting a player sees the main layer only. Example: Effects:Play("Explosion", Vector3.new(0, 5, 0), {Size = 250, Color = "#44AAFF"}). From a client script only this player sees it; from a server script every player does, but not one who joins later. A dedicated server shows nothing. At most 10 effect calls a frame per script (Play, Beam and Decal count together), and a server script at most 10 a second (bursts of 20); past either the script stops.
 	function Play(self, archetype: string, position: Vector3, params: {Color: string?, Size: number?, Rate: number?, Speed: number?, Lifetime: number?, Duration: number?, Rotation: Vector3?}?): ()
 end
 declare Effects: EffectsService
@@ -603,6 +654,13 @@ declare extern type EventsService with
 	function Get(self, name: string): Signal
 end
 declare Events: EventsService
+
+--- Blow things up from a server script: damage that fades with distance, a shove for loose props and players, and a visible, audible blast. The damage goes through the same path weapons use, so armour, the shield, team friendly fire and the Damaged and Died signals all apply (a death credits the attacker). Everything happens on the server; there is nothing for a client script here.
+declare extern type ExplosionsService with
+	--- Explode at position (centimetres). Everything alive or loose within Radius is hurt and pushed, and the call returns how many things were hurt. options: Radius (centimetres, 500 by default; 10 to 5000), Damage (at the centre, 100 by default; 0 to 1000000), InnerRadius (full damage out to here, 0 by default), Falloff (how damage drops from InnerRadius to 0 at Radius: 0 is full damage everywhere, 1 drops in a straight line, the default, and 2 or more drops faster), DamageType (the tag Damaged and Died report, "Explosion" by default; your own tag works), Attacker (the Player who gets the kill, and whose team friendly fire protects; their own blast hurts them too, which makes rocket jumps; leave it out for the world), Impulse (the speed in centimetres per second a loose physics prop at the centre is given, fading with distance; 800 by default, 0 for none; the weight of the prop does not matter), Ragdoll (true by default: a player in the blast is thrown down and gets up again after RagdollSeconds, 2 by default; with false only a heavy hit throws them), LineOfSight (true by default: nothing behind a wall or a hill is touched; false makes the blast reach through walls), Effect (the look of the blast: "None", "Small", "Medium" (the default), "Large" or "Dirt") and Sound (true by default). At most 30 explosions a second. A player riding in a car is shielded by its body. NPCs take the damage like players do. Example: Explosions:Create(barrel.Position, {Radius = 600, Damage = 80, Attacker = player}) (server only)
+	function Create(self, position: Vector3, options: {Radius: number?, Damage: number?, InnerRadius: number?, Falloff: number?, DamageType: string?, Attacker: Player?, Impulse: number?, Ragdoll: boolean?, RagdollSeconds: number?, LineOfSight: boolean?, Effect: string?, Sound: boolean?}?): number
+end
+declare Explosions: ExplosionsService
 
 --- The local player's keys, mouse buttons and gamepad buttons, and their sticks, triggers and mouse wheel as axes (client only). Mantle's own controls (the menu, chat, voice, movement, the Backpack and Tool keys) can never be bound or read.
 declare extern type InputService with
@@ -728,6 +786,19 @@ declare extern type PlayersService with
 end
 declare Players: PlayersService
 
+--- Fire projectiles from a server script: a ball, rocket, arrow or cube that flies under gravity, hits what is in its way, hurts it, and can explode. Each flies on the server and shows on every player's screen. Fire returns an id; Hit and Expired say how it ended. A projectile never hits the player or NPC that fired it, and a hit goes through the same damage path weapons use (armour, shield, friendly fire, Damaged and Died). Weapon damage, fire rate and ammo stay the game's: this is for your own gadgets, traps and turrets. At most 64 projectiles fly at once.
+declare extern type ProjectilesService with
+	--- A projectile's lifetime ran out without hitting anything, on the server. position is where it was (it has exploded there if it had ExplodeOnExpire). Cancel never fires this.
+	Expired: Signal<(number, string?, Vector3)>
+	--- A projectile hit something, on the server. id is what Fire returned and tag the Tag it was given (nil without one). entity is the thing it struck (an NPC's entity too; NPCs:FromEntity gives the NPC), player is set when that was a player's character, and both are nil when it hit plain ground or a wall. position is where. The damage and any explosion have already happened; the projectile is gone.
+	Hit: Signal<(number, string?, Entity?, Player?, Vector3)>
+	--- Take a projectile out of the air: it vanishes without Hit or Expired, and without exploding. Returns false when it has already ended. (server only)
+	function Cancel(self, id: number): boolean
+	--- Launch a projectile and return its id. options: Position (where it starts) and either Velocity (a Vector3 in centimetres per second: the direction and speed) or Target (a point to hit; it is aimed at that point at Speed, 3000 by default, arcing for gravity; a target out of reach gets the flattest shot it can); GravityScale (1 by default; 0 flies dead straight, up to 10), Lifetime (seconds before it expires, 5 by default; 0.1 to 30), Look ("Ball" the default, "Rocket", "Arrow", "Cube" or "Invisible"), Color ("#RRGGBB"), Scale (0.1 to 10), Damage (to what it hits directly: 25 by default, or 0 when it has an Explosion; 0 to 1000000), DamageType ("Bullet" by default), Explosion (a table like Explosions:Create's options: it goes off where the projectile hits, and replaces the direct damage unless you also give Damage), ExplodeOnExpire (true: it goes off where it is when the lifetime ends, like a grenade; it needs an Explosion table, otherwise it explodes with the defaults), Tag (a name up to 64 characters Hit and Expired give back, so a handler knows which of its projectiles ended) and Attacker (the Player who gets the credit, whose team friendly fire protects, and who it never hits). Example: Projectiles:Fire({Position = muzzle, Velocity = aim * 2500, Look = "Rocket", Attacker = player, Explosion = {Radius = 400, Damage = 90}}) (server only)
+	function Fire(self, options: {Position: Vector3, Velocity: Vector3?, Target: Vector3?, Speed: number?, GravityScale: number?, Lifetime: number?, Look: string?, Color: string?, Scale: number?, Damage: number?, DamageType: string?, Explosion: {Radius: number?, Damage: number?, InnerRadius: number?, Falloff: number?, DamageType: string?, Impulse: number?, Ragdoll: boolean?, RagdollSeconds: number?, LineOfSight: boolean?, Effect: string?, Sound: boolean?}?, ExplodeOnExpire: boolean?, Tag: string?, Attacker: Player?}): number
+end
+declare Projectiles: ProjectilesService
+
 --- How a death becomes a respawn. By default a dead player respawns on their own after a short wait at a spawn point the place picks. Change the wait, or turn automatic respawning off to run rounds where the dead stay down until you bring them back with Player:Respawn. The server decides; there is nothing for a client script here. Player.Respawned fires when a player gets a fresh character.
 declare extern type RespawnService with
 	--- Whether a dead player respawns by themselves after Delay (true by default). Set it false and the dead stay dead until a script calls Player:Respawn on them. Applies to deaths from then on. (server only)
@@ -802,6 +873,8 @@ declare Storage: StorageService
 declare extern type TeamsService with
 	--- Whether players on the same team can hurt each other (false by default). When false, damage between teammates is ignored everywhere damage goes through the health system: weapons, melee, explosions and Player:TakeDamage. Hits from nobody, and a player's own hits, still count. Setting it is server only.
 	FriendlyFire: boolean
+	--- Whether players on the same team bump into each other (true by default). Set it to false and teammates walk straight through one another -- handy for a crowded team base or a spawn room -- while enemies, players on no team and the world still collide as always. It works on whoever is on a team at the moment, so a player who changes team starts or stops colliding with their new mates at once. Setting it is server only.
+	TeammatesCollide: boolean
 	--- A player joined, left or switched team, on the server and on every client. Arguments are the player, the old team, then the new team (team names; nil means no team).
 	PlayerTeamChanged: Signal<(Player, string?, string?)>
 	--- Define a team. name is 1 to 32 characters and must be new. color is "#RRGGBB" (white when left out), for a HUD or a nameplate to use. Up to 16 teams. Example: Teams:Create("Red", "#E53935") (server only)
@@ -857,18 +930,94 @@ declare UI: UIService
 
 --- Spawn and seat cars: the vehicles in the place's storage (server only).
 declare extern type VehiclesService with
+	--- The car's driver started boosting.
+	BoostStarted: Signal<(Entity)>
+	--- The car's driver stopped boosting: let go of the key, ran out of boost, or the car lost its fuel or health.
+	BoostStopped: Signal<(Entity)>
+	--- The car lost health: a crash, Damage, or SetHealth to a lower number. amount is how much it lost and health what it has left. Only fires for a car you spawned with Vehicles:Spawn, once health is on.
+	Damaged: Signal<(Entity, number, number)>
+	--- The car's health ran out. It cannot accelerate until it is repaired (Repair), so this is the moment to eject the driver, blow it up or remove it.
+	Destroyed: Signal<(Entity)>
+	--- The car's fuel changed: it burns in steps of about a hundredth of MaxFuel, not every frame, or a script set or filled it. Arguments are the car, the old fuel, then the new.
+	FuelChanged: Signal<(Entity, number, number)>
+	--- The car ran out of fuel and cannot accelerate until it is refuelled (Refuel).
+	FuelEmpty: Signal<(Entity)>
+	--- Take amount of health off the car (never below 0) and return the health it has left. Fires Vehicles.Damaged, and Vehicles.Destroyed if it reaches 0. Turn health on first with SetHealthEnabled. (server only)
+	function Damage(self, vehicle: Entity, amount: number): number
 	--- Put the player back on foot beside the car they are driving. Returns false when they are not driving, the car is still moving, or there is nowhere beside it to stand. (server only)
 	function Eject(self, player: Player): boolean
+	--- The boost the car has left, from 0 to MaxBoost. (server only)
+	function GetBoost(self, vehicle: Entity): number
+	--- How much boost is used each second while the driver boosts (25 unless you change it). (server only)
+	function GetBoostDrain(self, vehicle: Entity): number
+	--- How much boost comes back each second while the driver is not boosting (10 unless you change it). (server only)
+	function GetBoostRegen(self, vehicle: Entity): number
+	--- How hard the boost pushes, from 0 (nothing) to 1 (the hardest it can; about 18 m/s of extra speed every second). 0.5 unless you change it. (server only)
+	function GetBoostStrength(self, vehicle: Entity): number
+	--- The fuel in the tank, from 0 to MaxFuel. (server only)
+	function GetFuel(self, vehicle: Entity): number
+	--- How much fuel the car burns each second while it is driven and moving (1 unless you change it). (server only)
+	function GetFuelConsumption(self, vehicle: Entity): number
+	--- The car's health, from 0 to MaxHealth. It only changes while health is on. (server only)
+	function GetHealth(self, vehicle: Entity): number
+	--- The most boost the car can store (100 unless you change it). (server only)
+	function GetMaxBoost(self, vehicle: Entity): number
+	--- The tank's size (100 unless you change it). (server only)
+	function GetMaxFuel(self, vehicle: Entity): number
+	--- The most health the car can have (100 unless you change it). (server only)
+	function GetMaxHealth(self, vehicle: Entity): number
 	--- The car's speed in centimetres per second, as the simulation reports it. Errors if the entity is not a car or no longer exists. (server only)
 	function GetSpeed(self, vehicle: Entity): number
+	--- Whether the car has a boost (SetBoostEnabled). (server only)
+	function IsBoostEnabled(self, vehicle: Entity): boolean
+	--- Whether the car's driver is boosting right now. (server only)
+	function IsBoosting(self, vehicle: Entity): boolean
+	--- Whether the car has health on and none left. (server only)
+	function IsDestroyed(self, vehicle: Entity): boolean
+	--- Whether the car has a fuel tank and it is empty. (server only)
+	function IsFuelEmpty(self, vehicle: Entity): boolean
+	--- Whether the car has a fuel tank (SetFuelEnabled). (server only)
+	function IsFuelEnabled(self, vehicle: Entity): boolean
+	--- Whether the car has health (SetHealthEnabled). (server only)
+	function IsHealthEnabled(self, vehicle: Entity): boolean
 	--- Whether the car is locked. A locked car opens only for the last player who drove it: anyone else's vehicle key rattles the door, and holding the key breaks in -- the window on that side breaks, the car unlocks, and it must be hotwired before it starts. The lock stays when the driver gets out, and its driver can also lock and unlock it from the seat (L / D-pad left). Errors if the entity is not a car or no longer exists. (server only)
 	function IsLocked(self, vehicle: Entity): boolean
 	--- Lock the car. A locked car opens only for the last player who drove it: anyone else's vehicle key rattles the door, and holding the key breaks in -- the window on that side breaks, the car unlocks, and it must be hotwired before it starts. The lock stays when the driver gets out, and its driver can also lock and unlock it from the seat (L / D-pad left). Returns false when the entity is not a car. (server only)
 	function Lock(self, vehicle: Entity): boolean
+	--- Put amount of fuel in the tank (never above MaxFuel), or fill it when you leave amount out. Returns the fuel in the tank now. Example: Vehicles:Refuel(car, 20) (server only)
+	function Refuel(self, vehicle: Entity, amount: number?): number
+	--- Give the car amount of health back (never above MaxHealth), or all of it when you leave amount out. Returns the health it has now. A destroyed car drives again once it has any health. (server only)
+	function Repair(self, vehicle: Entity, amount: number?): number
 	--- Put the player in the driver's seat, through the same checks as walking up and pressing the prompt: the player must be on foot, alive, near the car with a clear line to the seat, and the seat must be empty. Returns false when any of that refuses. (server only)
 	function Seat(self, vehicle: Entity, player: Player): boolean
+	--- Set the boost left, clamped to 0..MaxBoost. (server only)
+	function SetBoost(self, vehicle: Entity, boost: number): ()
+	--- Set how much boost is used each second while the driver boosts, from 0 up. (server only)
+	function SetBoostDrain(self, vehicle: Entity, perSecond: number): ()
+	--- Give the car a boost (true) or take it away (false). Off for every car until you turn it on. With boost on, its driver holds Shift (B on a gamepad) to push the car forward harder. Boost drains at BoostDrain a second while it pushes and comes back at BoostRegen a second when it does not. It starts full (MaxBoost, 100 unless you change it). A destroyed car or one with no fuel cannot boost. (server only)
+	function SetBoostEnabled(self, vehicle: Entity, enabled: boolean): ()
+	--- Set how much boost comes back each second, from 0 up. 0 means a used boost never comes back by itself. (server only)
+	function SetBoostRegen(self, vehicle: Entity, perSecond: number): ()
+	--- Set how hard the boost pushes, from 0 (nothing) to 1 (the hardest it can). (server only)
+	function SetBoostStrength(self, vehicle: Entity, strength: number): ()
+	--- Set the fuel, clamped to 0..MaxFuel. Fires Vehicles.FuelChanged, and Vehicles.FuelEmpty if it reaches 0. (server only)
+	function SetFuel(self, vehicle: Entity, fuel: number): ()
+	--- Set how much fuel the car burns each second while it is driven and moving, from 0 up. 0 means it never runs dry. (server only)
+	function SetFuelConsumption(self, vehicle: Entity, perSecond: number): ()
+	--- Give the car a fuel tank (true) or take it away (false). Off for every car until you turn it on. With fuel on, the car burns FuelConsumption units a second while someone drives it and it is moving, and with none left it cannot accelerate (it rolls to a stop). It starts full (MaxFuel, 100 unless you change it). (server only)
+	function SetFuelEnabled(self, vehicle: Entity, enabled: boolean): ()
+	--- Set the car's health, clamped to 0..MaxHealth. Lowering it counts as damage (Vehicles.Damaged fires, and Vehicles.Destroyed if it reaches 0). (server only)
+	function SetHealth(self, vehicle: Entity, health: number): ()
+	--- Give the car health (true) or take it away again (false). It is off for every car until you turn it on, so a car you never touch crashes as it always did. With health on, crashes wear the car down (a hard enough crash wrecks it in one hit), and at 0 health the car is destroyed: it cannot accelerate until you Repair it. It starts full (MaxHealth, 100 unless you change it). (server only)
+	function SetHealthEnabled(self, vehicle: Entity, enabled: boolean): ()
 	--- Put one of the car's liveries on it: index counts from 0 in the liveries its vehicle was published with, and -1 takes the livery off. Every player sees the change. Returns false when the entity is not a car or the car has no livery at that index (the built-in cars have none). (server only)
 	function SetLivery(self, vehicle: Entity, index: number): boolean
+	--- Set the most boost the car can store, from 1 to 1,000,000. (server only)
+	function SetMaxBoost(self, vehicle: Entity, max: number): ()
+	--- Set the tank's size, from 1 to 1,000,000. Lowering it below the fuel lowers the fuel too; raising it does not fill the tank. (server only)
+	function SetMaxFuel(self, vehicle: Entity, max: number): ()
+	--- Set the most health the car can have, from 1 to 1,000,000. Lowering it below the car's health lowers the health too; raising it does not heal. (server only)
+	function SetMaxHealth(self, vehicle: Entity, max: number): ()
 	--- Paint the car: color is "#RRGGBB", the same format as Backpack:SetWeaponColor. Returns false when the entity is not a car. (server only)
 	function SetPaintColor(self, vehicle: Entity, color: string): boolean
 	--- Spawn a car at position and return it as an Entity. item is the library item id of a vehicle this place stores: the string Storage:Get returns for one of the place's storage names. Any other value errors -- an asset id, an object path, a built-in car's name, an item the place does not store, or a weapon. The car is a real replicated vehicle: every player sees it, walks up to it and can drive it. Read its Position, tag it, or Destroy it like any entity. (server only)
@@ -878,26 +1027,49 @@ declare extern type VehiclesService with
 end
 declare Vehicles: VehiclesService
 
+--- Control who hears whom on voice chat, and see who is speaking.
+declare extern type VoiceService with
+	--- A player started talking on voice chat. Fires on the server (from the player's own report) and on clients (for players they can hear). Players with voice switched off never fire it.  Example: Voice.SpeakingStarted:Connect(function(p) print(p.Name .. " is talking") end)
+	SpeakingStarted: Signal<(Player)>
+	--- A player stopped talking on voice chat. Fires wherever SpeakingStarted does.
+	SpeakingStopped: Signal<(Player)>
+	--- Whether your rules let the listener hear the speaker. It does not know the players' own mutes and blocks, so a true here can still be silent for that listener. (server only)
+	function CanHear(self, listener: Player, speaker: Player): boolean
+	--- Whether you have muted this player for everyone with Voice:SetMuted. It says nothing about players' own mutes, and it is false while you have only muted them for some listeners. (server only)
+	function IsMuted(self, player: Player): boolean
+	--- Whether the player is talking on voice chat right now. Each player's game tells the server whether they are talking (a yes or no, never audio), so it can lag by a fraction of a second, and a modified game could lie: use it for indicators and game play, not for anything that must be secure. A muted player still counts as speaking. On a client it covers the players this player can hear, themselves included. Example: if Voice:IsSpeaking(p) then ShowMicIcon(p) end
+	function IsSpeaking(self, player: Player): boolean
+	--- Stop (true) or allow (false) one listener hearing one speaker; everyone else still hears the speaker. Use it for rules that depend on who is listening. Returns false when either player is not verified yet, or you already hold 4096 of these pairs. Lasts until either player leaves, or Voice:Reset. Example: for _, other in Players:GetPlayers() do Voice:MuteFor(other, dead, true) end -- the living cannot hear a dead player, who still hears them. (server only)
+	function MuteFor(self, listener: Player, speaker: Player, muted: boolean): boolean
+	--- Clear voice rules: every one that names player (muted, muted for someone, heard by an audience, or in one), or every rule on the server when you leave player out. (server only)
+	function Reset(self, player: Player?): ()
+	--- Make a speaker heard only by the players in listeners (and by themselves); leave listeners out, or pass nil, to let everyone hear them again. This is team voice: set each player's audience to their team. At most 128 listeners. Returns false when the speaker is not verified yet or the list is too long. Lasts until the speaker leaves, or Voice:Reset. Mutes still apply on top. Example: Voice:SetAudience(p, Teams:GetPlayers(p.Team)) -- p's team hears p; call it again when teams change. (server only)
+	function SetAudience(self, speaker: Player, listeners: {Player}?): boolean
+	--- Mute (true) or unmute (false) a player's voice for everyone: nobody hears them until you unmute them, though they can still talk. Use it for players who are dead, jailed or out of the round. Returns false when the player is not verified yet (moments after joining). The mute lasts until the player leaves. It only ever makes them quieter: a player who has muted or blocked someone themselves keeps them muted whatever you do. Voice goes straight between players' games, not through the server, so the server cannot hear or record it, and each listener's game applies the mute. A player running a modified game could ignore it, so use it to run a game, never to protect a secret. Example: Players:OnPlayer(function(p) Voice:SetMuted(p, true) end) -- everyone starts muted until a round begins, then Voice:SetMuted(p, false) for the players in it. (server only)
+	function SetMuted(self, player: Player, muted: boolean): boolean
+end
+declare Voice: VoiceService
+
 --- Find and watch the things in the level.
 declare extern type WorldService with
 	--- Sweep a box of this size (its full width, depth and height, at most 100 m on any side, kept square to the world's axes) from origin along direction and return the first thing it touches, in the same table as World:Raycast, or nil. Takes the same params as World:Raycast.
-	function Blockcast(self, origin: Vector3, size: Vector3, direction: Vector3, params: {MaxDistance: number?, Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?}?): {Entity: Entity, Player: Player?, Position: Vector3, Normal: Vector3, Distance: number}?
+	function Blockcast(self, origin: Vector3, size: Vector3, direction: Vector3, params: {MaxDistance: number?, Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?, Layers: {string}?, ExcludeLayers: {string}?}?): {Entity: Entity, Player: Player?, Position: Vector3, Normal: Vector3, Distance: number}?
 	--- Every entity with this actor tag.
 	function FindByTag(self, tag: string): {Entity}
 	--- The first entity whose name (actor label) matches, or nil.
 	function FindFirst(self, name: string): Entity?
 	--- Every entity and player character touching a box of this size (its full width, depth and height, at most 100 m on any side, kept square to the world's axes) centred on center, nearest first. Takes the same params as World:GetEntitiesInRadius.
-	function GetEntitiesInBox(self, center: Vector3, size: Vector3, params: {Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?, MaxResults: number?}?): {Entity}
-	--- Every entity and player character touching a ball of this radius (at most 50 m) around center, nearest first. Overlap-only entities (triggers) count; entities with no collision never do. A character is listed as its Entity; Players:GetPlayerFromCharacter tells whose it is. params: Include, Exclude, Tag, IgnorePlayers, and MaxResults (256 at most, and by default). Runs on this machine only; a script may make 256 spatial queries a frame.
-	function GetEntitiesInRadius(self, center: Vector3, radius: number, params: {Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?, MaxResults: number?}?): {Entity}
+	function GetEntitiesInBox(self, center: Vector3, size: Vector3, params: {Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?, MaxResults: number?, Layers: {string}?, ExcludeLayers: {string}?}?): {Entity}
+	--- Every entity and player character touching a ball of this radius (at most 50 m) around center, nearest first. Overlap-only entities (triggers) count; entities with no collision never do. A character is listed as its Entity; Players:GetPlayerFromCharacter tells whose it is. params: Include, Exclude, Tag, IgnorePlayers, Layers, ExcludeLayers (collision layers, server scripts only), and MaxResults (256 at most, and by default). Runs on this machine only; a script may make 256 spatial queries a frame.
+	function GetEntitiesInRadius(self, center: Vector3, radius: number, params: {Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?, MaxResults: number?, Layers: {string}?, ExcludeLayers: {string}?}?): {Entity}
 	--- Call handler for every entity that has the tag now, and for each one that gets it later.
 	function OnTagged(self, tag: string, handler: (entity: Entity) -> ()): Connection
 	--- Call handler when an entity loses the tag.
 	function OnUntagged(self, tag: string, handler: (entity: Entity) -> ()): Connection
-	--- Cast a ray from origin along direction and return the first thing it hits: a table of Entity, Player, Position, Normal and Distance, or nil. Player is set when the hit is a player's character. The ray is as long as direction, or params.MaxDistance when given, and at most 1 km. It passes through overlap-only entities (triggers) and never hits entities with no collision. params: MaxDistance, Include (only these entities or players count), Exclude, Tag (only entities with this tag count), IgnorePlayers. Runs on this machine only; a script may make 256 spatial queries a frame.
-	function Raycast(self, origin: Vector3, direction: Vector3, params: {MaxDistance: number?, Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?}?): {Entity: Entity, Player: Player?, Position: Vector3, Normal: Vector3, Distance: number}?
+	--- Cast a ray from origin along direction and return the first thing it hits: a table of Entity, Player, Position, Normal and Distance, or nil. Player is set when the hit is a player's character. The ray is as long as direction, or params.MaxDistance when given, and at most 1 km. It passes through overlap-only entities (triggers) and never hits entities with no collision. params: MaxDistance, Include (only these entities or players count), Exclude, Tag (only entities with this tag count), IgnorePlayers, Layers (only entities on these collision layers count; server scripts only) and ExcludeLayers (look through entities on these layers). Runs on this machine only; a script may make 256 spatial queries a frame.
+	function Raycast(self, origin: Vector3, direction: Vector3, params: {MaxDistance: number?, Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?, Layers: {string}?, ExcludeLayers: {string}?}?): {Entity: Entity, Player: Player?, Position: Vector3, Normal: Vector3, Distance: number}?
 	--- Sweep a ball of this radius (at most 50 m) from origin along direction and return the first thing it touches, in the same table as World:Raycast, or nil. Distance is how far the ball's centre travelled. Takes the same params as World:Raycast.
-	function Spherecast(self, origin: Vector3, radius: number, direction: Vector3, params: {MaxDistance: number?, Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?}?): {Entity: Entity, Player: Player?, Position: Vector3, Normal: Vector3, Distance: number}?
+	function Spherecast(self, origin: Vector3, radius: number, direction: Vector3, params: {MaxDistance: number?, Include: {Entity | Player}?, Exclude: {Entity | Player}?, Tag: string?, IgnorePlayers: boolean?, Layers: {string}?, ExcludeLayers: {string}?}?): {Entity: Entity, Player: Player?, Position: Vector3, Normal: Vector3, Distance: number}?
 end
 declare World: WorldService
 

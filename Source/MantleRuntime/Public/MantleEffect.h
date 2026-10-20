@@ -10,6 +10,7 @@
 #include "MantleEffect.generated.h"
 
 class UBillboardComponent;
+class UFXSystemAsset;
 class UFXSystemComponent;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
@@ -128,6 +129,20 @@ public:
 	 */
 	static AMantleEffect* SpawnOneShot(UWorld* World, const FTransform& Transform, EMantleEffectArchetype InArchetype,
 		const FMantleEffectLook& InLook, double EmitSeconds);
+
+	/**
+	 * Spawns a short-lived, transient actor drawing System, any Niagara system (not one of the archetypes: a script's
+	 * Effects:Beam uses the weapon beams'), at Transform for LifeSeconds, then destroying itself. Returns its component,
+	 * not yet active: the caller sets user parameters on it (SetSystemVariableVec3 and the UFXSystemComponent setters),
+	 * then calls Activate(true); the owner is the actor. Null where nothing would draw (a dedicated server, no Niagara, no System).
+	 */
+	static UFXSystemComponent* SpawnSystem(UWorld* World, const FTransform& Transform, UFXSystemAsset* System, double LifeSeconds);
+
+	/**
+	 * Writes Value to Component's Vector3 or position user parameter Name through Niagara's UFUNCTION FunctionName
+	 * ("SetVariableVec3" or "SetVariablePosition"), by reflection like the setters above. False when the class has no such function.
+	 */
+	static bool SetSystemVariableVec3(UFXSystemComponent& Component, const TCHAR* FunctionName, const FName Name, const FVector& Value);
 
 	/**
 	 * Hands Look, as given, to Component's user parameters (FMantleEffects' names and types): the colour a
