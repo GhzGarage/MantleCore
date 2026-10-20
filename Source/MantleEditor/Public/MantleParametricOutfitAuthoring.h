@@ -2,9 +2,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MantleGlbWriter.h"
 #include "UObject/StrongObjectPtr.h"
 
 class UChaosOutfitAsset;
+class UMaterialInterface;
 class USkeletalMesh;
 
 /** One authored representation of the same garment, paired with the body/head it actually fits. */
@@ -14,6 +16,14 @@ struct MANTLEEDITOR_API FMantleOutfitAuthoredSource
 	TWeakObjectPtr<USkeletalMesh> Garment;
 	/** Epic's merged authoring body/head with its source MeshDescription, not a runtime body proxy. */
 	TWeakObjectPtr<USkeletalMesh> CombinedBodyHead;
+
+	/**
+	 * Instead of Garment: the garment's render geometry made in memory (FMantleGarmentOutfit), one LOD, skinned to
+	 * CombinedBodyHead's bones (its joints are named as that mesh's reference skeleton names them), and Materials[i] the
+	 * material of its glTF material i. The cloth takes CombinedBodyHead as its skeletal mesh.
+	 */
+	TSharedPtr<const FMantleGlbMesh> Geometry;
+	TArray<UMaterialInterface*> Materials;
 };
 
 /** Render-only native Outfit authoring. Original meshes and their materials are read without modification. */

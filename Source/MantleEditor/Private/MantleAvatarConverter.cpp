@@ -694,6 +694,10 @@ FMantleConvertResult FMantleAvatarConverter::Convert(FMantleConvertContext& Cont
 		const TArray<FString> InitialKeys = FixKeys(Initial);
 		for (int32 Index = 0; Index < Initial.Num(); ++Index)
 		{
+			if (Options.OnlyFixers.Num() > 0 && !Options.OnlyFixers.Contains(Initial[Index].FixerId))
+			{
+				continue;
+			}
 			if (Unconfirmed(Initial[Index], InitialKeys[Index]))
 			{
 				FMantleConvertOutcome Outcome;
@@ -754,6 +758,10 @@ FMantleConvertResult FMantleAvatarConverter::Convert(FMantleConvertContext& Cont
 			break;
 		}
 		Progress.EnterProgressFrame(1.0f, MantleAvatarConverterPrivate::ConverterStepText(Fixer->GetId()));
+		if (Options.OnlyFixers.Num() > 0 && !Options.OnlyFixers.Contains(Fixer->GetId()))
+		{
+			continue;
+		}
 		// Each fixer sees the context as the fixers before it left it.
 		TArray<FMantleConvertFix> Fixes;
 		Fixer->Analyze(Context, Fixes);

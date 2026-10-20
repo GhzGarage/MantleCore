@@ -12,6 +12,7 @@
 #include "MantleCosmeticUpload.h"
 #include "MantleCosmeticValidation.h"
 #include "MantleEditorActions.h"
+#include "MantleGarmentOutfit.h"
 #include "MantleHeadFit.h"
 #include "MantleParametricOutfit.h"
 // The editor's FMantlePlaceAssets arrives through MantlePlacePublishSession.h. Never include
@@ -1104,6 +1105,11 @@ FString UMantleToolset::ConvertCosmetic(const FString& AssetPath, const FString&
 {
 	// #610: the converter's own JSON (MantleEditor), so the panel, the toolset and the tests read one description.
 	return FMantleAvatarConverter::RunForAgent(AssetPath, Slot, bApply, TurnOff, Confirm);
+}
+
+FString UMantleToolset::MakeOutfitFromGarment(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff, const FString& Confirm)
+{
+	return FMantleGarmentOutfit::RunForAgent(BodyPath, GarmentPaths, TurnOff, Confirm);
 }
 
 /** Registers UMantleToolset with the editor's Toolset Registry, which Unreal's MCP server serves. */

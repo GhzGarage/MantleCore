@@ -37,6 +37,12 @@ struct MANTLEEDITOR_API FMantleConvertOptions
 
 	/** #625: Convert (the default) or As-is, which MakeContext refuses while UMantleSettings::bAllowAsIsAvatars is off. */
 	EMantleAvatarRoute Route = EMantleAvatarRoute::Convert;
+
+	/**
+	 * Empty: every fixer runs. Otherwise only these fixers analyse and apply (FMantleGarmentOutfit runs Strip, MHPose and
+	 * MHConform to make a MetaHuman of a garment's own body, without the build).
+	 */
+	TSet<FName> OnlyFixers;
 };
 
 /** What the upload checks say about one converted part. */
