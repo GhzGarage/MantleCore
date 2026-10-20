@@ -333,6 +333,23 @@ struct MANTLERUNTIME_API FMantlePlaceLimits
 	/** A probe's brightness, 0 to this (#628). skylightScale is 0 to 1. */
 	static constexpr double MaxReflectionProbeBrightness = 8.0;
 
+	/**
+	 * A Text entity's text (GhzGarage/mantle#724), 1 to this many code points (FMantlePlaceParser::CodePointLength).
+	 * Proposed by the plugin exporter; the schema's maxLength and the backend must state the same number.
+	 */
+	static constexpr int32 MaxTextLength = 512;
+
+	/** Text entities in one place (#724). Cross-entity: not in the schema itself; validate.py and the backend state it too. */
+	static constexpr int32 MaxTextsPerPlace = 256;
+
+	/** A Text entity's worldSize, the glyph height in cm (#724): 1 cm to 20 m. */
+	static constexpr double MinTextWorldSize = 1.0;
+	static constexpr double MaxTextWorldSize = 2000.0;
+
+	/** A Text entity's xScale and yScale (#724). */
+	static constexpr double MinTextScale = 0.1;
+	static constexpr double MaxTextScale = 10.0;
+
 	/** scripts[].name, 1 to this many characters. */
 	static constexpr int32 MaxScriptNameLength = 80;
 

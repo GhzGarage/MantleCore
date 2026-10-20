@@ -37,6 +37,7 @@ namespace MantleCoverageCategory
 	inline const TCHAR* const Particles = TEXT("Particles");
 	inline const TCHAR* const Decals = TEXT("Decals");
 	inline const TCHAR* const Sounds = TEXT("Sounds");
+	inline const TCHAR* const Text = TEXT("World text");
 	inline const TCHAR* const SubLevels = TEXT("Sub-levels");
 	inline const TCHAR* const BlueprintLogic = TEXT("Blueprint logic");
 	inline const TCHAR* const OtherComponents = TEXT("Other components");

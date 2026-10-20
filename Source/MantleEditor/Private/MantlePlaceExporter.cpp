@@ -11,6 +11,7 @@
 #include "MantleClientFeatures.h"
 #include "MantleDrawDistance.h"
 #include "MantleTargetFeatures.h"
+#include "MantleTextExport.h"
 #include "MantleEnvironment.h"
 #include "MantleEnvironmentExport.h"
 #include "MantleEnvironmentOverride.h"
@@ -71,6 +72,7 @@
 #include "Components/SplineMeshComponent.h"
 #include "Components/SpotLightComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "Components/VolumetricCloudComponent.h"
 #include "Dom/JsonObject.h"
 #include "EdGraph/EdGraph.h"
@@ -1224,6 +1226,11 @@ namespace
 			FMantleReflectionProbeExport::Extract(Actor, Entity);
 			break;
 
+		case EMantleEntityType::Text:
+			// GhzGarage/mantle#724: the text component's look; its scale is folded into xScale and yScale, and the transform written at scale 1.
+			FMantleTextExport::Extract(FMantleTextExport::ActorComponent(Actor), Entity);
+			break;
+
 		default:
 			Entity.Props.Set<FMantleEmptyProps>(FMantleEmptyProps{});
 			break;
@@ -1309,7 +1316,7 @@ bool FMantlePlaceExporter::IsEngineInfrastructure(const AActor* Actor)
 		|| Actor->IsA(AController::StaticClass())
 		|| Actor->IsA(APawn::StaticClass())
 		|| Actor->IsA(ACameraActor::StaticClass())
-		|| Actor->GetClass() == ATextRenderActor::StaticClass();
+		|| (Actor->GetClass() == ATextRenderActor::StaticClass() && !FMantleTargetFeatures::Current().Reads(MantleClientFeatures::WorldText));
 }
 
 namespace
@@ -1439,11 +1446,12 @@ bool FMantlePlaceExporter::DescribeUnpublishedContent(const AActor* Actor, FStri
 		OutRemedy = TEXT("Remove it. Mantle runs every player's camera itself, so the camera would be dropped.");
 		return true;
 	}
-	// A Text Render Actor is a label in the editor's level (#628): it has no gameplay effect and no place form, so it
-	// is left out, with a warning, rather than refused. Exactly the engine's class: a Blueprint derived from it may carry logic.
-	if (Class == ATextRenderActor::StaticClass())
+	// A Text Render Actor publishes as a Text entity (GhzGarage/mantle#724). Only for a target client without worldText is it a
+	// label with no place form (#628): left out, with a warning, rather than refused. Exactly the engine's class: a Blueprint
+	// derived from it may carry logic, and publishes its text component as a part.
+	if (Class == ATextRenderActor::StaticClass() && !FMantleTargetFeatures::Current().Reads(MantleClientFeatures::WorldText))
 	{
-		OutWhat = FString::Printf(TEXT("is a %s, which Mantle does not publish."), *Class->GetName());
+		OutWhat = FString::Printf(TEXT("is a %s, which Mantle leaves out: %s."), *Class->GetName(), FMantleTargetFeatures::NeedsNewerClient);
 		OutRemedy = TEXT("Nothing to change: the text would be dropped.");
 		return true;
 	}
@@ -1787,6 +1795,16 @@ namespace MantlePlaceExporterPrefab
 			}
 			return false;
 		}
+		// GhzGarage/mantle#724: world text, on a target client that reads it.
+		if (const UTextRenderComponent* Text = Cast<UTextRenderComponent>(Component))
+		{
+			if (FMantleTextExport::IsShownText(Text) && FMantleTargetFeatures::Current().Reads(MantleClientFeatures::WorldText))
+			{
+				OutType = EMantleEntityType::Text;
+				return true;
+			}
+			return false;
+		}
 		if ((Component->IsA(UBoxComponent::StaticClass()) || Component->IsA(USphereComponent::StaticClass())) && ExporterIsGameContent(Component))
 		{
 			OutType = EMantleEntityType::TriggerVolume;
@@ -1895,6 +1913,11 @@ namespace MantlePlaceExporterPrefab
 			Entity.Props.Set<FMantleSkeletalMeshProps>(MoveTemp(Props));
 			break;
 		}
+
+		case EMantleEntityType::Text:
+			// GhzGarage/mantle#724: a text component's look; its scale is folded into xScale and yScale.
+			FMantleTextExport::Extract(Cast<UTextRenderComponent>(Part.Component), Entity);
+			break;
 
 		case EMantleEntityType::Effect:
 		{
@@ -2059,6 +2082,19 @@ bool FMantlePlaceExporter::DescribeSkippedActor(const AActor* Actor, FSkippedAct
 		}
 	}
 
+	// World text (GhzGarage/mantle#724) that nothing on this target can show: an actor rooted on a text component with nothing
+	// else to publish (a Blueprint derived from the Text Render Actor; the engine's own class is DescribeUnpublishedContent's),
+	// on a client without worldText. Nothing is lost on a client that reads it, where the text publishes.
+	if (const USceneComponent* TextRoot = Class != ATextRenderActor::StaticClass() ? Actor->GetRootComponent() : nullptr;
+		TextRoot && TextRoot->IsA(UTextRenderComponent::StaticClass()) && !FMantleTargetFeatures::Current().Reads(MantleClientFeatures::WorldText)
+		&& !MantlePlaceExporterPrefab::HasPart(Actor, TextRoot))
+	{
+		Out.What = FString::Printf(TEXT("is world text (%s) that Mantle leaves out: %s."), *Class->GetName(), FMantleTargetFeatures::NeedsNewerClient);
+		Out.Remedy = TEXT("Nothing to change: the rest of the place publishes without it.");
+		Out.Category = MantleCoverageCategory::Text;
+		return true;
+	}
+
 	// A Static Mesh Actor with no mesh shows nothing (unless it carries other parts, which make it a Group).
 	if (const AStaticMeshActor* MeshActor = Cast<AStaticMeshActor>(Actor))
 	{
@@ -2137,6 +2173,8 @@ bool FMantlePlaceExporter::ClassifyActor(const AActor* Actor, EMantleEntityType&
 	if (MantlePlaceExporterSkips::IsTranslatableParticleActor(Actor)) { OutType = EMantleEntityType::Group; return true; }
 	// #628: a Box or Sphere reflection capture, before the root checks (its preview boxes would read as trigger parts).
 	if (FMantleReflectionProbeExport::IsProbeActor(Actor)) { OutType = EMantleEntityType::ReflectionProbe; return true; }
+	// GhzGarage/mantle#724: a placed Text Render Actor (the engine's own class) is a Text entity where the target reads it.
+	if (FMantleTextExport::IsTextActor(Actor) && FMantleTargetFeatures::Current().Reads(MantleClientFeatures::WorldText)) { OutType = EMantleEntityType::Text; return true; }
 	if (Actor->IsA(AStaticMeshActor::StaticClass()))  { OutType = EMantleEntityType::StaticMesh;       return true; }
 	if (Actor->IsA(APlayerStart::StaticClass()))      { OutType = EMantleEntityType::PlayerStart;      return true; }
 	if (Actor->IsA(APointLight::StaticClass()))       { OutType = EMantleEntityType::PointLight;       return true; }
@@ -3094,6 +3132,28 @@ void FMantlePlaceExporter::CollectPrefabParts(
 			continue;
 		}
 
+		// GhzGarage/mantle#724: world text is a Text part. Text with nothing to read, or hidden in game, is nothing; on a target
+		// client without worldText it is left out and said so (Check's note; the coverage survey lists it as dropped).
+		if (const UTextRenderComponent* Text = Cast<UTextRenderComponent>(Component))
+		{
+			if (Text->IsEditorOnly() || Text->HasAnyFlags(RF_Transient) || !FMantleTextExport::IsShownText(Text))
+			{
+				continue;
+			}
+			if (!FMantleTargetFeatures::Current().Reads(MantleClientFeatures::WorldText))
+			{
+				if (OutUnsupported)
+				{
+					OutUnsupported->Add(FMantleUnpublishedPart{
+						FString::Printf(TEXT("has a text render component ('%s') that Mantle leaves out: %s; the rest of the actor publishes."),
+							*Text->GetName(), FMantleTargetFeatures::NeedsNewerClient),
+						TEXT("Nothing to change: the text would be dropped."),
+						/*bBlocksPublish*/ false, MantleCoverageCategory::Text });
+				}
+				continue;
+			}
+		}
+
 		// #63: a sky dome mesh of a sky Blueprint (BP_Sky_Sphere, a Fab map's own) is left out: Mantle supplies its own sky.
 		if (const UStaticMeshComponent* SkyMesh = Scene && MantlePlaceExporterPrefab::PartType(Scene, Type) && Type == EMantleEntityType::StaticMesh
 				? Cast<UStaticMeshComponent>(Scene) : nullptr;
@@ -3579,6 +3639,7 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 	TSet<const AActor*> UnmirroredDecals;
 	int32 EffectParts = 0;
 	int32 ReflectionProbes = 0;
+	int32 Texts = 0;
 
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
@@ -3656,6 +3717,21 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 			continue;
 		}
 
+		// World text (GhzGarage/mantle#724): text with nothing to read or hidden in game is left out, said so; text too long, or
+		// past the per-place cap, refuses the export; its coverage line (kept or approximated) is written here.
+		if (Type == EMantleEntityType::Text)
+		{
+			const UTextRenderComponent* TextComponent = FMantleTextExport::ActorComponent(Actor);
+			if (!FMantleTextExport::IsShownText(TextComponent))
+			{
+				Result.Coverage.Add(MantleCoverageCategory::Text, EMantleCoverageOutcome::Dropped, ExporterLabelOf(Actor),
+					TEXT("a text render actor with no text to read, or hidden in game, is not published."));
+				continue;
+			}
+			FMantleTextExport::Admit(TextComponent, ExporterLabelOf(Actor), FString::Printf(TEXT("/actors/%s"), *Actor->GetName()),
+				TextComponent->GetComponentScale(), Texts, &Result.Coverage, Result.Errors);
+		}
+
 		const FString ActorId = MakeEntityId(Actor, UsedIds);
 		IdByActor.Add(Actor, ActorId);
 		Exportable.Add(Actor);
@@ -3706,6 +3782,13 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 						Result.Coverage.Add(MantleCoverageCategory::Particles, EMantleCoverageOutcome::Dropped, ExporterLabelOf(Actor),
 							FString::Printf(TEXT("left out: a place holds at most %d effects."), FMantlePlaceLimits::MaxEffectsPerPlace));
 						continue;
+					}
+					if (Part.Type == EMantleEntityType::Text)
+					{
+						FMantleTextExport::Admit(Cast<UTextRenderComponent>(Part.Component),
+							FString::Printf(TEXT("%s (%s)"), *ExporterLabelOf(Actor), *Part.Component->GetName()),
+							FString::Printf(TEXT("/actors/%s/%s"), *Actor->GetName(), *Part.Component->GetName()),
+							Part.Transform.GetScale3D(), Texts, &Result.Coverage, Result.Errors);
 					}
 					if (Part.MirroredMesh)
 					{
@@ -5430,6 +5513,22 @@ FString FMantlePlaceExporter::ToJson(const FMantlePlace& Place)
 			}
 			Writer->WriteValue(TEXT("brightness"), P16->Brightness);
 			Writer->WriteValue(TEXT("skylightScale"), P16->SkylightScale);
+		}
+		else if (const FMantleTextProps* P20 = Entity.Props.TryGet<FMantleTextProps>())
+		{
+			// A new type (GhzGarage/mantle#724): its keys ship with it, so each is written. The colour is linear RGBA.
+			Writer->WriteValue(TEXT("text"), P20->Text);
+			Writer->WriteArrayStart(TEXT("color"));
+			Writer->WriteValue(static_cast<double>(P20->Color.R));
+			Writer->WriteValue(static_cast<double>(P20->Color.G));
+			Writer->WriteValue(static_cast<double>(P20->Color.B));
+			Writer->WriteValue(static_cast<double>(P20->Color.A));
+			Writer->WriteArrayEnd();
+			Writer->WriteValue(TEXT("worldSize"), P20->WorldSize);
+			Writer->WriteValue(TEXT("horizontalAlignment"), FString(MantleTextHorizontalAlignmentToString(P20->HorizontalAlignment)));
+			Writer->WriteValue(TEXT("verticalAlignment"), FString(MantleTextVerticalAlignmentToString(P20->VerticalAlignment)));
+			Writer->WriteValue(TEXT("xScale"), P20->XScale);
+			Writer->WriteValue(TEXT("yScale"), P20->YScale);
 		}
 		else if (const FMantleConstraintProps* P14 = Entity.Props.TryGet<FMantleConstraintProps>())
 		{
