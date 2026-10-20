@@ -25,47 +25,39 @@ struct MANTLEEDITOR_API FMantleDrawDistanceSource
 	/** The component's Never Distance Cull. */
 	bool bNeverDistanceCull = false;
 
-	/** An instanced or foliage component: its Instance Start/End Cull Distance (painted foliage gets them from its foliage type), 0 for none. */
+	/** An instanced or foliage component: its Instance End Cull Distance (painted foliage gets it from its foliage type), 0 for none. */
 	bool bInstanced = false;
-	int32 InstanceStartCullDistance = 0;
 	int32 InstanceEndCullDistance = 0;
-
-	bool bCastShadow = true;
 };
 
 /**
- * The draw distance, fade start and shadow distance a mesh entity or instance set publishes (drawDistance, fadeStart,
- * shadowDistance; the drawDistances client feature).
+ * The draw distance a mesh entity or instance set publishes (drawDistance, cm; the drawDistance client feature). The client fades
+ * an instance set over the last fifth of it and ends shadows by its own rule, so the editor writes nothing else.
  *
  * The component's own cull distance wins: LDMaxDrawDistance (else CachedMaxDrawDistance) for a mesh, InstanceEndCullDistance
- * (with InstanceStartCullDistance as the fade start) for instances and painted foliage. Without one, a size-based default by
+ * for instances and painted foliage. Without one, a size-based default by
  * the mesh's bounding sphere radius (Bands): small clutter culls near, and a mesh of NeverCullRadius or more is never culled.
  * The bands are set so nothing visibly pops at normal play distances: a mesh is still about a dozen pixels across where it culls.
  * A component with Never Distance Cull publishes no draw distance.
  *
- * The engine has no per-component shadow distance, so the shadow distance is always the size-based default, and only where it is
- * shorter than the draw distance (past that the shadow is gone anyway) and the mesh casts shadows.
+ * 0 is never written (the schema refuses it): a mesh that is never culled has no key.
  */
 struct MANTLEEDITOR_API FMantleDrawDistance
 {
-	/** One size band: meshes with a bounding sphere radius below MaxRadius (cm) cull at Draw and stop casting shadows at Shadow (cm). */
+	/** One size band: meshes with a bounding sphere radius below MaxRadius (cm) cull at Draw (cm). */
 	struct FBand
 	{
 		double MaxRadius;
 		double Draw;
-		double Shadow;
 	};
 
-	/** The size-based defaults, smallest first. A mesh past the last band's MaxRadius gets neither. */
+	/** The size-based defaults, smallest first. A mesh past the last band's MaxRadius gets none. */
 	static TConstArrayView<FBand> Bands();
 
-	/** The radius at and above which a mesh gets no default draw or shadow distance: architecture and other large pieces. */
+	/** The radius at and above which a mesh gets no default draw distance: architecture and other large pieces. */
 	static double NeverCullRadius();
 
-	/**
-	 * Sets Source's distances on Props, or clears them when the target client does not read drawDistances. True when a draw
-	 * distance was set. FadeStart is set only for instances whose source gave a start below the end.
-	 */
+	/** Sets Source's draw distance on Props (0 for none), or 0 when the target client does not read drawDistance. True when one was set. */
 	static bool Apply(const FMantleDrawDistanceSource& Source, const FMantleTargetFeatures& Target, FMantleStaticMeshProps& Props);
 
 	/** The source numbers of a component (an instanced one included); Mesh is the mesh to measure (the component's own when null). */

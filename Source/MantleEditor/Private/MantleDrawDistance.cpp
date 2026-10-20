@@ -13,24 +13,20 @@
 namespace MantleDrawDistancePrivate
 {
 	/**
-	 * Radius below (cm), draw distance, shadow distance. A prop at the top of a band (30 cm radius) is still about 12 pixels across at
+	 * Radius below (cm), draw distance. A prop at the top of a band (30 cm radius) is still about 12 pixels across at
 	 * its 60 m on a 1080p screen, and one at 3 m radius at 250 m, so nothing pops where a player looks.
 	 */
 	const FMantleDrawDistance::FBand GBands[] = {
-		{ 30.0, 6000.0, 2500.0 },
-		{ 100.0, 12000.0, 5000.0 },
-		{ 300.0, 25000.0, 10000.0 },
-		{ 1000.0, 60000.0, 25000.0 },
+		{ 30.0, 6000.0 },
+		{ 100.0, 12000.0 },
+		{ 300.0, 25000.0 },
+		{ 1000.0, 60000.0 },
 	};
 
-	/** The distance in cm, raised to MinDrawDistance; unset past MaxDrawDistance (then the mesh is never culled). */
-	TOptional<double> InRange(const double Distance)
+	/** The distance in cm; 0 past MaxDrawDistance (then the mesh is never culled). */
+	double InRange(const double Distance)
 	{
-		if (Distance > FMantlePlaceLimits::MaxDrawDistance)
-		{
-			return TOptional<double>();
-		}
-		return FMath::Max(Distance, FMantlePlaceLimits::MinDrawDistance);
+		return Distance > FMantlePlaceLimits::MaxDrawDistance ? 0.0 : Distance;
 	}
 }
 
@@ -47,67 +43,44 @@ double FMantleDrawDistance::NeverCullRadius()
 bool FMantleDrawDistance::Apply(const FMantleDrawDistanceSource& Source, const FMantleTargetFeatures& Target, FMantleStaticMeshProps& Props)
 {
 	using namespace MantleDrawDistancePrivate;
-	Props.DrawDistance.Reset();
-	Props.FadeStart.Reset();
-	Props.ShadowDistance.Reset();
-	if (!Target.Reads(MantleClientFeatures::DrawDistances))
+	Props.DrawDistance = 0.0;
+	if (!Target.Reads(MantleClientFeatures::DrawDistance) || Source.bNeverDistanceCull)
 	{
 		return false;
 	}
 
-	// The size band, by the mesh's bounding sphere; a mesh past the last one has none.
-	const FBand* Band = nullptr;
-	for (const FBand& Candidate : Bands())
+	// The component's own: the end cull distance of instances, else Desired Max Draw Distance, else the current one. Never 0 (refused).
+	double Sourced = 0.0;
+	if (Source.bInstanced && Source.InstanceEndCullDistance > 0)
 	{
-		if (Source.SphereRadius < Candidate.MaxRadius)
-		{
-			Band = &Candidate;
-			break;
-		}
+		Sourced = Source.InstanceEndCullDistance;
+	}
+	else if (Source.LDMaxDrawDistance > 0.0)
+	{
+		Sourced = Source.LDMaxDrawDistance;
+	}
+	else if (Source.CachedMaxDrawDistance > 0.0)
+	{
+		Sourced = Source.CachedMaxDrawDistance;
 	}
 
-	if (!Source.bNeverDistanceCull)
+	if (Sourced > 0.0)
 	{
-		double Sourced = 0.0;
-		if (Source.bInstanced && Source.InstanceEndCullDistance > 0)
+		Props.DrawDistance = InRange(Sourced);
+	}
+	else
+	{
+		// The size band, by the mesh's bounding sphere; a mesh past the last one has none.
+		for (const FBand& Band : Bands())
 		{
-			Sourced = Source.InstanceEndCullDistance;
-			if (Source.InstanceStartCullDistance > 0 && Source.InstanceStartCullDistance < Source.InstanceEndCullDistance)
+			if (Source.SphereRadius < Band.MaxRadius)
 			{
-				Props.FadeStart = InRange(Source.InstanceStartCullDistance);
+				Props.DrawDistance = Band.Draw;
+				break;
 			}
 		}
-		else if (Source.LDMaxDrawDistance > 0.0)
-		{
-			Sourced = Source.LDMaxDrawDistance;
-		}
-		else if (Source.CachedMaxDrawDistance > 0.0)
-		{
-			Sourced = Source.CachedMaxDrawDistance;
-		}
-
-		if (Sourced > 0.0)
-		{
-			Props.DrawDistance = InRange(Sourced);
-		}
-		else if (Band)
-		{
-			Props.DrawDistance = Band->Draw;
-		}
 	}
-
-	// A fade needs a draw distance above it (the start is raised to the minimum, so check after).
-	if (!Props.DrawDistance.IsSet() || (Props.FadeStart.IsSet() && !(Props.FadeStart.GetValue() < Props.DrawDistance.GetValue())))
-	{
-		Props.FadeStart.Reset();
-	}
-
-	// Past the draw distance there is no shadow to cast, so a shadow distance that long says nothing.
-	if (Source.bCastShadow && Band && (!Props.DrawDistance.IsSet() || Band->Shadow < Props.DrawDistance.GetValue()))
-	{
-		Props.ShadowDistance = Band->Shadow;
-	}
-	return Props.DrawDistance.IsSet();
+	return Props.DrawDistance > 0.0;
 }
 
 FMantleDrawDistanceSource FMantleDrawDistance::ReadComponent(const UStaticMeshComponent* Component, const UStaticMesh* Mesh)
@@ -120,7 +93,6 @@ FMantleDrawDistanceSource FMantleDrawDistance::ReadComponent(const UStaticMeshCo
 	Source.LDMaxDrawDistance = Component->LDMaxDrawDistance;
 	Source.CachedMaxDrawDistance = Component->CachedMaxDrawDistance;
 	Source.bNeverDistanceCull = Component->bNeverDistanceCull;
-	Source.bCastShadow = Component->CastShadow;
 
 	if (!Mesh)
 	{
@@ -130,7 +102,6 @@ FMantleDrawDistanceSource FMantleDrawDistance::ReadComponent(const UStaticMeshCo
 	if (const UInstancedStaticMeshComponent* Instanced = Cast<UInstancedStaticMeshComponent>(Component))
 	{
 		Source.bInstanced = true;
-		Source.InstanceStartCullDistance = Instanced->InstanceStartCullDistance;
 		Source.InstanceEndCullDistance = Instanced->InstanceEndCullDistance;
 
 		// One component, one distance: sized by its largest instance, so a big one is not culled at a small one's distance.
@@ -159,7 +130,7 @@ int32 FMantleDrawDistance::CountEntities(const FMantlePlace& Place)
 		{
 			Mesh = &Instanced->Mesh;
 		}
-		Count += Mesh && Mesh->DrawDistance.IsSet() ? 1 : 0;
+		Count += Mesh && Mesh->DrawDistance > 0.0 ? 1 : 0;
 	}
 	return Count;
 }

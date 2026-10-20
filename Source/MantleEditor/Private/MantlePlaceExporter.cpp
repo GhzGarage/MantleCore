@@ -3442,17 +3442,9 @@ FString FMantlePlaceExporter::InstancedGroupKey(const FMantleStaticMeshProps& Me
 	Key += FString::Printf(TEXT("|%d|%d"), static_cast<int32>(Mesh.Collision), Mesh.bCastShadow ? 1 : 0);
 	// GhzGarage/mantle#630: only a distance that is set joins the key, so every key (and the entity ids hashed from it) of a
 	// mesh without one stays as it was, and meshes with different distances stay in different sets.
-	if (Mesh.DrawDistance.IsSet())
+	if (Mesh.DrawDistance > 0.0)
 	{
-		Key += FString::Printf(TEXT("|d%g"), Mesh.DrawDistance.GetValue());
-	}
-	if (Mesh.FadeStart.IsSet())
-	{
-		Key += FString::Printf(TEXT("|f%g"), Mesh.FadeStart.GetValue());
-	}
-	if (Mesh.ShadowDistance.IsSet())
-	{
-		Key += FString::Printf(TEXT("|s%g"), Mesh.ShadowDistance.GetValue());
+		Key += FString::Printf(TEXT("|d%g"), Mesh.DrawDistance);
 	}
 	// #596: only a surface other than default joins the key, so every key (and the entity ids hashed
 	// from it) from before surfaces stays as it was.
@@ -4798,7 +4790,7 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 	{
 		Result.InstanceTotal = FMantlePlaceInstancing::CountInstances(Place);
 		Result.DrawDistanceEntities = FMantleDrawDistance::CountEntities(Place);
-		if (!FMantleTargetFeatures::Current().Reads(MantleClientFeatures::DrawDistances) && FMantleDrawDistance::HasMeshEntities(Place))
+		if (!FMantleTargetFeatures::Current().Reads(MantleClientFeatures::DrawDistance) && FMantleDrawDistance::HasMeshEntities(Place))
 		{
 			Result.Coverage.Add(MantleCoverageCategory::StaticMeshes, EMantleCoverageOutcome::Approximated, TEXT("draw distances"),
 				FString::Printf(TEXT("left out, so meshes are drawn from any distance: %s"), FMantleTargetFeatures::NeedsNewerClient));
@@ -5088,18 +5080,10 @@ FString FMantlePlaceExporter::ToJson(const FMantlePlace& Place)
 			Writer->WriteArrayEnd();
 			Writer->WriteValue(TEXT("collision"), CollisionName(P->Collision));
 			Writer->WriteValue(TEXT("castShadow"), P->bCastShadow);
-			// GhzGarage/mantle#630: only when set (never without the drawDistances feature, which leaves them unset); fadeStart is an instance set's.
-			if (P->DrawDistance.IsSet())
+			// GhzGarage/mantle#630: only above 0 (0 is never written: absent means no limit), and never without the drawDistance feature.
+			if (P->DrawDistance > 0.0)
 			{
-				Writer->WriteValue(TEXT("drawDistance"), P->DrawDistance.GetValue());
-			}
-			if (P->FadeStart.IsSet() && Entity.Props.TryGet<FMantleInstancedMeshProps>())
-			{
-				Writer->WriteValue(TEXT("fadeStart"), P->FadeStart.GetValue());
-			}
-			if (P->ShadowDistance.IsSet())
-			{
-				Writer->WriteValue(TEXT("shadowDistance"), P->ShadowDistance.GetValue());
+				Writer->WriteValue(TEXT("drawDistance"), P->DrawDistance);
 			}
 			// #596: only when not default, so every other mesh still reaches a client that predates the
 			// key (the backend gates it, SurfaceReleased), and never beside a physics block.
