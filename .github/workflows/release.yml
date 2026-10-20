@@ -5,8 +5,8 @@
 # workflow artifact instead of a release.
 #
 # Fab has no publisher API, so the last step is by hand: paste the release's zip link into the Fab
-# publishing portal. Fab needs a link that works without sign-in, so the link only works for Fab
-# once this repo is public. See README.md, "Releasing".
+# publishing portal. Fab needs a link that works without sign-in, which works because this repo is
+# public.
 
 name: Release
 
