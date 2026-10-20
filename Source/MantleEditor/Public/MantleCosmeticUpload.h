@@ -169,6 +169,8 @@ public:
 		float BusyJitter = 1.0f;
 		/** The most one file waits on busy answers in all; past it a 503 is an ordinary failure again (RetryDelays, then the run stops). */
 		float MaxBusyWait = 600.0f;
+		/** While files are still being processed or screened, the log says which ones every this many seconds (0: never). */
+		float WaitLogEvery = 30.0f;
 	};
 
 	/**
@@ -275,6 +277,7 @@ private:
 	int32 Attempts = 0;
 	int32 ItemPolls = 0;
 	double ScreeningSince = 0.0;
+	double LastWaitLogAt = 0.0;
 
 	FString ItemJson;
 	FString ItemFingerprint;

@@ -592,6 +592,21 @@ void FMantleCosmeticUploadSession::TickAssets(double Now)
 		Fail(FString::Printf(TEXT("%s: %s"), *FirstFailed->Label, *FirstFailed->Message));
 		return;
 	}
+	if (Timing.WaitLogEvery > 0.0f && Now - LastWaitLogAt >= Timing.WaitLogEvery)
+	{
+		// A file held for screening or a moderator is otherwise silent: say what the run is waiting on.
+		LastWaitLogAt = Now;
+		FString Open;
+		int32 OpenCount = 0;
+		for (const FMantleUploadAssetProgress& Progress : Assets)
+		{
+			if (Progress.State != EMantleUploadAssetState::Done && ++OpenCount <= 5)
+			{
+				Open += FString::Printf(TEXT("%s%s (%s)"), Open.IsEmpty() ? TEXT("") : TEXT("; "), *Progress.Label, *Progress.Message);
+			}
+		}
+		AddLog(FString::Printf(TEXT("Still waiting on %d of %d files: %s"), OpenCount, Assets.Num(), *Open));
+	}
 	NextActionAt = Earliest == TNumericLimits<double>::Max() ? Now + Timing.PollEvery : Earliest;
 }
 
@@ -639,9 +654,14 @@ void FMantleCosmeticUploadSession::ApplyAssetStatus(FMantleUploadAssetProgress& 
 		Progress.ProcessingSince = Now;
 		Progress.Polls = 0;
 	}
-	Progress.Message = Asset.ModerationState == TEXT("review")
+	const FString Waiting = Asset.ModerationState == TEXT("review")
 		? FString(TEXT("Waiting for a moderator"))
 		: Asset.CookState == TEXT("passed") ? FString(TEXT("Being screened")) : FString(TEXT("Being processed"));
+	if (Progress.Message != Waiting)
+	{
+		AddLog(FString::Printf(TEXT("%s: %s"), *Progress.Label, *Waiting));
+	}
+	Progress.Message = Waiting;
 	SchedulePoll(Progress, Now);
 }
 
@@ -704,6 +724,7 @@ void FMantleCosmeticUploadSession::HandleDiff(const FMantleApiResult& Result)
 		}
 	}
 	Phase = EMantleUploadPhase::Uploading;
+	LastWaitLogAt = Now;
 	NextActionAt = Now;
 }
 
