@@ -97,4 +97,43 @@ bool FMantleHeadFitIgnoresEarsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHeadFitFrontIsForeheadTest,
+	"Mantle.Editor.HeadFit.FrontIsForehead",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHeadFitFrontIsForeheadTest::RunTest(const FString& Parameters)
+{
+	// A skull: the upper half of a 10 cm ball on the joint (X up, Y front-back with +Y the face, Z side to side).
+	TArray<FVector3f> Skull;
+	for (int32 Up = 0; Up <= 20; ++Up)
+	{
+		for (int32 Around = 0; Around < 36; ++Around)
+		{
+			const float Polar = UE_HALF_PI * Up / 20.0f;
+			const float Azimuth = UE_TWO_PI * Around / 36.0f;
+			Skull.Add(10.0f * FVector3f(FMath::Cos(Polar), FMath::Sin(Polar) * FMath::Cos(Azimuth), FMath::Sin(Polar) * FMath::Sin(Azimuth)));
+		}
+	}
+	const FBox3f Plain = FMantleHeadFit::CraniumBox(Skull);
+	TestTrue(FString::Printf(TEXT("the plain skull is 10 cm tall (%s)"), *Plain.ToString()), FMath::IsNearlyEqual(Plain.Max.X, 10.0f, 0.05f));
+
+	// The same skull with a face below the forehead: a nose 6 cm in front of it, 2 cm up.
+	TArray<FVector3f> WithNose = Skull;
+	for (int32 Index = 0; Index < 200; ++Index)
+	{
+		WithNose.Add(FVector3f(2.0f + Index * 0.01f, 16.0f, 0.0f));
+	}
+	const FBox3f Box = FMantleHeadFit::CraniumBox(WithNose);
+	TestTrue(FString::Printf(TEXT("the nose does not move the front (%.2f, without it %.2f)"), Box.Max.Y, Plain.Max.Y),
+		FMath::IsNearlyEqual(Box.Max.Y, Plain.Max.Y, 0.05f));
+	TestTrue(TEXT("the front is the forehead: the ball's front at 55% of its height"),
+		FMath::IsNearlyEqual(Box.Max.Y, 10.0f * FMath::Sqrt(1.0f - 0.55f * 0.55f), 0.6f));
+	TestTrue(TEXT("the back is the skull's own"), FMath::IsNearlyEqual(Box.Min.Y, Plain.Min.Y, 0.05f));
+	TestTrue(TEXT("the width is the skull's own"), FMath::IsNearlyEqual(Box.GetSize().Z, Plain.GetSize().Z, 0.05f));
+
+	TestFalse(TEXT("no points, no box"), static_cast<bool>(FMantleHeadFit::CraniumBox({}).IsValid));
+	return true;
+}
+
 #endif

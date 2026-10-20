@@ -14,8 +14,9 @@ class USkeletalMesh;
  *
  * The cranium: the bind-pose vertices of the body and face whose skin weights are mostly on the head bone or
  * its children, at or above the head joint, as a box in the acc_hat socket's frame (cm). Ears are left out: a hat
- * sits on the skull, and large ears (a goblin's) would otherwise stretch the box side to side. Percentiles, not
- * extremes, so a few stray vertices do not move it.
+ * sits on the skull, and large ears (a goblin's) would otherwise stretch the box side to side. Its front is the
+ * forehead, not the nose: the hat's front edge rests there. Percentiles, not extremes, so a few stray vertices do
+ * not move it.
  */
 struct MANTLEEDITOR_API FMantleHeadFit
 {
@@ -32,6 +33,12 @@ struct MANTLEEDITOR_API FMantleHeadFit
 	 */
 	static bool MeasureCranium(const USkeletalMesh* Body, const USkeletalMesh* Face, const FTransform& SocketInHead,
 		FBox3f& OutBox, int32& OutVertices, FString& OutError);
+
+	/**
+	 * The cranium box of Points (socket frame, cm; X up, Y front-back with +Y the face, Z side to side): percentiles
+	 * per axis, with the front taken only from points at or above 55% of the box's height (the forehead).
+	 */
+	static FBox3f CraniumBox(TConstArrayView<FVector3f> Points);
 
 	/** True for an ear bone (MetaHuman's FACIAL_L_Ear, FACIAL_R_Ear3, ...): its vertices are not cranium. */
 	static bool IsEarBone(const FName& Bone);

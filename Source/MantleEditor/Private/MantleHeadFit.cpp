@@ -27,9 +27,21 @@ namespace MantleHeadFitPrivate
 	// A vertex with more than this much weight on an ear is ear, not skull: a hat sits on the skull, so ears
 	// (a goblin's or an elf's that stick out far) must not widen the box.
 	static constexpr float MaxOnEar = 0.05f;
+	// The front of the box is the forehead: only vertices at least this far up the cranium (of its height above the
+	// joint) count for it. Below that the face (brow, nose, lips) sticks out further, but a hat's front edge rests on
+	// the forehead (about 9 to 10 cm up on the reference head, the cranium being 16.9 cm tall).
+	static constexpr float ForeheadFromHeight = 0.55f;
 
-	/** Appends Mesh's cranium vertices, in the socket's frame, to Out per axis. */
-	static bool AddCranium(const USkeletalMesh* Mesh, const FTransform& SocketInHead, TArray<float> (&Out)[3], FString& OutError)
+	/** The value at Fraction (0 to 1) of Values once sorted; Values is sorted in place. */
+	static float Percentile(TArray<float>& Values, const float Fraction)
+	{
+		Values.Sort();
+		const int32 Last = Values.Num() - 1;
+		return Values[FMath::Clamp(Fraction < 0.5f ? FMath::FloorToInt32(Last * Fraction) : FMath::CeilToInt32(Last * Fraction), 0, Last)];
+	}
+
+	/** Appends Mesh's cranium vertices, in the socket's frame, to Out. */
+	static bool AddCranium(const USkeletalMesh* Mesh, const FTransform& SocketInHead, TArray<FVector3f>& Out, FString& OutError)
 	{
 		FMantleGlbMesh Glb;
 		TArray<UMaterialInterface*> Materials;
@@ -80,9 +92,7 @@ namespace MantleHeadFitPrivate
 				continue;
 			}
 			const FVector Local = Frame.InverseTransformPositionNoScale(Position);
-			Out[0].Add(static_cast<float>(Local.X));
-			Out[1].Add(static_cast<float>(Local.Y));
-			Out[2].Add(static_cast<float>(Local.Z));
+			Out.Add(FVector3f(Local));
 		}
 		return true;
 	}
@@ -114,27 +124,52 @@ bool FMantleHeadFit::MeasureCranium(const USkeletalMesh* Body, const USkeletalMe
 	using namespace MantleHeadFitPrivate;
 	OutBox = FBox3f(ForceInit);
 	OutVertices = 0;
-	TArray<float> Axes[3];
+	TArray<FVector3f> Points;
 	FString BodyError;
 	FString FaceError;
-	const bool bBody = Body && AddCranium(Body, SocketInHead, Axes, BodyError);
-	const bool bFace = Face && AddCranium(Face, SocketInHead, Axes, FaceError);
-	OutVertices = Axes[0].Num();
+	const bool bBody = Body && AddCranium(Body, SocketInHead, Points, BodyError);
+	const bool bFace = Face && AddCranium(Face, SocketInHead, Points, FaceError);
+	OutVertices = Points.Num();
 	if ((!bBody && !bFace) || OutVertices < MinVertices)
 	{
 		OutError = !bBody && !bFace ? FString::Printf(TEXT("the head could not be measured (%s)"), *(BodyError.IsEmpty() ? FaceError : BodyError))
 			: FString::Printf(TEXT("the head could not be measured: only %d vertices sit on the head above its joint"), OutVertices);
 		return false;
 	}
-	for (int32 Axis = 0; Axis < 3; ++Axis)
-	{
-		Axes[Axis].Sort();
-		const int32 Last = Axes[Axis].Num() - 1;
-		OutBox.Min[Axis] = Axes[Axis][FMath::Clamp(FMath::FloorToInt32(Last * LowPercentile), 0, Last)];
-		OutBox.Max[Axis] = Axes[Axis][FMath::Clamp(FMath::CeilToInt32(Last * HighPercentile), 0, Last)];
-	}
-	OutBox.IsValid = 1;
+	OutBox = CraniumBox(Points);
 	return true;
+}
+
+FBox3f FMantleHeadFit::CraniumBox(const TConstArrayView<FVector3f> Points)
+{
+	using namespace MantleHeadFitPrivate;
+	FBox3f Box(ForceInit);
+	if (Points.IsEmpty())
+	{
+		return Box;
+	}
+	TArray<float> Axis;
+	Axis.Reserve(Points.Num());
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		Axis.Reset();
+		for (const FVector3f& Point : Points) { Axis.Add(Point[Index]); }
+		Box.Min[Index] = Percentile(Axis, LowPercentile);
+		Box.Max[Index] = Percentile(Axis, HighPercentile);
+	}
+	// The front (+Y) from the forehead up only, so a long nose or a jutting brow does not deepen the box.
+	const float Forehead = ForeheadFromHeight * Box.Max.X;
+	Axis.Reset();
+	for (const FVector3f& Point : Points)
+	{
+		if (Point.X >= Forehead) { Axis.Add(Point.Y); }
+	}
+	if (!Axis.IsEmpty())
+	{
+		Box.Max.Y = FMath::Max(Box.Min.Y, Percentile(Axis, HighPercentile));
+	}
+	Box.IsValid = 1;
+	return Box;
 }
 
 bool FMantleHeadFit::IsEarBone(const FName& Bone)
