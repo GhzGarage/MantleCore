@@ -5,6 +5,10 @@
 #include "MantleGlbWriter.h"
 
 class USkeletalMesh;
+struct FMantleConvertContext;
+struct FMantleConvertGarment;
+struct FMantleConvertMetaHumanWork;
+struct FMantleOutfitSection;
 struct FMeshDescription;
 struct FReferenceSkeleton;
 
@@ -135,6 +139,44 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 
 	/** Component-space transforms of Reference's raw bones in their reference pose. */
 	static TArray<FTransform> ComponentPose(const FReferenceSkeleton& Reference);
+
+	/**
+	 * Steps 2 to 5 on a MetaHuman Convert already made of the body (Work: its skin-only body, A-pose clip, posed mesh and
+	 * conformed Character), so the Cosmetics panel reuses the avatar's own Convert rather than conforming again. BodyName
+	 * names the body in messages; everything is saved under Folder. Fills OutResult's Character, InputScale and the rest,
+	 * leaving its Notes; false with OutRefusal ("code" and a sentence) when the MetaHuman can't be read or the body can't
+	 * be posed as it was.
+	 */
+	static bool MakeFromWork(const FMantleConvertMetaHumanWork& Work, const FString& BodyName, const FString& Folder, TConstArrayView<USkeletalMesh*> Garments,
+		FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal);
+
+	/**
+	 * Pure (tested): the garment slot a mesh beside a body is ("top", "bottom", "footwear"), from its name's words, else
+	 * from its sections when its name says no piece. Empty when it is not one piece of clothing; then OutWhy says why in
+	 * plain words when it is clothing that can't be an Outfit (several pieces in one mesh, or clothing merged with the
+	 * body's skin), and is empty when it isn't clothing at all (a body, hair, a hat, a prop). A one-piece name with a skin
+	 * section is merged clothing too.
+	 */
+	static FString GarmentSlot(const FString& MeshName, TConstArrayView<FMantleOutfitSection> Sections, FString& OutWhy);
+
+	/**
+	 * A third-party avatar's separate clothing beside Body: the skeletal meshes under Body's folder (its subfolders too,
+	 * Converted folders left out) that GarmentSlot calls a top, bottom or footwear, or merged clothing (Why says so), top
+	 * first. A piece that shares too few of Body's bones gets a Why too, and every piece does when Body itself wears
+	 * clothing (WornClothing), naming a bare body beside it to convert instead. OutNotOffered: the display names of the
+	 * others that aren't a body (hair, gloves, a belt ...).
+	 */
+	static void FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered);
+
+	/**
+	 * Why Context's avatar part (PartIndex) gives its clothing no Outfits, in plain words; empty when MakeFromWork can run:
+	 * Convert made no MetaHuman of it, made it as a face on MetaHuman's own body, or cut clothing off it (so it isn't the
+	 * bare body the clothing was made for).
+	 */
+	static FString WhyNoOutfits(const FMantleConvertContext& Context, int32 PartIndex);
+
+	/** The material slots of Body that are clothing (a top, bottom or footwear), comma-separated; empty for a bare body. */
+	static FString WornClothing(const USkeletalMesh& Body);
 
 	/** The toolset's MakeOutfitFromGarment: Make for asset paths (Garments comma-separated), as one JSON object. */
 	static FString RunForAgent(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff, const FString& Confirm);

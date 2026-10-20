@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleGarmentOutfit.h"
+#include "MantleOutfitSections.h"
 
 #include "Math/RandomStream.h"
 #include "ReferenceSkeleton.h"
@@ -174,6 +175,45 @@ bool FMantleGarmentOutfitTurnTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("the elbow lands on the template's (%s)"), *Turned[2].GetLocation().ToString()), Turned[2].GetLocation().Equals(Wanted[2].GetLocation(), 1e-3));
 	TestTrue(TEXT("the hand follows"), Turned[3].GetLocation().Equals(Wanted[3].GetLocation(), 1e-3));
 	TestTrue(TEXT("the turn is reported"), Lines.Num() == 2 && Lines[0].StartsWith(TEXT("upperarm_l 45.0")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitSlotTest,
+	"Mantle.Editor.GarmentOutfit.GarmentSlot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitSlotTest::RunTest(const FString& Parameters)
+{
+	auto Section = [](const TCHAR* Slot, const TCHAR* Material)
+	{
+		FMantleOutfitSection Out;
+		Out.SlotName = Slot;
+		Out.MaterialName = Material;
+		return Out;
+	};
+	FString Why;
+	// The name says the piece; sections that say nothing don't matter.
+	TestEqual(TEXT("a shirt is a top"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_Clothes_Shirt"), { Section(TEXT("M_Clothes"), TEXT("M_Clothes")) }, Why), FString(TEXT("top")));
+	TestEqual(TEXT("upper-case pants are a bottom"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_MECHANICGIRL_PANTS"), {}, Why), FString(TEXT("bottom")));
+	TestEqual(TEXT("shoes are footwear"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_Underwear_Shoes"), {}, Why), FString(TEXT("footwear")));
+	// Not clothing: no slot and no why.
+	TestEqual(TEXT("short hair is not a bottom"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_MECHANICGIRL_HAIR_SHORT"), {}, Why), FString());
+	TestTrue(TEXT("hair has no why"), Why.IsEmpty());
+	TestEqual(TEXT("a body is not clothing"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_Girl_Body"), { Section(TEXT("Body"), TEXT("M_Skin")) }, Why), FString());
+	TestTrue(TEXT("a body has no why"), Why.IsEmpty());
+	TestEqual(TEXT("gloves are not offered"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_MECHANICGIRL_GLOVES"), {}, Why), FString());
+	// Clothing that can't be one Outfit says why.
+	TestEqual(TEXT("a dressed body is merged"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_MechanicGirl_01"),
+		{ Section(TEXT("Body"), TEXT("M_Skin")), Section(TEXT("Shirt"), TEXT("M_Shirt")), Section(TEXT("Pants"), TEXT("M_Pants")) }, Why), FString());
+	TestTrue(TEXT("merged with the skin says so"), Why.Contains(TEXT("skin")));
+	TestEqual(TEXT("two pieces in one mesh"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_Outfit"),
+		{ Section(TEXT("Shirt"), TEXT("M_Shirt")), Section(TEXT("Pants"), TEXT("M_Pants")) }, Why), FString());
+	TestTrue(TEXT("several pieces says which"), Why.Contains(TEXT("top and bottom")));
+	TestEqual(TEXT("a shirt with skin in it"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_Shirt"), { Section(TEXT("Shirt"), TEXT("M_Shirt")), Section(TEXT("Skin"), TEXT("M_Skin")) }, Why), FString());
+	TestFalse(TEXT("a shirt with skin says why"), Why.IsEmpty());
+	// No name to go by: one piece of sections is that piece.
+	TestEqual(TEXT("sections say a bottom"), FMantleGarmentOutfit::GarmentSlot(TEXT("SK_Piece_02"), { Section(TEXT("Jeans"), TEXT("MI_Denim")) }, Why), FString(TEXT("bottom")));
 	return true;
 }
 

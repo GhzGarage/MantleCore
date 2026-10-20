@@ -15,9 +15,11 @@
 #include "MantleClothingColorPreview.h"
 #include "MantleCreatorSignIn.h"
 #include "MantleEditorActions.h"
+#include "MantleGarmentOutfit.h"
 #include "MantleHairColor.h"
 #include "MantleHairGeneration.h"
 #include "MantleMetaHumanBuild.h"
+#include "MantleMetaHumanPose.h"
 #include "MantleParametricOutfit.h"
 #include "MantleOverlayChecks.h"
 #include "MantleOverlayGuide.h"
@@ -44,7 +46,13 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture.h"
 #include "Engine/Texture2D.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Framework/Application/SlateApplication.h"
+#include "HAL/IConsoleManager.h"
+#include "MantlePng.h"
+#include "Misc/FileHelper.h"
+#include "Slate/WidgetRenderer.h"
+#include "TextureResource.h"
 #include "Framework/Docking/TabManager.h"
 #include "Misc/PackageName.h"
 #include "Misc/ScopedSlowTask.h"
@@ -3474,6 +3482,17 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 			Parts.Add(PartLabel(Index) + (ConvertContext->Parts[Index].bIncluded ? TEXT("") : TEXT(" (left out unless you tick it below)")));
 		}
 		AddLine(FString::Printf(TEXT("Parts: %s."), *FString::Join(Parts, TEXT("; "))), FSlateColor::UseSubduedForeground());
+		// A third-party avatar's separate clothing: offered after Convert, as Outfits on the MetaHuman it makes.
+		TArray<FString> Clothing;
+		for (const FMantleConvertGarment& Garment : ConvertContext->Garments)
+		{
+			Clothing.Add(Garment.Why.IsEmpty() ? FString::Printf(TEXT("%s (%s)"), *Garment.Name, *Garment.Slot) : FString::Printf(TEXT("%s (can't: %s)"), *Garment.Name, *Garment.Why));
+		}
+		if (Clothing.Num() > 0)
+		{
+			AddLine(FString::Printf(TEXT("Clothing: %s. After Convert, each piece gets a Use button that makes it a MetaHuman Outfit on this character's MetaHuman."),
+				*FString::Join(Clothing, TEXT("; "))), FSlateColor::UseSubduedForeground());
+		}
 		for (int32 Index = 0; Index < ConvertFixes.Num(); ++Index)
 		{
 			const FMantleConvertFix& Fix = ConvertFixes[Index];
@@ -3616,6 +3635,62 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 			}
 		}
 	}
+	// A third-party avatar's separate clothing: each piece a MetaHuman Outfit on the MetaHuman Convert made of its body.
+	if (ConvertContext->Garments.Num() > 0)
+	{
+		const FString WhyNone = FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0);
+		ConvertBox->AddSlot().AutoHeight().Padding(0, 10, 0, 2)
+		[
+			SNew(STextBlock)
+			.AutoWrapText(true)
+			.Font(FAppStyle::GetFontStyle("NormalFontBold"))
+			.Text(LOCTEXT("ConvertClothingHeading", "Clothing, as MetaHuman Outfits on this character's MetaHuman"))
+		];
+		if (!WhyNone.IsEmpty())
+		{
+			AddLine(WhyNone, SeverityColour(EMantleCosmeticSeverity::Warning));
+		}
+		for (int32 GarmentIndex = 0; GarmentIndex < ConvertContext->Garments.Num(); ++GarmentIndex)
+		{
+			const FMantleConvertGarment& Garment = ConvertContext->Garments[GarmentIndex];
+			const bool bCan = WhyNone.IsEmpty() && Garment.Why.IsEmpty() && Garment.Error.IsEmpty() && Garment.Mesh.IsValid();
+			FString SlotLabel = Garment.Slot;
+			if (!SlotLabel.IsEmpty())
+			{
+				SlotLabel[0] = FChar::ToUpper(SlotLabel[0]);
+			}
+			const FString Heading = SlotLabel.IsEmpty() ? Garment.Name
+				: FString::Printf(TEXT("%s: %s%s"), *SlotLabel, *Garment.Name, Garment.Outfit.IsEmpty() ? TEXT("") : TEXT(" (Outfit made)"));
+			ConvertBox->AddSlot().AutoHeight().Padding(0, 4, 0, 2)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.AutoWrapText(true)
+					.ColorAndOpacity(bCan ? FSlateColor::UseForeground() : FSlateColor::UseSubduedForeground())
+					.Text(FText::FromString(Heading))
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8, 0, 0, 0)
+				[
+					SNew(SButton)
+					.IsEnabled_Lambda([this, bCan] { return bCan && !IsRunning(); })
+					.Text(LOCTEXT("ConvertGarmentUse", "Use"))
+					.ToolTipText(LOCTEXT("ConvertGarmentUseTooltip", "Make this piece a MetaHuman Outfit on the MetaHuman Convert made of this character's body, then fill the panel with it to preview and upload in sizes. The first Use makes every piece and takes a minute."))
+					.OnClicked_Lambda([this, GarmentIndex]
+					{
+						UseConvertGarment(GarmentIndex);
+						return FReply::Handled();
+					})
+				]
+			];
+			if (!Garment.Why.IsEmpty() || !Garment.Error.IsEmpty())
+			{
+				AddLine(Garment.Why.IsEmpty() ? FString::Printf(TEXT("Couldn't make the Outfit: %s"), *Garment.Error) : Garment.Why,
+					SeverityColour(Garment.Why.IsEmpty() ? EMantleCosmeticSeverity::Error : EMantleCosmeticSeverity::Info));
+			}
+		}
+	}
 	ConvertBox->AddSlot().AutoHeight().Padding(0, 8, 0, 0)
 	[
 		SNew(SHorizontalBox)
@@ -3684,6 +3759,191 @@ void SMantleCosmeticPanel::LoadConvertedPart(const int32 PartIndex)
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT use part=%d %s mesh=%s face=%s section=%d body=%s"), PartIndex, *FMantleAvatarConverter::DescribePart(Part, *Contract),
 		*Part.Mesh->GetPathName(), Part.Face.IsValid() ? *Part.Face->GetPathName() : TEXT("none"), Part.Section,
 		Part.AuthoringBody.IsValid() ? *Part.AuthoringBody->GetPathName() : TEXT("found by the upload"));
+}
+
+void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
+{
+	if (!ConvertContext.IsValid() || !ConvertContext->Garments.IsValidIndex(GarmentIndex) || !ConvertContext->Parts.IsValidIndex(0))
+	{
+		return;
+	}
+	const FMantleConvertMetaHumanWork* Work = ConvertContext->MetaHuman.Find(0);
+	if (ConvertContext->Garments[GarmentIndex].Outfit.IsEmpty() && Work && FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0).IsEmpty())
+	{
+		// Every piece that can be an Outfit and isn't yet, at once: they share one copy of the MetaHuman as their authored body.
+		TArray<int32> Indices;
+		TArray<USkeletalMesh*> Meshes;
+		for (int32 Index = 0; Index < ConvertContext->Garments.Num(); ++Index)
+		{
+			const FMantleConvertGarment& Garment = ConvertContext->Garments[Index];
+			if (Garment.Why.IsEmpty() && Garment.Outfit.IsEmpty() && Garment.Error.IsEmpty() && Garment.Mesh.IsValid())
+			{
+				Indices.Add(Index);
+				Meshes.Add(Garment.Mesh.Get());
+			}
+		}
+		const FMantleConvertPart& Avatar = ConvertContext->Parts[0];
+		const FString BodyName = Avatar.Original.IsValid() ? Avatar.Original->GetName() : Avatar.Name;
+		const FString Folder = ConvertContext->OutputFolder / (FMantleMetaHumanSteps::AssetTag(BodyName) + TEXT("_Outfit"));
+		FMantleGarmentOutfitResult Result;
+		FString RefusalCode;
+		FString Refusal;
+		bool bMade = false;
+		{
+			FScopedSlowTask Progress(1.0f, LOCTEXT("ConvertGarmentRunning", "Making the clothing into MetaHuman Outfits on this character's MetaHuman..."));
+			Progress.MakeDialog();
+			Progress.EnterProgressFrame(1.0f);
+			bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Result, RefusalCode, Refusal);
+		}
+		for (int32 Made = 0; Made < Indices.Num(); ++Made)
+		{
+			FMantleConvertGarment& Garment = ConvertContext->Garments[Indices[Made]];
+			const FMantleGarmentOutfitPiece* Piece = bMade && Result.Pieces.IsValidIndex(Made) ? &Result.Pieces[Made] : nullptr;
+			Garment.Outfit = Piece ? Piece->Outfit : FString();
+			Garment.Error = !bMade ? Refusal : Piece ? Piece->Error : FString(TEXT("no Outfit came back"));
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT garment %s outfit=%s error=%s"), Garment.Mesh.IsValid() ? *Garment.Mesh->GetPathName() : TEXT("?"),
+				*Garment.Outfit, *Garment.Error);
+		}
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT garment outfits on %s: body gap %.2f cm, %s"), *Result.Character, Result.BodyGapCm, bMade ? TEXT("made") : *Refusal);
+	}
+	const FMantleConvertGarment Garment = ConvertContext->Garments[GarmentIndex];
+	UChaosOutfitAsset* Outfit = Garment.Outfit.IsEmpty() ? nullptr : LoadObject<UChaosOutfitAsset>(nullptr, *Garment.Outfit);
+	if (!Outfit)
+	{
+		RefreshConvertRows();
+		return;
+	}
+	SetClass(EMantleCosmeticClass::Garment);
+	for (const TSharedPtr<FString>& Option : SlotOptions)
+	{
+		if (Option.IsValid() && Option->Equals(Garment.Slot, ESearchCase::CaseSensitive))
+		{
+			Draft.Slot = *Option;
+			if (SlotCombo.IsValid())
+			{
+				SlotCombo->SetSelectedItem(Option);
+			}
+			break;
+		}
+	}
+	// The Outfit carries its own authored body (the MetaHuman); the panel finds it (RefreshOutfitAuthoringDefaults).
+	Draft.AuthoringBody.Reset();
+	Draft.AuthoringFace.Reset();
+	Draft.Name = Garment.Name;
+	SetSource(Outfit);
+	Package.Reset();
+	RefreshConvertRows();
+	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT use garment=%d %s slot=%s outfit=%s"), GarmentIndex, *Garment.Name, *Garment.Slot, *Garment.Outfit);
+}
+
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleCosmeticPanelDevShot
+{
+	/** Widget rendered offscreen at Width (its own height, wrapped text laid out at that width) over the editor's panel grey, as a PNG. */
+	bool Save(const TSharedRef<SWidget>& Widget, const FString& File, const float Width, const float MaxHeight)
+	{
+		FWidgetRenderer Renderer(true, false);
+		// The first pass lays the wrapped text out at Width; the second draws it at the height it then wants.
+		UTextureRenderTarget2D* Target = FWidgetRenderer::CreateTargetFor(FVector2D(Width, MaxHeight), TF_Bilinear, true);
+		Target->AddToRoot();
+		Renderer.DrawWidget(Target, Widget, FVector2D(Width, MaxHeight), 0.0f);
+		Widget->SlatePrepass(1.0f);
+		const float Height = FMath::Clamp(FMath::CeilToFloat(Widget->GetDesiredSize().Y) + 16.0f, 64.0f, MaxHeight);
+		Target->ResizeTarget(FMath::CeilToInt(Width), FMath::CeilToInt(Height));
+		Renderer.DrawWidget(Target, Widget, FVector2D(Width, Height), 0.0f);
+		FlushRenderingCommands();
+		TArray<FColor> Pixels;
+		FTextureRenderTargetResource* Resource = Target->GameThread_GetRenderTargetResource();
+		const bool bRead = Resource && Resource->ReadPixels(Pixels);
+		Target->RemoveFromRoot();
+		if (!bRead)
+		{
+			return false;
+		}
+		const FColor Back(26, 26, 26);
+		for (FColor& Pixel : Pixels)
+		{
+			const float Alpha = Pixel.A / 255.0f;
+			Pixel = FColor(FMath::RoundToInt(Pixel.R * Alpha + Back.R * (1 - Alpha)), FMath::RoundToInt(Pixel.G * Alpha + Back.G * (1 - Alpha)),
+				FMath::RoundToInt(Pixel.B * Alpha + Back.B * (1 - Alpha)), 255);
+		}
+		const bool bSaved = FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Target->SizeX, Target->SizeY, Pixels), *File);
+		UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT %s %dx%d %s"), *File, Target->SizeX, Target->SizeY, bSaved ? TEXT("saved") : TEXT("not saved"));
+		return bSaved;
+	}
+
+	FAutoConsoleCommand Command(
+		TEXT("Mantle.Dev.ConvertPanelShot"),
+		TEXT("Mantle.Dev.ConvertPanelShot <Character> <Directory> [Confirm keys]: converts a character in the Cosmetics panel, uses its first clothing piece, and renders the panel after each step. Nothing uploads."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&SMantleCosmeticPanel::DevConvertShot));
+}
+
+void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
+{
+	using namespace MantleCosmeticPanelDevShot;
+	if (Args.Num() < 2)
+	{
+		UE_LOG(LogMantle, Error, TEXT("MANTLE_CONVERT_SHOT usage: Mantle.Dev.ConvertPanelShot <Character> <Directory> [Confirm keys]"));
+		return;
+	}
+	FString Path = Args[0];
+	if (!FPackageName::GetShortName(Path).Contains(TEXT(".")))
+	{
+		Path += TEXT(".") + FPackageName::GetShortName(Path);
+	}
+	UObject* Character = LoadObject<UObject>(nullptr, *Path);
+	const TSharedPtr<SDockTab> Tab = FGlobalTabmanager::Get()->TryInvokeTab(TabName);
+	if (!Character || !Tab.IsValid())
+	{
+		UE_LOG(LogMantle, Error, TEXT("MANTLE_CONVERT_SHOT failed: %s did not load, or the panel did not open"), *Path);
+		return;
+	}
+	const TSharedRef<SMantleCosmeticPanel> Panel = StaticCastSharedRef<SMantleCosmeticPanel>(Tab->GetContent());
+	const FString Stem = FPaths::Combine(Args[1], FPackageName::GetShortName(Character->GetOutermost()->GetName()));
+	TArray<FString> Confirm;
+	if (Args.Num() > 2)
+	{
+		Args[2].ParseIntoArray(Confirm, TEXT("+"));
+	}
+
+	// Convert a character: pick it, list its fixes, tick the ones to confirm.
+	Panel->ConvertSource = Character;
+	Panel->OnAnalyzeConvert();
+	if (!Panel->ConvertContext.IsValid() || !Panel->ConvertBox.IsValid())
+	{
+		UE_LOG(LogMantle, Error, TEXT("MANTLE_CONVERT_SHOT %s: %s"), *Path, *Panel->ConvertStatus);
+		return;
+	}
+	const TArray<FString> Keys = FMantleAvatarConverter::FixKeys(Panel->ConvertFixes);
+	for (int32 Index = 0; Index < Keys.Num(); ++Index)
+	{
+		if (Confirm.Contains(Keys[Index]))
+		{
+			Panel->ConvertFixes[Index].bEnabled = true;
+		}
+	}
+	Panel->RefreshConvertRows();
+	Save(Panel->ConvertBox.ToSharedRef(), Stem + TEXT("_list.png"), 820.0f, 4000.0f);
+
+	Panel->OnRunConvert();
+	UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT converted: %s"), *Panel->ConvertStatus);
+	Save(Panel->ConvertBox.ToSharedRef(), Stem + TEXT("_converted.png"), 820.0f, 4000.0f);
+
+	const int32 First = Panel->ConvertContext->Garments.IndexOfByPredicate([](const FMantleConvertGarment& Garment) { return Garment.Why.IsEmpty(); });
+	if (First == INDEX_NONE || !FMantleGarmentOutfit::WhyNoOutfits(*Panel->ConvertContext, 0).IsEmpty())
+	{
+		UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT no clothing piece to use: %s"), *FMantleGarmentOutfit::WhyNoOutfits(*Panel->ConvertContext, 0));
+		return;
+	}
+	Panel->UseConvertGarment(First);
+	Save(Panel->ConvertBox.ToSharedRef(), Stem + TEXT("_used.png"), 820.0f, 4000.0f);
+	Save(Panel, Stem + TEXT("_panel.png"), 820.0f, 2400.0f);
+	for (const FMantleConvertGarment& Garment : Panel->ConvertContext->Garments)
+	{
+		UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT garment %s slot=%s outfit=%s why=%s error=%s"), *Garment.Name, *Garment.Slot, *Garment.Outfit, *Garment.Why, *Garment.Error);
+	}
+	UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT draft source=%s slot=%s name=%s"), Panel->Draft.Source.IsValid() ? *Panel->Draft.Source->GetPathName() : TEXT("none"),
+		*Panel->Draft.Slot, *Panel->Draft.Name);
 }
 
 #undef LOCTEXT_NAMESPACE

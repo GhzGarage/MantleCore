@@ -74,6 +74,14 @@ public:
 	static void UnregisterTab();
 	static void OpenTab();
 
+	/**
+	 * Maintainer command Mantle.Dev.ConvertPanelShot <Character> <Directory> [Confirm keys]: opens the panel, picks the
+	 * character under Convert a character, lists its fixes (ticking the Confirm keys, joined by +: -ExecCmds splits on commas), converts it, then
+	 * chooses Use on its first clothing piece that can be an Outfit. After each step the Convert section (and, after Use,
+	 * the whole panel) is rendered offscreen into <Directory>/<Character>_{list,converted,used,panel}.png. Nothing uploads.
+	 */
+	static void DevConvertShot(const TArray<FString>& Args);
+
 private:
 	void SetClass(EMantleCosmeticClass Class);
 	void SetSource(UObject* Source);
@@ -213,6 +221,13 @@ private:
 
 	/** #610: the draft for converted part PartIndex: its class, slot, mesh, face, section, authoring body and name, then its check's issues. */
 	void LoadConvertedPart(int32 PartIndex);
+
+	/**
+	 * A third-party avatar's separate clothing piece (FMantleConvertContext::Garments) as the panel's draft: a MetaHuman
+	 * Outfit made on the MetaHuman Convert made of the avatar's body (FMantleGarmentOutfit::MakeFromWork). The first Use
+	 * makes every piece that can be one, on one copy of that MetaHuman; later ones only load theirs.
+	 */
+	void UseConvertGarment(int32 GarmentIndex);
 
 	/** What Convert... analyses: picked in the section, else the draft's asset. */
 	UObject* GetConvertSelection() const;
