@@ -563,11 +563,14 @@ public:
 	 */
 	static void ServerChatMessagesAsync(TOptional<int64> After, FMantleApiCallback OnDone);
 	static void ServerChatSystemAsync(const FString& Text, const FString& PlayerId, FMantleApiCallback OnDone);
+	/** Script API 1.44: the same, to exactly these seated players (account UUIDs) as one line, kept private to them. */
+	static void ServerChatSystemToAsync(const FString& Text, const TArray<FString>& PlayerIds, FMantleApiCallback OnDone);
 	/** The two bodies above, public so a test can pin them. Text is JSON-escaped in full (a
 	 *  script's text may hold quotes, backslashes and control characters); playerId rides along
 	 *  only when set. */
 	static FString BuildServerChatMessagesBody(TOptional<int64> After);
-	static FString BuildServerChatSystemBody(const FString& Text, const FString& PlayerId);
+	static FString BuildServerChatSystemBody(const FString& Text, const FString& PlayerId,
+		const TArray<FString>& PlayerIds = TArray<FString>());
 
 	/**
 	 * GhzGarage/mantle#813: players send chat to their game server, which relays it here.
