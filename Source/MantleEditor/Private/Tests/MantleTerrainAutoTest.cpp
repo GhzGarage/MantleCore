@@ -16,6 +16,7 @@
 #include "Materials/MaterialExpressionMultiply.h"
 #include "Materials/MaterialExpressionOneMinus.h"
 #include "Materials/MaterialExpressionPixelNormalWS.h"
+#include "Materials/MaterialExpressionPower.h"
 #include "Materials/MaterialExpressionSaturate.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionSubtract.h"
@@ -800,6 +801,110 @@ bool FMantleTerrainAutoSamplesMaskTexturesTest::RunTest(const FString& Parameter
 	if (Evaluate(Plain, Quarter, Mask))
 	{
 		TestNearlyEqual(TEXT("the first texture coordinate set is the landscape's: (0.75, 0.25) is texel (1, 0)"), Mask, 1.0, 0.01);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleTerrainAutoReadsLayerRoughnessTest,
+	"Mantle.Editor.Terrain.AutoReadsLayerRoughness",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleTerrainAutoReadsLayerRoughnessTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleTerrainAutoTestPrivate;
+
+	auto Scalar = [](UMaterial* Material, const float Value)
+	{
+		UMaterialExpressionConstant* Constant = AddNode<UMaterialExpressionConstant>(Material);
+		Constant->R = Value;
+		return Constant;
+	};
+
+	// Through a chain: ground, rock over it by steepness, snow over both by height, in the colour and, by the same two mask nodes, in the roughness.
+	UMaterial* Chained = NewObject<UMaterial>(GetTransientPackage());
+	UMaterialExpression* Steep = AddSteepness(Chained, 4.0f);
+	UMaterialExpression* Snowy = AddHeightMask(Chained, 1000.0f);
+	Chained->GetEditorOnlyData()->BaseColor.Connect(0, AddBlend(Chained,
+		AddBlend(Chained, AddColour(Chained, TEXT("GroundColor"), FLinearColor(0.2f, 0.3f, 0.1f)), AddColour(Chained, TEXT("RockColor"), FLinearColor(0.5f, 0.5f, 0.5f)), Steep),
+		AddColour(Chained, TEXT("SnowColor"), FLinearColor(0.9f, 0.9f, 0.95f)), Snowy));
+	Chained->GetEditorOnlyData()->Roughness.Connect(0, AddBlend(Chained, AddBlend(Chained, Scalar(Chained, 0.9f), Scalar(Chained, 0.6f), Steep), Scalar(Chained, 0.3f), Snowy));
+
+	FMantleLandscapeMaterialRead Read;
+	FString Problem;
+	if (!TestTrue(TEXT("the chained material is read"), FMantleLandscapeMaterialReader::Read(Chained, 100.0, Read, Problem)) || !TestEqual(TEXT("three layers"), Read.Layers.Num(), 3))
+	{
+		AddError(Problem);
+		return false;
+	}
+	const float Expected[3] = { 0.9f, 0.6f, 0.3f };
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		TestTrue(TEXT("each layer has a roughness"), Read.Layers[Index].bHasRoughness);
+		TestNearlyEqual(TEXT("and it is the one the roughness blend gives that layer"), Read.Layers[Index].Roughness, Expected[Index], 1.0e-4f);
+	}
+	// The layer's material carries it as its roughness (what the converter writes as roughnessFactor and the client reads).
+	if (UMaterial* Rock = Cast<UMaterial>(FMantleLandscapeMaterialReader::MakeLayerMaterial(Read.Layers[1])))
+	{
+		TestNearlyEqual(TEXT("the layer material's roughness"), Rock->GetEditorOnlyData()->Roughness.Constant, 0.6f, 1.0e-4f);
+	}
+	else
+	{
+		AddError(TEXT("the rock layer has no material"));
+	}
+	FMantleLandscapeLayerLook Plain = Read.Layers[1];
+	Plain.bHasRoughness = false;
+	TestNotEqual(TEXT("a stated roughness is a material of its own"), FMantleLandscapeMaterialReader::LayerMaterialName(Plain), FMantleLandscapeMaterialReader::LayerMaterialName(Read.Layers[1]));
+	if (UMaterial* Default = Cast<UMaterial>(FMantleLandscapeMaterialReader::MakeLayerMaterial(Plain)))
+	{
+		TestNearlyEqual(TEXT("with none stated the default stands"), Default->GetEditorOnlyData()->Roughness.Constant, 0.85f, 1.0e-4f);
+	}
+
+	// By multiplying: the ground's roughness times (1 - wetness)^4, as the water of a landscape pack does. Where the water is full the roughness is 0,
+	// which is as glossy as the client draws (0.01); the ground is 0.8.
+	UMaterial* Wet = NewObject<UMaterial>(GetTransientPackage());
+	UMaterialExpression* Water = AddHeightMask(Wet, 1000.0f);
+	Wet->GetEditorOnlyData()->BaseColor.Connect(0, AddBlend(Wet, AddColour(Wet, TEXT("GroundColor"), FLinearColor(0.2f, 0.3f, 0.1f)), AddColour(Wet, TEXT("WaterColor"), FLinearColor(0.0f, 0.1f, 0.2f)), Water));
+	UMaterialExpressionOneMinus* Dry = AddNode<UMaterialExpressionOneMinus>(Wet);
+	Dry->Input.Connect(0, Water);
+	UMaterialExpressionPower* Fourth = AddNode<UMaterialExpressionPower>(Wet);
+	Fourth->Base.Connect(0, Dry);
+	Fourth->ConstExponent = 4.0f;
+	UMaterialExpressionMultiply* Glossy = AddNode<UMaterialExpressionMultiply>(Wet);
+	Glossy->A.Connect(0, Scalar(Wet, 0.8f));
+	Glossy->B.Connect(0, Fourth);
+	Wet->GetEditorOnlyData()->Roughness.Connect(0, Glossy);
+
+	FMantleLandscapeMaterialRead WetRead;
+	if (!TestTrue(TEXT("the wet material is read"), FMantleLandscapeMaterialReader::Read(Wet, 100.0, WetRead, Problem)) || !TestEqual(TEXT("two layers"), WetRead.Layers.Num(), 2))
+	{
+		AddError(Problem);
+		return false;
+	}
+	TestNearlyEqual(TEXT("the ground keeps its roughness"), WetRead.Layers[0].Roughness, 0.8f, 1.0e-4f);
+	TestTrue(TEXT("the water has one"), WetRead.Layers[1].bHasRoughness);
+	TestTrue(TEXT("at or below 0.1, so it reads as water"), WetRead.Layers[1].Roughness <= 0.1f);
+
+	// A roughness that reads the world position outside any mask is not a number per layer: the default stands, and the layer says so.
+	UMaterial* Unreadable = NewObject<UMaterial>(GetTransientPackage());
+	UMaterialExpression* UnreadableMask = AddHeightMask(Unreadable, 1000.0f);
+	Unreadable->GetEditorOnlyData()->BaseColor.Connect(0, AddBlend(Unreadable, AddColour(Unreadable, TEXT("GroundColor"), FLinearColor::Green), AddColour(Unreadable, TEXT("RockColor"), FLinearColor::Gray), UnreadableMask));
+	Unreadable->GetEditorOnlyData()->Roughness.Connect(2, AddNode<UMaterialExpressionWorldPosition>(Unreadable));
+	FMantleLandscapeMaterialRead UnreadableRead;
+	if (TestTrue(TEXT("the material is read"), FMantleLandscapeMaterialReader::Read(Unreadable, 100.0, UnreadableRead, Problem)) && TestEqual(TEXT("two layers"), UnreadableRead.Layers.Num(), 2))
+	{
+		TestFalse(TEXT("no roughness is stated"), UnreadableRead.Layers[0].bHasRoughness);
+		TestTrue(TEXT("and the layer says the default stands"), HasNote(UnreadableRead.Layers[0].Approximations, TEXT("default roughness")));
+	}
+
+	// No Roughness output: no roughness, and no note.
+	UMaterial* Bare = NewObject<UMaterial>(GetTransientPackage());
+	Bare->GetEditorOnlyData()->BaseColor.Connect(0, AddBlend(Bare, AddColour(Bare, TEXT("GroundColor"), FLinearColor::Green), AddColour(Bare, TEXT("RockColor"), FLinearColor::Gray), AddSteepness(Bare, 4.0f)));
+	FMantleLandscapeMaterialRead BareRead;
+	if (TestTrue(TEXT("a material without roughness is read"), FMantleLandscapeMaterialReader::Read(Bare, 100.0, BareRead, Problem)) && TestEqual(TEXT("two layers"), BareRead.Layers.Num(), 2))
+	{
+		TestFalse(TEXT("none is stated"), BareRead.Layers[1].bHasRoughness);
+		TestFalse(TEXT("and none is said to be lost"), HasNote(BareRead.Layers[1].Approximations, TEXT("roughness")));
 	}
 	return true;
 }

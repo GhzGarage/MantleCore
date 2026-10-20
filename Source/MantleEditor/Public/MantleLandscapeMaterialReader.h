@@ -32,6 +32,14 @@ struct MANTLEEDITOR_API FMantleLandscapeLayerLook
 	bool bHasAverage = false;
 	FLinearColor Average = FLinearColor::Black;
 
+	/**
+	 * The layer's roughness (0 to 1) where the material states one for it: an auto chain's Roughness output worked out with the chain's masks
+	 * set to show this layer alone (so a roughness multiplied by water's (1 - mask)^4 gives the water layer its glossy value). MakeLayerMaterial
+	 * carries it as the layer material's roughness, which the client reads as the layer's RoughnessFactor. Unset, the default 0.85 applies.
+	 */
+	bool bHasRoughness = false;
+	float Roughness = 0.85f;
+
 	/** The material read the layer, but found nothing of its look in it (a procedural look with no texture or constant). */
 	bool bUnreadable = false;
 

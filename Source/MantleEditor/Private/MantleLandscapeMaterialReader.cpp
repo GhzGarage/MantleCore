@@ -84,6 +84,10 @@ namespace MantleLandscapeMaterialReaderPrivate
 		Normal
 	};
 
+	/** The roughness of a layer whose material states none, and the glossiest the client is given. */
+	constexpr double DefaultLayerRoughness = 0.85;
+	constexpr double MinLayerRoughness = 0.01;
+
 	/** One call of a material function, and the call it sits inside: what a function's input resolves through. */
 	struct FLmFrame
 	{
@@ -108,6 +112,9 @@ namespace MantleLandscapeMaterialReaderPrivate
 	{
 		TArray<uint8, TInlineAllocator<4>> Masks;
 		FName FirstInputName;
+
+		/** The frame of the last material function call the path entered: where a value that is a function's output ends up. */
+		const FLmFrame* EnteredFrame = nullptr;
 	};
 
 	/** What a subgraph reads that a flat, tiled layer material cannot keep. */
@@ -352,6 +359,10 @@ namespace MantleLandscapeMaterialReaderPrivate
 					}
 					Input = FunctionOutput->A;
 					Frame = FrameFor(Call, Frame);
+					if (Trace)
+					{
+						Trace->EnteredFrame = Frame;
+					}
 					continue;
 				}
 
@@ -1640,6 +1651,13 @@ FString FMantleLandscapeAutoChain::BakedNote()
 
 namespace MantleLandscapeMaterialReaderPrivate
 {
+	/** A mask of the graph and the value it is given instead of being worked out. */
+	struct FLmMaskValue
+	{
+		FLmRef Mask;
+		double Value = 0.0;
+	};
+
 	/** Compiles the graph under an input into FLmOps: constants and parameters folded, static switches and function calls resolved, function inputs left unconnected at their defaults. */
 	class FLmProgramBuilder
 	{
@@ -1655,6 +1673,12 @@ namespace MantleLandscapeMaterialReaderPrivate
 		/** What the program takes as an approximation (a noise texture's average, a Fresnel term as 0). */
 		TArray<FString> Notes;
 
+		/** Texture samples are taken as their averages, whatever their UVs: for a value that is not worked out per sample (a layer's roughness). */
+		bool bAverageTextures = false;
+
+		/** Masks whose value is given, not worked out: a node of the graph (or one out of the same function call) that is this constant wherever it is read. */
+		TArray<FLmMaskValue> MaskValues;
+
 		/** The register of what Input is, or INDEX_NONE (and Why) when it cannot be evaluated. An unconnected Input is Fallback, or fails without one. */
 		int32 CompileInput(const FExpressionInput& Input, const FLmFrame* Frame, const bool bHasFallback, const float Fallback)
 		{
@@ -1667,6 +1691,16 @@ namespace MantleLandscapeMaterialReaderPrivate
 			if (!Ref.IsSet())
 			{
 				return bHasFallback ? Constant(1, Fallback) : Fail(TEXT("has an input of one of its blends that leads nowhere"));
+			}
+			for (const FLmMaskValue& Given : MaskValues)
+			{
+				// The same mask node, or one that comes out of the same call of a mask function (it may give the roughness an output of its own).
+				const bool bSameNode = Ref.Expression == Given.Mask.Expression && Ref.Output == Given.Mask.Output && Ref.Frame == Given.Mask.Frame;
+				const bool bSameCall = Ref.Frame != nullptr && Ref.Frame == Given.Mask.Frame && Trace.EnteredFrame == Ref.Frame;
+				if (bSameNode || bSameCall)
+				{
+					return Constant(1, Given.Value);
+				}
 			}
 			int32 Reg = CompileNode(Ref);
 			if (Reg == INDEX_NONE)
@@ -1688,6 +1722,23 @@ namespace MantleLandscapeMaterialReaderPrivate
 		int32 WidthOf(const int32 Reg) const
 		{
 			return Ops.IsValidIndex(Reg) ? Ops[Reg].Width : 0;
+		}
+
+		/** Node as a register: the root of a program that is not one of a Lerp's inputs. */
+		int32 CompileRef(const FLmRef& Node)
+		{
+			return CompileNode(Node);
+		}
+
+		/** Reg's value when it is a constant (nothing in it reads the sample), else false. */
+		bool ConstantValue(const int32 Reg, double& OutValue) const
+		{
+			if (!Ops.IsValidIndex(Reg) || Ops[Reg].Kind != ELmOp::Const)
+			{
+				return false;
+			}
+			OutValue = Ops[Reg].Value.V[0];
+			return true;
 		}
 
 		/** 1 - Reg. */
@@ -1926,7 +1977,7 @@ namespace MantleLandscapeMaterialReaderPrivate
 		/** A mask's texture sample at the UVs the graph gives it (world position, landscape coordinates, and what is built from them). INDEX_NONE, with Why as it was, when the UVs or the pixels cannot be read. */
 		int32 CompileTextureSample(const FLmRef& Node, const UMaterialExpressionTextureSample* Sample, UTexture* Texture)
 		{
-			const TSharedPtr<const FLmTexture> Pixels = TexturePixels(Texture);
+			const TSharedPtr<const FLmTexture> Pixels = bAverageTextures ? nullptr : TexturePixels(Texture);
 			if (!Pixels.IsValid())
 			{
 				return INDEX_NONE;
@@ -2742,6 +2793,64 @@ namespace MantleLandscapeMaterialReaderPrivate
 		}
 		return Builder.Finish();
 	}
+
+	/** The expression that is the Roughness a material attribute set carries (a Make or Set Material Attributes, through the Set's attribute input), or unset. */
+	FLmRef FindAttributesRoughness(FLmGraphReader& Reader, const FLmRef& Node, const int32 Depth = 0)
+	{
+		if (!Node.IsSet() || Depth > 8)
+		{
+			return FLmRef();
+		}
+		UMaterialExpression* Expression = const_cast<UMaterialExpression*>(Node.Expression);
+		const bool bMake = ClassNamed(Expression, TEXT("MaterialExpressionMakeMaterialAttributes"));
+		const bool bSet = ClassNamed(Expression, TEXT("MaterialExpressionSetMaterialAttributes"));
+		if (!bMake && !bSet)
+		{
+			return FLmRef();
+		}
+		FLmRef Attributes;
+		for (FExpressionInputIterator It{ Expression }; It; ++It)
+		{
+			if (!It.Input || !It.Input->Expression)
+			{
+				continue;
+			}
+			const FString Name = Expression->GetInputName(It.Index).ToString().Replace(TEXT(" "), TEXT(""));
+			if (Name.Equals(TEXT("Roughness"), ESearchCase::IgnoreCase))
+			{
+				return Reader.Resolve(*It.Input, Node.Frame);
+			}
+			if (bSet && NameHasAny(Name, { TEXT("Attr"), TEXT("MaterialAttributes") }))
+			{
+				Attributes = Reader.Resolve(*It.Input, Node.Frame);
+			}
+		}
+		return bSet ? FindAttributesRoughness(Reader, Attributes, Depth + 1) : FLmRef();
+	}
+
+	/**
+	 * What the material's Roughness is on the ground of one layer of a slope and height chain: the Roughness graph worked out with
+	 * the chain's masks set to show that layer alone (its own mask 1, the masks over it 0). That covers a roughness that blends per
+	 * layer by the same masks, and one that multiplies the result by a function of a mask (water's (1 - mask)^4). A texture in it
+	 * is taken as its average. False when it is not a number that way (it reads the position, the normal or a mask it cannot match).
+	 */
+	bool ChainLayerRoughness(FLmGraphReader& Reader, const FLmRef& RoughnessRoot, const FLmAutoChain& Chain, const int32 Layer, double& OutRoughness)
+	{
+		FLmProgramBuilder Builder(Reader);
+		Builder.bAverageTextures = true;
+		for (int32 Step = 0; Step < Chain.Steps.Num(); ++Step)
+		{
+			const FLmAutoStep& Mask = Chain.Steps[Step];
+			// Step k blends layer k + 1 over what is under it: its look shows where the mask is 1 (0 when inverted). Only the layer's own
+			// blend shows; the others hide, so no other layer's look leaks in.
+			const double ShownValue = Mask.bInvert ? 0.0 : 1.0;
+			FLmMaskValue& Value = Builder.MaskValues.AddDefaulted_GetRef();
+			Value.Mask = Mask.Alpha;
+			Value.Value = Step + 1 == Layer ? ShownValue : 1.0 - ShownValue;
+		}
+		const int32 Reg = Builder.CompileRef(RoughnessRoot);
+		return Reg != INDEX_NONE && Builder.ConstantValue(Reg, OutRoughness) && FMath::IsFinite(OutRoughness);
+	}
 }
 
 FString FMantleLandscapeMaterialReader::LayerNameFromParameter(const FString& Name)
@@ -2771,12 +2880,14 @@ bool FMantleLandscapeMaterialReader::Read(const UMaterialInterface* LandscapeMat
 	UMaterial* MutableBase = const_cast<UMaterial*>(Base);
 	const FExpressionInput* ColourRoot = MutableBase->GetExpressionInputForProperty(Base->bUseMaterialAttributes ? MP_MaterialAttributes : MP_BaseColor);
 	const FExpressionInput* NormalRoot = MutableBase->GetExpressionInputForProperty(Base->bUseMaterialAttributes ? MP_MaterialAttributes : MP_Normal);
+	const FExpressionInput* RoughnessRoot = MutableBase->GetExpressionInputForProperty(Base->bUseMaterialAttributes ? MP_MaterialAttributes : MP_Roughness);
 
 	FLmGraphReader Reader(LandscapeMaterial, SpacingCm > 0.0 ? SpacingCm : 100.0);
 
 	FLmLayerSet Colour;
 	FLmLayerSet Normal;
 	FLmFlags Flags;
+	FLmFlags NormalFlags; // what only the Normal output reads: its own line when the colour reads none of it
 	FLmAutoChain AutoChain;
 	TArray<FLmLayerSource> AutoNormals; // the normal look of each layer of the chain, in its order, unset where the Normal chain has none to match
 	TSharedPtr<FMantleSurfaceProgram> AutoProgram;
@@ -2909,8 +3020,11 @@ bool FMantleLandscapeMaterialReader::Read(const UMaterialInterface* LandscapeMat
 				FlagVisit.Enter(Step.Alpha);
 			}
 		}
-		Reader.ScanFlags(Root, ELmProp::Normal, Flags, FlagVisit);
+		Reader.ScanFlags(Root, ELmProp::Normal, NormalFlags, FlagVisit);
 	}
+	// Only the height is told apart by output; the slope and the camera distance are one line however they are reached.
+	Flags.bSlope = Flags.bSlope || NormalFlags.bSlope;
+	Flags.bDistance = Flags.bDistance || NormalFlags.bDistance;
 	if (Colour.Sources.Num() == 0)
 	{
 		OutProblem = FString::Printf(TEXT("Its landscape material '%s' has no Landscape Layer Blend (or Layer Weight or Layer Sample) feeding its Base Color, so it does not say what the paint layers look like."),
@@ -3026,6 +3140,33 @@ bool FMantleLandscapeMaterialReader::Read(const UMaterialInterface* LandscapeMat
 		}
 	}
 
+	// A layer's roughness, from the material's Roughness output with the chain's masks set to show that layer alone.
+	if (AutoProgram.IsValid() && RoughnessRoot && RoughnessRoot->Expression)
+	{
+		FLmRef RoughnessNode = Reader.Resolve(*RoughnessRoot, nullptr);
+		if (Base->bUseMaterialAttributes)
+		{
+			RoughnessNode = FindAttributesRoughness(Reader, RoughnessNode);
+		}
+		if (RoughnessNode.IsSet())
+		{
+			for (int32 Index = 0; Index < Out.Layers.Num(); ++Index)
+			{
+				double Roughness = 0.0;
+				if (ChainLayerRoughness(Reader, RoughnessNode, AutoChain, Index, Roughness))
+				{
+					// Mirror smooth is as glossy as the client draws; a roughness of 0 would only be a material it cannot light.
+					Out.Layers[Index].bHasRoughness = true;
+					Out.Layers[Index].Roughness = static_cast<float>(FMath::Clamp(Roughness, MinLayerRoughness, 1.0));
+				}
+				else
+				{
+					Out.Layers[Index].Approximations.Add(TEXT("its roughness is not a plain number or texture average the material states (it reads the position, the normal or a mask Mantle cannot match), so it keeps the default roughness."));
+				}
+			}
+		}
+	}
+
 	// The slope overlay: its look read like a layer's, and its weight tabulated by the normal's Z for the exporter to bake from the heightfield.
 	bool bSlopeBaked = false;
 	if (Colour.Slope.bFound)
@@ -3097,6 +3238,10 @@ bool FMantleLandscapeMaterialReader::Read(const UMaterialInterface* LandscapeMat
 	{
 		Said.Add(TEXT("it changes or blends the ground by height (a height mask or a height-blended layer); Mantle blends the layers by their painted weights alone."));
 	}
+	else if (NormalFlags.bHeight)
+	{
+		Said.Add(TEXT("its normal map also varies with the world height (a depth fade or a height mask on the Normal output); Mantle keeps each layer's normal map as it is."));
+	}
 	if (Flags.bDistance)
 	{
 		Said.Add(TEXT("it changes texture tiling or detail with the camera distance (near and far textures); Mantle keeps one tiling a layer, the near one."));
@@ -3132,8 +3277,13 @@ bool FMantleLandscapeMaterialReader::Read(const UMaterialInterface* LandscapeMat
 FString FMantleLandscapeMaterialReader::LayerMaterialName(const FMantleLandscapeLayerLook& Look)
 {
 	using namespace MantleLandscapeMaterialReaderPrivate;
-	const FString Seed = FString::Printf(TEXT("%s|%s|%s|%d|%f,%f,%f"), *Look.Layer.ToString(), Look.BaseColor ? *Look.BaseColor->GetPathName() : TEXT(""),
+	FString Seed = FString::Printf(TEXT("%s|%s|%s|%d|%f,%f,%f"), *Look.Layer.ToString(), Look.BaseColor ? *Look.BaseColor->GetPathName() : TEXT(""),
 		Look.Normal ? *Look.Normal->GetPathName() : TEXT(""), Look.bHasFlatColour ? 1 : 0, Look.FlatColour.R, Look.FlatColour.G, Look.FlatColour.B);
+	if (Look.bHasRoughness)
+	{
+		// Only a stated roughness is part of the name, so every look without one keeps the name it always had.
+		Seed += FString::Printf(TEXT("|r%f"), Look.Roughness);
+	}
 	return FString::Printf(TEXT("MantleTerrainLayer_%s_%s"), *SafeName(Look.Layer.ToString()), *ShortHash(Seed));
 }
 
@@ -3180,7 +3330,7 @@ UMaterialInterface* FMantleLandscapeMaterialReader::MakeLayerMaterial(const FMan
 		Graph->Normal.Connect(0, Sample(Look.Normal));
 	}
 	Graph->Roughness.UseConstant = true;
-	Graph->Roughness.Constant = 0.85f;
+	Graph->Roughness.Constant = Look.bHasRoughness ? Look.Roughness : static_cast<float>(MantleLandscapeMaterialReaderPrivate::DefaultLayerRoughness);
 
 	// The editor's own finishing step: it builds what GLTFExporter reads the graph through. Kept alive for the session so Check,
 	// Export and the converter all find it by the same name.
