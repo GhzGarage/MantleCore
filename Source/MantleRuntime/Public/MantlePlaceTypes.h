@@ -1182,6 +1182,71 @@ using FMantleEntityProps = TVariant<
 	FMantleWeaponSpawnProps,
 	FMantleScriptPointProps>;
 
+/** What happens to an interaction option once it has been used (the schema's afterUse). */
+enum class EMantleInteractableAfterUse : uint8
+{
+	None,
+	DisableUntilEnabled,
+	Cooldown,
+	OneShot
+};
+
+/** How an interactable's prompt is laid out (the schema's interactionDisplay.style). */
+enum class EMantleInteractablePromptStyle : uint8
+{
+	Default,
+	Balanced,
+	Informative
+};
+
+/** One thing a player can do to an interactable (the schema's interactionOption). */
+struct FMantleInteractableOptionSpec
+{
+	/** "primary" or "secondary": which interact input the option uses. */
+	bool bSecondaryKey = false;
+	FString Text;
+	double HoldSeconds = 0.0;
+	int32 PressCount = 0;
+	double PressDrainPerSecond = 0.4;
+	EMantleInteractableAfterUse AfterUse = EMantleInteractableAfterUse::None;
+	double CooldownSeconds = 0.0;
+};
+
+/** How an interactable's prompt looks (the schema's interactionDisplay). */
+struct FMantleInteractableDisplaySpec
+{
+	EMantleInteractablePromptStyle Style = EMantleInteractablePromptStyle::Default;
+	FString Title;
+	FString Description;
+	FLinearColor AccentColor = FLinearColor(0.95f, 0.62f, 0.2f);
+};
+
+/** A separately targetable bit of an interactable (the schema's interactionPart). */
+struct FMantleInteractablePartSpec
+{
+	FString Id;
+	/** Entity ids; empty means none. The builder's actors for them are resolved when the place is retained. */
+	FString AnchorEntity;
+	TArray<FString> HighlightEntities;
+	FVector PromptOffset = FVector::ZeroVector;
+	bool bOutline = true;
+	bool bHasOutlineColor = false;
+	FLinearColor OutlineColor = FLinearColor(1.0f, 0.82f, 0.25f);
+	TArray<FMantleInteractableOptionSpec> Options;
+	bool bHasDisplay = false;
+	FMantleInteractableDisplaySpec Display;
+	bool bIgnoreObstacles = false;
+};
+
+/** An entity's interactable block (the schema's interactable). */
+struct FMantleInteractableSpec
+{
+	double Range = 250.0;
+	TArray<FMantleInteractableOptionSpec> Options;
+	FMantleInteractableDisplaySpec Display;
+	TArray<FMantleInteractablePartSpec> Parts;
+};
+
 struct FMantleEntity
 {
 	FString Id;
@@ -1200,6 +1265,13 @@ struct FMantleEntity
 	 * script rather than the builder assuming it might be.
 	 */
 	bool bDynamic = false;
+
+	/**
+	 * Set when the entity can be walked up to and acted on with a key press. Not part of the entity's
+	 * type: the game side attaches the interactable component to the entity's actor once the place is
+	 * retained, on the server and on every client alike.
+	 */
+	TOptional<FMantleInteractableSpec> Interactable;
 };
 
 /**

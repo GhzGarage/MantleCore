@@ -1896,6 +1896,314 @@ namespace
 		ReadProbeNumber(Ctx, Props, TEXT("skylightScale"), Path, 0.0, 1.0, P.SkylightScale);
 	}
 
+	// An entity's interactable block (the schema's interactable). Colours are linear RGB arrays like every other
+	// colour of the place; entity references are checked for existence once every entity is read (ParseFromString).
+
+	bool IsInteractionPartId(const FString& Value)
+	{
+		if (Value.IsEmpty() || Value.Len() > 32 || !FChar::IsAlpha(Value[0]) || Value[0] > 127)
+		{
+			return false;
+		}
+		for (const TCHAR Char : Value)
+		{
+			if (Char > 127 || !(FChar::IsAlnum(Char) || Char == TEXT('_')))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	void ReadInteractableDisplay(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Obj, const FString& Path, FMantleInteractableDisplaySpec& Out)
+	{
+		RequireNoUnknownKeys(Ctx, Obj, { TEXT("style"), TEXT("title"), TEXT("description"), TEXT("accentColor") }, Path);
+		if (const TSharedPtr<FJsonValue> Style = Obj->TryGetField(TEXT("style")))
+		{
+			const FString Name = Style->Type == EJson::String ? Style->AsString() : FString();
+			if (Name == TEXT("default"))          { Out.Style = EMantleInteractablePromptStyle::Default; }
+			else if (Name == TEXT("balanced"))    { Out.Style = EMantleInteractablePromptStyle::Balanced; }
+			else if (Name == TEXT("informative")) { Out.Style = EMantleInteractablePromptStyle::Informative; }
+			else
+			{
+				Ctx.Fail(Join(Path, TEXT("style")), TEXT("must be one of default, balanced, informative"));
+			}
+		}
+		OptionalString(Obj, TEXT("title"), Out.Title);
+		OptionalString(Obj, TEXT("description"), Out.Description);
+		if (FMantlePlaceParser::CodePointLength(Out.Title) > 80)
+		{
+			Ctx.Fail(Join(Path, TEXT("title")), TEXT("is longer than 80 characters"));
+		}
+		if (FMantlePlaceParser::CodePointLength(Out.Description) > 200)
+		{
+			Ctx.Fail(Join(Path, TEXT("description")), TEXT("is longer than 200 characters"));
+		}
+		if (Obj->HasField(TEXT("accentColor")))
+		{
+			ReadColor(Ctx, Obj, TEXT("accentColor"), Path, Out.AccentColor);
+		}
+	}
+
+	void ReadInteractableOptions(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key, const FString& Path,
+		TArray<FMantleInteractableOptionSpec>& Out)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* List = nullptr;
+		if (!Obj->HasField(Key))
+		{
+			return;
+		}
+		const FString ListPath = Join(Path, Key);
+		if (!Obj->TryGetArrayField(Key, List))
+		{
+			Ctx.Fail(ListPath, TEXT("must be an array"));
+			return;
+		}
+		if (List->Num() > FMantlePlaceLimits::MaxInteractableOptions)
+		{
+			Ctx.Fail(ListPath, FString::Printf(TEXT("has more than %d entries"), FMantlePlaceLimits::MaxInteractableOptions));
+			return;
+		}
+		bool bUsedPrimary = false;
+		bool bUsedSecondary = false;
+		for (int32 Number = 0; Number < List->Num(); ++Number)
+		{
+			const FString OptionPath = Index(ListPath, Number);
+			const TSharedPtr<FJsonObject>* Option = nullptr;
+			if (!(*List)[Number]->TryGetObject(Option))
+			{
+				Ctx.Fail(OptionPath, TEXT("must be an object"));
+				continue;
+			}
+			RequireNoUnknownKeys(
+				Ctx, *Option,
+				{ TEXT("key"), TEXT("text"), TEXT("holdSeconds"), TEXT("pressCount"), TEXT("pressDrainPerSecond"),
+				  TEXT("afterUse"), TEXT("cooldownSeconds") },
+				OptionPath);
+
+			FMantleInteractableOptionSpec Spec;
+			if (const TSharedPtr<FJsonValue> KeyValue = (*Option)->TryGetField(TEXT("key")))
+			{
+				const FString Name = KeyValue->Type == EJson::String ? KeyValue->AsString() : FString();
+				if (Name == TEXT("primary"))        { Spec.bSecondaryKey = false; }
+				else if (Name == TEXT("secondary")) { Spec.bSecondaryKey = true; }
+				else
+				{
+					Ctx.Fail(Join(OptionPath, TEXT("key")), TEXT("must be one of primary, secondary"));
+				}
+			}
+			bool& bUsed = Spec.bSecondaryKey ? bUsedSecondary : bUsedPrimary;
+			if (bUsed)
+			{
+				Ctx.Fail(Join(OptionPath, TEXT("key")), TEXT("is used by another option of this list; each option needs its own key"));
+			}
+			bUsed = true;
+
+			OptionalString(*Option, TEXT("text"), Spec.Text);
+			if (FMantlePlaceParser::CodePointLength(Spec.Text) > 80)
+			{
+				Ctx.Fail(Join(OptionPath, TEXT("text")), TEXT("is longer than 80 characters"));
+			}
+			if ((*Option)->HasField(TEXT("holdSeconds")) && RequireNumber(Ctx, *Option, TEXT("holdSeconds"), OptionPath, Spec.HoldSeconds))
+			{
+				RangeCheck(Ctx, Spec.HoldSeconds, 0.0, 30.0, Join(OptionPath, TEXT("holdSeconds")));
+			}
+			double Presses = 0.0;
+			if ((*Option)->HasField(TEXT("pressCount")) && RequireNumber(Ctx, *Option, TEXT("pressCount"), OptionPath, Presses))
+			{
+				ReadBoundedInt(Ctx, Presses, 0, 100, Join(OptionPath, TEXT("pressCount")), Spec.PressCount);
+			}
+			if ((*Option)->HasField(TEXT("pressDrainPerSecond"))
+				&& RequireNumber(Ctx, *Option, TEXT("pressDrainPerSecond"), OptionPath, Spec.PressDrainPerSecond))
+			{
+				RangeCheck(Ctx, Spec.PressDrainPerSecond, 0.0, 10.0, Join(OptionPath, TEXT("pressDrainPerSecond")));
+			}
+			if (const TSharedPtr<FJsonValue> AfterUse = (*Option)->TryGetField(TEXT("afterUse")))
+			{
+				const FString Name = AfterUse->Type == EJson::String ? AfterUse->AsString() : FString();
+				if (Name == TEXT("none"))                     { Spec.AfterUse = EMantleInteractableAfterUse::None; }
+				else if (Name == TEXT("disableUntilEnabled")) { Spec.AfterUse = EMantleInteractableAfterUse::DisableUntilEnabled; }
+				else if (Name == TEXT("cooldown"))            { Spec.AfterUse = EMantleInteractableAfterUse::Cooldown; }
+				else if (Name == TEXT("oneShot"))             { Spec.AfterUse = EMantleInteractableAfterUse::OneShot; }
+				else
+				{
+					Ctx.Fail(Join(OptionPath, TEXT("afterUse")), TEXT("must be one of none, disableUntilEnabled, cooldown, oneShot"));
+				}
+			}
+			if ((*Option)->HasField(TEXT("cooldownSeconds"))
+				&& RequireNumber(Ctx, *Option, TEXT("cooldownSeconds"), OptionPath, Spec.CooldownSeconds))
+			{
+				RangeCheck(Ctx, Spec.CooldownSeconds, 0.0, 3600.0, Join(OptionPath, TEXT("cooldownSeconds")));
+			}
+			if (Spec.AfterUse == EMantleInteractableAfterUse::Cooldown && Spec.CooldownSeconds <= 0.0)
+			{
+				Ctx.Fail(Join(OptionPath, TEXT("cooldownSeconds")), TEXT("must be above 0 when afterUse is cooldown"));
+			}
+			Out.Add(MoveTemp(Spec));
+		}
+	}
+
+	void ReadInteractableEntityId(FParseContext& Ctx, const FString& Value, const FString& Path)
+	{
+		// Same pattern as the schema's entityId.
+		bool bOk = Value.StartsWith(TEXT("ent_")) && Value.Len() >= 5 && Value.Len() <= 44;
+		for (int32 Position = 4; bOk && Position < Value.Len(); ++Position)
+		{
+			const TCHAR Char = Value[Position];
+			bOk = (Char >= TEXT('a') && Char <= TEXT('z')) || (Char >= TEXT('0') && Char <= TEXT('9')) || Char == TEXT('_');
+		}
+		if (!bOk)
+		{
+			Ctx.Fail(Path, FString::Printf(TEXT("'%s' is not a valid entity id"), *Value));
+		}
+	}
+
+	void ReadInteractable(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Entity, const FString& Path, TOptional<FMantleInteractableSpec>& Out)
+	{
+		if (!Entity->HasField(TEXT("interactable")))
+		{
+			return;
+		}
+		const FString BlockPath = Join(Path, TEXT("interactable"));
+		const TSharedPtr<FJsonObject>* Block = nullptr;
+		if (!Entity->TryGetObjectField(TEXT("interactable"), Block))
+		{
+			Ctx.Fail(BlockPath, TEXT("must be an object"));
+			return;
+		}
+		RequireNoUnknownKeys(Ctx, *Block, { TEXT("range"), TEXT("options"), TEXT("display"), TEXT("parts") }, BlockPath);
+
+		FMantleInteractableSpec Spec;
+		if ((*Block)->HasField(TEXT("range")) && RequireNumber(Ctx, *Block, TEXT("range"), BlockPath, Spec.Range))
+		{
+			RangeCheck(Ctx, Spec.Range, FMantlePlaceLimits::MinInteractableRange, FMantlePlaceLimits::MaxInteractableRange,
+				Join(BlockPath, TEXT("range")));
+		}
+		ReadInteractableOptions(Ctx, *Block, TEXT("options"), BlockPath, Spec.Options);
+		if ((*Block)->HasField(TEXT("display")))
+		{
+			const TSharedPtr<FJsonObject>* Display = nullptr;
+			if ((*Block)->TryGetObjectField(TEXT("display"), Display))
+			{
+				ReadInteractableDisplay(Ctx, *Display, Join(BlockPath, TEXT("display")), Spec.Display);
+			}
+			else
+			{
+				Ctx.Fail(Join(BlockPath, TEXT("display")), TEXT("must be an object"));
+			}
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* Parts = nullptr;
+		if ((*Block)->HasField(TEXT("parts")))
+		{
+			const FString PartsPath = Join(BlockPath, TEXT("parts"));
+			if (!(*Block)->TryGetArrayField(TEXT("parts"), Parts))
+			{
+				Ctx.Fail(PartsPath, TEXT("must be an array"));
+			}
+			else if (Parts->Num() > FMantlePlaceLimits::MaxInteractableParts)
+			{
+				Ctx.Fail(PartsPath, FString::Printf(TEXT("has more than %d entries"), FMantlePlaceLimits::MaxInteractableParts));
+			}
+			else
+			{
+				TSet<FString> PartIds;
+				for (int32 Number = 0; Number < Parts->Num(); ++Number)
+				{
+					const FString PartPath = Index(PartsPath, Number);
+					const TSharedPtr<FJsonObject>* Part = nullptr;
+					if (!(*Parts)[Number]->TryGetObject(Part))
+					{
+						Ctx.Fail(PartPath, TEXT("must be an object"));
+						continue;
+					}
+					RequireNoUnknownKeys(
+						Ctx, *Part,
+						{ TEXT("id"), TEXT("anchor"), TEXT("highlight"), TEXT("promptOffset"), TEXT("outline"), TEXT("outlineColor"),
+						  TEXT("options"), TEXT("display"), TEXT("ignoreObstacles") },
+						PartPath);
+
+					FMantleInteractablePartSpec PartSpec;
+					if (RequireString(Ctx, *Part, TEXT("id"), PartPath, PartSpec.Id))
+					{
+						if (!IsInteractionPartId(PartSpec.Id))
+						{
+							Ctx.Fail(Join(PartPath, TEXT("id")), FString::Printf(TEXT("'%s' is not a valid part id"), *PartSpec.Id));
+						}
+						else if (PartIds.Contains(PartSpec.Id))
+						{
+							Ctx.Fail(Join(PartPath, TEXT("id")), FString::Printf(TEXT("'%s' is another part's id; part ids are unique"), *PartSpec.Id));
+						}
+						PartIds.Add(PartSpec.Id);
+					}
+					if ((*Part)->HasField(TEXT("anchor")) && RequireString(Ctx, *Part, TEXT("anchor"), PartPath, PartSpec.AnchorEntity))
+					{
+						ReadInteractableEntityId(Ctx, PartSpec.AnchorEntity, Join(PartPath, TEXT("anchor")));
+					}
+					const TArray<TSharedPtr<FJsonValue>>* Highlight = nullptr;
+					if ((*Part)->HasField(TEXT("highlight")))
+					{
+						const FString HighlightPath = Join(PartPath, TEXT("highlight"));
+						if (!(*Part)->TryGetArrayField(TEXT("highlight"), Highlight))
+						{
+							Ctx.Fail(HighlightPath, TEXT("must be an array"));
+						}
+						else if (Highlight->Num() > FMantlePlaceLimits::MaxInteractableHighlights)
+						{
+							Ctx.Fail(HighlightPath, FString::Printf(TEXT("has more than %d entries"), FMantlePlaceLimits::MaxInteractableHighlights));
+						}
+						else
+						{
+							for (int32 H = 0; H < Highlight->Num(); ++H)
+							{
+								FString Target;
+								if ((*Highlight)[H]->Type == EJson::String && (*Highlight)[H]->TryGetString(Target))
+								{
+									ReadInteractableEntityId(Ctx, Target, Index(HighlightPath, H));
+									PartSpec.HighlightEntities.Add(Target);
+								}
+								else
+								{
+									Ctx.Fail(Index(HighlightPath, H), TEXT("must be an entity id"));
+								}
+							}
+						}
+					}
+					if ((*Part)->HasField(TEXT("promptOffset")))
+					{
+						TArray<double> Offset;
+						if (ReadNumberArray(Ctx, *Part, TEXT("promptOffset"), 3, PartPath, Offset))
+						{
+							PartSpec.PromptOffset = FVector(Offset[0], Offset[1], Offset[2]);
+						}
+					}
+					ReadStrictOptionalBool(Ctx, *Part, TEXT("outline"), PartPath, PartSpec.bOutline);
+					ReadStrictOptionalBool(Ctx, *Part, TEXT("ignoreObstacles"), PartPath, PartSpec.bIgnoreObstacles);
+					if ((*Part)->HasField(TEXT("outlineColor")))
+					{
+						PartSpec.bHasOutlineColor = ReadColor(Ctx, *Part, TEXT("outlineColor"), PartPath, PartSpec.OutlineColor);
+					}
+					ReadInteractableOptions(Ctx, *Part, TEXT("options"), PartPath, PartSpec.Options);
+					if ((*Part)->HasField(TEXT("display")))
+					{
+						const TSharedPtr<FJsonObject>* Display = nullptr;
+						if ((*Part)->TryGetObjectField(TEXT("display"), Display))
+						{
+							PartSpec.bHasDisplay = true;
+							ReadInteractableDisplay(Ctx, *Display, Join(PartPath, TEXT("display")), PartSpec.Display);
+						}
+						else
+						{
+							Ctx.Fail(Join(PartPath, TEXT("display")), TEXT("must be an object"));
+						}
+					}
+					Spec.Parts.Add(MoveTemp(PartSpec));
+				}
+			}
+		}
+		Out = MoveTemp(Spec);
+	}
+
 	void ParseEntityProps(
 		FParseContext& Ctx,
 		const TSharedPtr<FJsonObject>& Props,
@@ -2422,7 +2730,7 @@ namespace
 		RequireNoUnknownKeys(
 			Ctx, Obj,
 			{ TEXT("id"), TEXT("type"), TEXT("name"), TEXT("parent"), TEXT("transform"),
-			  TEXT("properties"), TEXT("tags"), TEXT("dynamic") },
+			  TEXT("properties"), TEXT("tags"), TEXT("dynamic"), TEXT("interactable") },
 			Path);
 
 		FMantleEntity Entity;
@@ -2474,6 +2782,7 @@ namespace
 			}
 		}
 		OptionalBool(Obj, TEXT("dynamic"), Entity.bDynamic);
+		ReadInteractable(Ctx, Obj, Path, Entity.Interactable);
 		// A physics body moves, so it is exempt from the builder's static freeze whatever
 		// "dynamic" says.
 		if (MantlePhysicsOf(Entity))
@@ -3410,6 +3719,36 @@ FMantleParseResult FMantlePlaceParser::ParseFromString(const FString& Json, cons
 			Ctx.Fail(
 				Join(Index(TEXT("/entities"), i), TEXT("parent")),
 				FString::Printf(TEXT("'%s' does not name any entity in this place"), *Entity.Parent));
+		}
+	}
+
+	// A part's anchor and highlight are entities of this place, as validate.py's check_interactable_rules and the
+	// backend's interactableReferences hold.
+	for (int32 i = 0; i < Place.Entities.Num(); ++i)
+	{
+		const FMantleEntity& Entity = Place.Entities[i];
+		if (!Entity.Interactable)
+		{
+			continue;
+		}
+		const FString PartsPath = Join(Join(Index(TEXT("/entities"), i), TEXT("interactable")), TEXT("parts"));
+		for (int32 PartIndex = 0; PartIndex < Entity.Interactable->Parts.Num(); ++PartIndex)
+		{
+			const FMantleInteractablePartSpec& Part = Entity.Interactable->Parts[PartIndex];
+			const FString PartPath = Index(PartsPath, PartIndex);
+			if (!Part.AnchorEntity.IsEmpty() && !EntityIds.Contains(Part.AnchorEntity))
+			{
+				Ctx.Fail(Join(PartPath, TEXT("anchor")),
+					FString::Printf(TEXT("'%s' does not name any entity in this place"), *Part.AnchorEntity));
+			}
+			for (int32 H = 0; H < Part.HighlightEntities.Num(); ++H)
+			{
+				if (!EntityIds.Contains(Part.HighlightEntities[H]))
+				{
+					Ctx.Fail(Index(Join(PartPath, TEXT("highlight")), H),
+						FString::Printf(TEXT("'%s' does not name any entity in this place"), *Part.HighlightEntities[H]));
+				}
+			}
 		}
 	}
 
