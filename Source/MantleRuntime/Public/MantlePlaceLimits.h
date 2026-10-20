@@ -26,6 +26,14 @@ struct MANTLERUNTIME_API FMantlePlaceLimits
 	/** entities[].tags[]. */
 	static constexpr int32 MaxTagLength = 40;
 
+	/** An entity's interactable block (schema/place.schema.json): the parts, the options of a list (one per key),
+	 *  the entities a part's outline draws, and the ranges. */
+	static constexpr int32 MaxInteractableParts = 16;
+	static constexpr int32 MaxInteractableOptions = 2;
+	static constexpr int32 MaxInteractableHighlights = 16;
+	static constexpr double MinInteractableRange = 50.0;
+	static constexpr double MaxInteractableRange = 5000.0;
+
 	/** StaticMesh, InstancedMesh and SkeletalMesh materials[]. */
 	static constexpr int32 MaxMaterialSlots = 16;
 

@@ -554,6 +554,35 @@ interface InputService {
 }
 const Input: InputService;
 
+/** Let players walk up to an object and act on it with a key press, and hear when they do. A place can mark an object interactable itself; here a script makes one, changes what players can do to it, and reacts. The server decides everything: change things and listen to Interacted on the server. The client events are for the local player and only for effects such as a sound or a glow. */
+interface InteractionService {
+	/** The local player let go of a hold or mash, or its progress drained away, or the part stopped being usable (client only; for effects). A hold or mash that finishes fires Interacted on the server instead. */
+	readonly cancelled: Signal<[entity: Entity, part: string, action: string]>;
+	/** A player used one of the entity's options (server only). part is the id of the part they used ("" for the object as a whole) and action is "Primary" or "Secondary". A hold or mash fires it once, when it is finished. This is the event that counts: it is checked on the server, so a player out of range, behind a wall or on cooldown never gets here. Connect to it, check which entity it is, and do what the use should do. */
+	readonly interacted: Signal<[entity: Entity, player: Player, part: string, action: string]>;
+	/** How far the local player's hold or mash has got, 0 to 1, as it changes (client only; for effects such as a rising sound). */
+	readonly progress: Signal<[entity: Entity, part: string, action: string, progress: number]>;
+	/** The local player's aim came onto a part of an interactable entity and its prompt appeared (client only; for effects, not for changing the game). */
+	readonly selected: Signal<[entity: Entity, part: string]>;
+	/** The local player began holding or mashing an option (client only; for effects). */
+	readonly started: Signal<[entity: Entity, part: string, action: string]>;
+	/** The local player's aim left a part, or it stopped being usable (client only; for effects). */
+	readonly unselected: Signal<[entity: Entity, part: string]>;
+	/** Make the entity not interactable any more, for everyone: no prompt, no key. SetOptions makes it interactable again with the options you give. (server only) */
+	remove(entity: Entity): void;
+	/** Change how the entity's prompt looks, for everyone. Only the fields you give change. Style is "Default" (the key and text of each option, stacked), "Balanced" (a panel with the Title on top and the options under it) or "Informative" (like Balanced, with the Description beside the options and an accent line); Balanced and Informative need a Title and show as Default without one. Title is up to 80 characters, Description up to 200, and AccentColor is "#RRGGBB". (server only) */
+	setDisplay(entity: Entity, display: { style?: string | undefined; title?: string | undefined; description?: string | undefined; accentColor?: string | undefined }): void;
+	/** Turn one option of the entity off or back on, for everyone. action is "Primary" or "Secondary", the input the option uses. Turning an option on also ends its cooldown early. An option with AfterUse "OneShot" that was used stays used. Pass a part's id for an object with several parts; leave it out for the object as a whole. (server only) */
+	setEnabled(entity: Entity, action: string, enabled: boolean, part?: string): void;
+	/** Make the entity interactable and set what players can do to it, for everyone. options is a list of at most two tables, one for each input: Key ("Primary" by default, or "Secondary"), Text (what the prompt says beside the key, such as "Open door"; leave it out to show the key alone), HoldSeconds (hold the key this long; 0 is a tap), PressCount (mash the key this many times instead; wins over HoldSeconds), PressDrainPerSecond (how fast a mash's progress drains, 0 to 10), AfterUse ("None", "DisableUntilEnabled", "Cooldown" or "OneShot") and CooldownSeconds (needed above 0 for "Cooldown"). Pass a part's id to change only that part of an object the place gave several parts; leave it out for the object as a whole. An empty list leaves the object with nothing to do. Example: Interaction:SetOptions(door, {{Key = "Primary", Text = "Open door"}}) (server only) */
+	setOptions(entity: Entity, options: ({ key?: string | undefined; text?: string | undefined; holdSeconds?: number | undefined; pressCount?: number | undefined; pressDrainPerSecond?: number | undefined; afterUse?: string | undefined; cooldownSeconds?: number | undefined })[], part?: string): void;
+	/** Set how close a player must stand to the entity, in centimetres, for the prompt to show and the key to work. Clamped to 50..5000. A place's default is 250. (server only) */
+	setRange(entity: Entity, range: number): void;
+	/** Make one option of the entity unusable for this many seconds (up to 3600), for everyone, as if it had just been used with AfterUse "Cooldown". action is "Primary" or "Secondary". SetEnabled ends it early. Pass a part's id for an object with several parts; leave it out for the object as a whole. (server only) */
+	startCooldown(entity: Entity, action: string, seconds: number, part?: string): void;
+}
+const Interaction: InteractionService;
+
 /** The built-in leaderboard panel: players press Tab (or pick Leaderboard in the game menu) to see the top 10 of one of this place's ordered stores, with each player's name and picture (server only). */
 interface LeaderboardService {
 	/** Take the leaderboard panel down: players no longer see it until Configure shows a board again. The store keeps its entries. (server only) */
