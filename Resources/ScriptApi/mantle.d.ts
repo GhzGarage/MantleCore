@@ -683,8 +683,8 @@ interface MatchService {
 	readonly roundEnded: Signal<[round: number, winner: string | undefined, reason: string]>;
 	/** A round began (StartRound), on the server. round is its number, starting at 1. */
 	readonly roundStarted: Signal<[round: number]>;
-	/** State changed, on the server: Waiting, InProgress or Ended. Fires after RoundStarted or RoundEnded. */
-	readonly stateChanged: Signal<[state: string, old: string]>;
+	/** State changed, on the server. Arguments are the old state, then the new one (each "Waiting", "InProgress" or "Ended"), the same order as PlayerTeamChanged. Fires after RoundStarted or RoundEnded. */
+	readonly stateChanged: Signal<[old: string, new: string]>;
 	/** End the whole match. A running round ends first (RoundEnded fires with reason "MatchEnded"), then State becomes Ended. Returns false when the match has already ended. (server only) */
 	endMatch(winner?: string | undefined): boolean;
 	/** End the running round: RoundEnded fires with winner (a team name, a player's name, anything up to 64 characters, or nil for none) and reason "Ended", and State goes back to Waiting. Returns false when no round is running. (server only) */
@@ -803,7 +803,7 @@ const Storage: StorageService;
 interface TeamsService {
 	/** Whether players on the same team can hurt each other (false by default). When false, damage between teammates is ignored everywhere damage goes through the health system: weapons, melee, explosions and Player:TakeDamage. Hits from nobody, and a player's own hits, still count. Setting it is server only. */
 	friendlyFire: boolean;
-	/** A player joined, left or switched team, on the server and on every client. old and new are team names; nil means no team. */
+	/** A player joined, left or switched team, on the server and on every client. Arguments are the player, the old team, then the new team (team names; nil means no team). */
 	readonly playerTeamChanged: Signal<[player: Player, old: string | undefined, new: string | undefined]>;
 	/** Define a team. name is 1 to 32 characters and must be new. color is "#RRGGBB" (white when left out), for a HUD or a nameplate to use. Up to 16 teams. Example: Teams:Create("Red", "#E53935") (server only) */
 	create(name: string, color?: string | undefined): void;

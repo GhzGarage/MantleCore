@@ -682,7 +682,7 @@ declare extern type MatchService with
 	RoundEnded: Signal<(number, string?, string)>
 	--- A round began (StartRound), on the server. round is its number, starting at 1.
 	RoundStarted: Signal<(number)>
-	--- State changed, on the server: Waiting, InProgress or Ended. Fires after RoundStarted or RoundEnded.
+	--- State changed, on the server. Arguments are the old state, then the new one (each "Waiting", "InProgress" or "Ended"), the same order as PlayerTeamChanged. Fires after RoundStarted or RoundEnded.
 	StateChanged: Signal<(string, string)>
 	--- End the whole match. A running round ends first (RoundEnded fires with reason "MatchEnded"), then State becomes Ended. Returns false when the match has already ended. (server only)
 	function EndMatch(self, winner: string?): boolean
@@ -802,7 +802,7 @@ declare Storage: StorageService
 declare extern type TeamsService with
 	--- Whether players on the same team can hurt each other (false by default). When false, damage between teammates is ignored everywhere damage goes through the health system: weapons, melee, explosions and Player:TakeDamage. Hits from nobody, and a player's own hits, still count. Setting it is server only.
 	FriendlyFire: boolean
-	--- A player joined, left or switched team, on the server and on every client. old and new are team names; nil means no team.
+	--- A player joined, left or switched team, on the server and on every client. Arguments are the player, the old team, then the new team (team names; nil means no team).
 	PlayerTeamChanged: Signal<(Player, string?, string?)>
 	--- Define a team. name is 1 to 32 characters and must be new. color is "#RRGGBB" (white when left out), for a HUD or a nameplate to use. Up to 16 teams. Example: Teams:Create("Red", "#E53935") (server only)
 	function Create(self, name: string, color: string?): ()
