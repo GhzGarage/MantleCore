@@ -1603,7 +1603,7 @@ void FMantlePlaceValidator::CheckPlaceName(const FString& Name, FMantleValidatio
 	}
 }
 
-FMantleValidationResult FMantlePlaceValidator::Validate(UWorld* World)
+FMantleValidationResult FMantlePlaceValidator::Validate(UWorld* World, const bool bThinInstances)
 {
 	FMantleValidationResult Result;
 
@@ -1846,12 +1846,15 @@ FMantleValidationResult FMantlePlaceValidator::Validate(UWorld* World)
 		}
 		if (InstanceTotal > FMantlePlaceLimits::MaxInstancesPerPlace)
 		{
+			// GhzGarage/mantle#818: Publish offers even thinning, with its numbers; when it was chosen this is only a note, and Export
+			// removes the instances and reports how many.
 			Result.Issues.Add(FMantleValidationIssue{
-				EMantleIssueSeverity::Error,
+				bThinInstances ? EMantleIssueSeverity::Warning : EMantleIssueSeverity::Error,
 				FString(),
 				FString::Printf(TEXT("This level has %lld instanced meshes (foliage, PCG output, instanced components); a place holds at most %d."),
 					InstanceTotal, FMantlePlaceLimits::MaxInstancesPerPlace),
-				TEXT("Thin them out, or split the world into more than one place.") });
+				bThinInstances ? TEXT("They are thinned evenly when the place is exported, foliage first; the coverage report says how many.")
+					: TEXT("Publish can thin them evenly and shows how many go before you choose it (Mantle.Publish -Thin=auto does it without the window), or split the world into more than one place.") });
 		}
 	}
 

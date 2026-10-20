@@ -159,7 +159,7 @@ bool FMantlePlaceThumbnailExportTest::RunTest(const FString& Parameters)
 	const FMantleExportResult Exported = FMantlePlaceExporter::Export(Test.World, Options);
 	TestEqual(TEXT("metadata.thumbnail is the uploaded id"), Exported.Place.Metadata.Thumbnail, Id);
 	TestTrue(TEXT("and the manifest lists it"), Exported.Place.Assets.ContainsByPredicate([&Id](const FMantleAssetRef& Ref) { return Ref.Id == Id; }));
-	TestTrue(TEXT("and the place file carries it"), FMantlePlaceExporter::ToJson(Exported.Place).Contains(TEXT("\"thumbnail\": \"") + Id + TEXT("\"")));
+	TestTrue(TEXT("and the place file carries it"), FMantlePlaceExporter::ToJson(Exported.Place).Contains(TEXT("\"thumbnail\":\"") + Id + TEXT("\"")));
 	return true;
 }
 

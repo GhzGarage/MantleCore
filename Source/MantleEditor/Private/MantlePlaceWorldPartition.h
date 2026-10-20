@@ -2,17 +2,19 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UObject/WeakObjectPtrTemplates.h"
 
 struct FMantleParseError;
 struct FMantleValidationIssue;
+class UObject;
 class UWorld;
 
 /**
  * World Partition levels (#450). Check and Export walk the level's loaded actors, and in a World
  * Partition level an actor in a cell the editor has not loaded is not in the world at all, so it
- * would be missing from the place without a word. Mantle refuses such a level instead, naming World
- * Partition and how to load the rest, rather than loading every cell itself: a large world may not
- * fit in memory at once, and Check must not change what the creator has loaded.
+ * would be missing from the place without a word. Check this place does not change what the creator
+ * has loaded, so it names World Partition and how to load the rest; Export refuses a partial level.
+ * Publish (GhzGarage/mantle#818) loads every cell itself first (LoadAll) and lets them go when it ends.
  */
 class FMantlePlaceWorldPartition
 {
@@ -51,4 +53,35 @@ public:
 
 	/** Export's half: the same refusal as an export error, so no path publishes a partial place. */
 	static void CheckExport(UWorld* World, TArray<FMantleParseError>& OutErrors);
+
+	/** What LoadAll did. */
+	struct FLoadResult
+	{
+		/** Actors in unloaded cells before, and still unloaded after (a data layer that is off, or a cell that would not load). */
+		int32 UnloadedBefore = 0;
+		int32 UnloadedAfter = 0;
+
+		/** The process's committed memory (FPlatformMemory UsedVirtual) before and after, in megabytes; -1 when nothing was loaded. */
+		int64 CommitBeforeMB = -1;
+		int64 CommitAfterMB = -1;
+
+		/** The adapter holding the loaded cells; ReleaseLoaded lets it go. */
+		TWeakObjectPtr<UObject> Adapter;
+
+		bool bLoaded() const { return Adapter.IsValid(); }
+		int32 Loaded() const { return UnloadedBefore - UnloadedAfter; }
+	};
+
+	/**
+	 * Loads every cell of World's World Partition (GhzGarage/mantle#818), so Publish exports the whole level instead of refusing the
+	 * unloaded part. Check this place never calls it: Check does not change what the creator has loaded. Does nothing, and
+	 * allocates no adapter, for a level without one or with everything loaded. Editor only; logs what it loaded and the memory.
+	 */
+	static FLoadResult LoadAll(UWorld* World);
+
+	/** Lets go of the cells LoadAll loaded, which unloads them (the cells the creator loaded themselves stay). */
+	static void ReleaseLoaded(UWorld* World, FLoadResult& Result);
+
+	/** The plain-words note for a publish that loaded cells: how many actors, and the memory before and after. */
+	static FString DescribeLoad(const FLoadResult& Result);
 };

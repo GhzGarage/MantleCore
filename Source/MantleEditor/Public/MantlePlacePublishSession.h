@@ -96,6 +96,26 @@ struct MANTLEEDITOR_API FMantlePackagePublish
 	TArray<FMantleLibraryScriptFile> LibraryFiles() const;
 };
 
+/**
+ * The place file's size and instance count measured before anything is converted or uploaded (GhzGarage/mantle#818), against
+ * what the backend takes: IMantlePlacePublishSource::CheckPlaceSize.
+ */
+struct MANTLEEDITOR_API FMantlePlaceSizeCheck
+{
+	/** The place file's size in bytes and its instanced mesh count, as measured (after grouping and any thinning). */
+	int64 Bytes = 0;
+	int64 Instances = 0;
+
+	/** Over the instance limit or the file-size limit with nothing left to try: the publish stops here. */
+	bool bOver = false;
+
+	/** Why, for the Check step's rows. */
+	TArray<FMantleValidationIssue> Issues;
+
+	/** When thinning is on offer: what it would do, in plain words. Empty when it is not (or already chosen). */
+	FString ThinOffer;
+};
+
 enum class EMantlePlaceExportOutcome : uint8
 {
 	Exported,
@@ -122,6 +142,13 @@ public:
 	 * or it cannot tell which account it publishes as (OutMessage says why).
 	 */
 	virtual bool Prepare(FMantleValidationResult& OutValidation, FString& OutMessage) = 0;
+
+	/**
+	 * GhzGarage/mantle#818: before any conversion or upload, the place file's size and instance count against what the backend takes
+	 * (the file is refused at the draft save, after every upload). False, with OutCheck.bOver set and the issues saying why and how
+	 * to fix it, when the place cannot fit; the session stops there. A source that cannot tell passes.
+	 */
+	virtual bool CheckPlaceSize(FMantlePlaceSizeCheck& OutCheck) { return true; }
 
 	/** Converting is split into steps so the editor keeps running between them. */
 	virtual int32 NumConversionSteps() const = 0;
@@ -230,6 +257,7 @@ public:
 
 	virtual FString GetLevelName() const override;
 	virtual bool Prepare(FMantleValidationResult& OutValidation, FString& OutMessage) override;
+	virtual bool CheckPlaceSize(FMantlePlaceSizeCheck& OutCheck) override;
 	virtual int32 NumConversionSteps() const override;
 	virtual int32 NumNonContentSteps() const override { return bThumbnailStep ? 1 : 0; }
 	virtual FString ConversionStepName(int32 Step) const override;
@@ -256,6 +284,9 @@ public:
 	virtual void ConversionFinished() override;
 	virtual void EndPublish() override;
 
+	/** GhzGarage/mantle#818: remove instances evenly when the place is over a limit (the creator chose it). Set before the session starts. */
+	void SetThinInstances(bool bThin) { bThinInstances = bThin; }
+
 private:
 	TWeakObjectPtr<UWorld> World;
 	FString LevelName;
@@ -276,6 +307,12 @@ private:
 	TArray<FString> ExportNotes;
 	/** #549: SetUIDocumentSourceIds, for the next Export. */
 	TMap<FString, FString> UIDocumentSourceIds;
+	/** GhzGarage/mantle#818: SetThinInstances. */
+	bool bThinInstances = false;
+	/** GhzGarage/mantle#818: the World Partition cells Prepare loaded, let go in EndPublish. */
+	TWeakObjectPtr<UObject> LoadedCells;
+	/** GhzGarage/mantle#818: what loading them cost, for the Check step's notes. */
+	FString WorldPartitionNote;
 };
 
 enum class EMantlePublishPhase : uint8
@@ -547,6 +584,8 @@ private:
 	int32 SetIssuesCopied = 0;
 	FString ConversionName;
 	int32 Regathers = 0;
+	/** GhzGarage/mantle#818: the place file's size was checked (once; a regather does not repeat it). */
+	bool bSizeChecked = false;
 	bool bHadUploads = false;
 
 	/** The PUT /assets/attributions bodies still to send, and how many assets carry an attribution. */
