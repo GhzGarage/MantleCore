@@ -141,6 +141,8 @@ end
 
 --- A connected player.
 declare extern type Player with
+	--- How much of every hit the character shrugs off, as a percent from 0 (none, the default) to 100 (all of it). Armor works before the Shield and health. nil while the player has no character. Setting it (server only) clamps to 0..100 and lasts for the rest of the session, through respawns.
+	Armor: number?
 	--- The item id of the avatar (body) the player has on, or nil before their look has arrived. Read-only. (server only)
 	Avatar: string?
 	--- The player's body in the world, or nil while respawning.
@@ -151,20 +153,36 @@ declare extern type Player with
 	JumpHeight: number?
 	--- The most health the character can have (100 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 1..10000 and lasts for the rest of the session: every respawn starts with full health at this maximum. Lowering it below Health lowers Health too; raising it does not heal.
 	MaxHealth: number?
+	--- The size of the shield pool (0, no shield, unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session. A shield above the new size drops to it; raising an existing shield does not fill the pool (set Shield for that), but giving a shield to a player who had none starts it full.
+	MaxShield: number?
 	--- The player's Epic display name.
 	Name: string
 	--- Where the player's character is.
 	Position: Vector3?
+	--- Seconds the character must go without being hurt before health and shield start coming back (5 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..60 and lasts for the rest of the session.
+	RegenDelay: number?
+	--- Health the character gets back per second once RegenDelay seconds have passed since it was last hurt (0, no regeneration, unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..1000 and lasts for the rest of the session.
+	RegenRate: number?
+	--- The character's shield: a pool that soaks up damage (after Armor) before health is touched. 0 to MaxShield; nil while the player has no character. Setting it (server only) changes the pool now and clamps to 0..MaxShield; every respawn starts with it full.
+	Shield: number?
+	--- Shield the character gets back per second after the same RegenDelay (0, none, unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..1000 and lasts for the rest of the session.
+	ShieldRegenRate: number?
+	--- The name of the team the player is on, or nil for none. Setting it (server only) puts the player on that team, which must exist (Teams:Create); set nil to take them off. Fires Teams.PlayerTeamChanged. Team membership replicates, so client scripts can read it, and it lasts while the player is in the session.
+	Team: string?
 	--- The player's verified Mantle account id (a plain UUID).
 	UserId: string
 	--- How fast the character runs, in centimetres per second (500 unless a script changes it); walking, sprinting and crouching scale with it. nil while the player has no character. Setting it (server only) clamps to 0..1500 and lasts for the rest of the session, through respawns; 0 stops the character moving.
 	WalkSpeed: number?
 	--- What the player is wearing: slot name ("hair", "top", "footwear", "acc_hat", ...) to item id. Empty when nothing is worn or their look has not arrived. Read-only; a fresh table on every read. (server only)
 	Wearing: {[string]: string}
-	--- The player's character died, on the server and on every client. killer is the player whose damage finished it (a weapon, or TakeDamage with a source); nil for falling out of the world, Kill, Health set to 0, or their own damage.
-	Died: Signal<(Player, Player?)>
+	--- The character was hurt, on the server. amount is what got through Armor (the Shield and health took it between them), so a hit the shield soaked up still counts; a killing hit fires Damaged first and then Died. damageType is the hit's tag ("Bullet", "Melee", "Explosion", ..., or your own) and attacker the player who dealt it, or nil. Not fired for a hit a held guard blocked, friendly fire that was switched off, or Health set directly.
+	Damaged: Signal<(Player, number, string, Player?)>
+	--- The player's character died, on the server and on every client. killer is the player whose damage finished it (a weapon, or TakeDamage with a source); nil for falling out of the world, Kill, Health set to 0, or their own damage. damageType is the tag of the killing hit ("Bullet", "Melee", "Explosion", ..., or your own); "Generic" when nothing named one.
+	Died: Signal<(Player, Player?, string)>
 	--- The character's health changed: damage, healing, Health set, or a respawn's refill. Fires on the server and on every client.
 	HealthChanged: Signal<(Player, number, number)>
+	--- The player got a fresh character after a death or a Respawn call, on the server. Not fired for the first character a player gets when they join.
+	Respawned: Signal<(Player)>
 	--- Raise the character's health by amount, up to MaxHealth. Never brings a dead character back (use Respawn). Returns false when the player has no character on foot, is dead, or is already at full health. (server only)
 	function Heal(self, amount: number): boolean
 	--- Remove the player from the session with a message. (server only)
@@ -173,8 +191,8 @@ declare extern type Player with
 	function Kill(self): boolean
 	--- Give the player a fresh character with full health right now, alive or dead: at position when given, otherwise at the spawn point the place's respawn mode picks. The old character (or a corpse waiting for its respawn) is removed. Returns false when the player is driving a vehicle (eject them first) or cannot be spawned. (server only)
 	function Respawn(self, position: Vector3?): boolean
-	--- Hurt the character through the same path weapons use, so the game's damage rules apply. source is the player to credit: if this hit kills, Died names them as the killer. Returns false when the player has no character on foot (respawning or driving), is already dead, or the damage was refused. (server only)
-	function TakeDamage(self, amount: number, source: Player?): boolean
+	--- Hurt the character through the same path weapons use, so the game's damage rules apply: friendly fire, Armor, then Shield, then health. source is the player to credit: if this hit kills, Died names them as the killer. damageType tags the hit for Damaged and Died ("Generic" when left out); use a built-in such as "Bullet", "Melee", "Explosion", "Fall", "Vehicle" or "Area", or any word of your own up to 32 characters, such as "Poison". Returns false when the player has no character on foot (respawning or driving), is already dead, or nothing got through (friendly fire off, or Armor 100). (server only)
+	function TakeDamage(self, amount: number, source: Player?, damageType: string?): boolean
 	--- Move the player's character instantly. Always lands exactly at position, even inside solid geometry; returns false only when the player has no character to move right now. (server only)
 	function Teleport(self, position: Vector3): boolean
 end
@@ -598,6 +616,31 @@ declare extern type LightsService with
 end
 declare Lights: LightsService
 
+--- A small round lifecycle you drive yourself: start a round, end it (by calling EndRound or when its timer runs out), and read the round number and clock. The server runs it; State, Round and TimeRemaining are readable from client scripts too, for a HUD. It does not pick winners, move players or restart anything by itself: connect to RoundStarted and RoundEnded and do what your game needs. The match is Waiting before a round and between rounds, InProgress during one, and Ended after EndMatch.
+declare extern type MatchService with
+	--- The number of the current round, or of the last one while Waiting: 0 before any round has started, 1 for the first. Reset puts it back to 0.
+	Round: number
+	--- "Waiting" (before the first round and between rounds), "InProgress" (a round is running) or "Ended" (EndMatch was called; Reset starts over).
+	State: string
+	--- Seconds left in the running round, counting down to 0, or nil when no round is running or the round has no time limit. On a client this follows the server's clock, so it can be a fraction of a second off.
+	TimeRemaining: number?
+	--- A round ended, on the server. winner is what EndRound or EndMatch was given (nil for none, and always nil when the time ran out). reason is "Ended" (EndRound), "Time" (the round's timer ran out) or "MatchEnded" (EndMatch or Reset cut it short).
+	RoundEnded: Signal<(number, string?, string)>
+	--- A round began (StartRound), on the server. round is its number, starting at 1.
+	RoundStarted: Signal<(number)>
+	--- State changed, on the server: Waiting, InProgress or Ended. Fires after RoundStarted or RoundEnded.
+	StateChanged: Signal<(string, string)>
+	--- End the whole match. A running round ends first (RoundEnded fires with reason "MatchEnded"), then State becomes Ended. Returns false when the match has already ended. (server only)
+	function EndMatch(self, winner: string?): boolean
+	--- End the running round: RoundEnded fires with winner (a team name, a player's name, anything up to 64 characters, or nil for none) and reason "Ended", and State goes back to Waiting. Returns false when no round is running. (server only)
+	function EndRound(self, winner: string?): boolean
+	--- Start over: a running round ends first (reason "MatchEnded"), then State is Waiting and Round is 0. Teams and players are not touched. (server only)
+	function Reset(self): ()
+	--- Begin the next round: Round goes up by one, State becomes InProgress, and RoundStarted fires. With seconds (up to 86400) the round ends by itself when the time is up, with reason "Time" and no winner; without, it runs until EndRound. Returns false, changing nothing, while a round is already running or after EndMatch (call Reset first). (server only)
+	function StartRound(self, seconds: number?): boolean
+end
+declare Match: MatchService
+
 --- Spawn characters the server walks around the place and animates (server only).
 declare extern type NPCsService with
 	--- The NPC an Entity is (a World:Raycast hit, or NPC:GetEntity()), or nil when it is not a live NPC. (server only)
@@ -630,6 +673,15 @@ declare extern type PlayersService with
 	function OnPlayer(self, handler: (player: Player) -> ()): Connection
 end
 declare Players: PlayersService
+
+--- How a death becomes a respawn. By default a dead player respawns on their own after a short wait at a spawn point the place picks. Change the wait, or turn automatic respawning off to run rounds where the dead stay down until you bring them back with Player:Respawn. The server decides; there is nothing for a client script here. Player.Respawned fires when a player gets a fresh character.
+declare extern type RespawnService with
+	--- Whether a dead player respawns by themselves after Delay (true by default). Set it false and the dead stay dead until a script calls Player:Respawn on them. Applies to deaths from then on. (server only)
+	AutoRespawn: boolean
+	--- Seconds a dead player waits before the game respawns them (5 unless the place or a script changes it). Setting it clamps to 0..600 and applies to deaths from then on, not to a respawn already counting down. (server only)
+	Delay: number
+end
+declare Respawn: RespawnService
 
 --- Facts about the running script.
 declare extern type ScriptService with
@@ -691,6 +743,25 @@ declare extern type StorageService with
 	function Get(self, name: string): string
 end
 declare Storage: StorageService
+
+--- Teams for a place: define them, put players on them, and decide whether teammates can hurt each other. The server decides everything; which team a player is on replicates, so client scripts and HUDs can read it. A team is named by its name (not case-sensitive) and has a colour. Friendly fire is off by default: once a player is on a team, damage from a teammate is ignored until Teams.FriendlyFire is set to true.
+declare extern type TeamsService with
+	--- Whether players on the same team can hurt each other (false by default). When false, damage between teammates is ignored everywhere damage goes through the health system: weapons, melee, explosions and Player:TakeDamage. Hits from nobody, and a player's own hits, still count. Setting it is server only.
+	FriendlyFire: boolean
+	--- A player joined, left or switched team, on the server and on every client. old and new are team names; nil means no team.
+	PlayerTeamChanged: Signal<(Player, string?, string?)>
+	--- Define a team. name is 1 to 32 characters and must be new. color is "#RRGGBB" (white when left out), for a HUD or a nameplate to use. Up to 16 teams. Example: Teams:Create("Red", "#E53935") (server only)
+	function Create(self, name: string, color: string?): ()
+	--- The team's colour as "#RRGGBB", or nil when there is no such team.
+	function GetColor(self, name: string): string?
+	--- The players on the team right now (an empty list for a team nobody is on, or one that does not exist).
+	function GetPlayers(self, name: string): {Player}
+	--- The names of the teams, in the order they were created.
+	function List(self): {string}
+	--- Delete a team. Its players are taken off it first, so PlayerTeamChanged fires for each. (server only)
+	function Remove(self, name: string): ()
+end
+declare Teams: TeamsService
 
 --- Clocks for scripts.
 declare extern type TimeService with

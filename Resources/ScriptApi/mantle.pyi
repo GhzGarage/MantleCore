@@ -132,18 +132,27 @@ class Entity:
 
 class Player:
     """A connected player."""
+    armor: Optional[float]
     avatar: Optional[str]
     character: Optional[Entity]
     health: Optional[float]
     jump_height: Optional[float]
     max_health: Optional[float]
+    max_shield: Optional[float]
     name: str
     position: Optional[Vector3]
+    regen_delay: Optional[float]
+    regen_rate: Optional[float]
+    shield: Optional[float]
+    shield_regen_rate: Optional[float]
+    team: Optional[str]
     user_id: str
     walk_speed: Optional[float]
     wearing: dict[str, Any]
+    damaged: Signal
     died: Signal
     health_changed: Signal
+    respawned: Signal
     def heal(self, amount: float) -> bool:
         """Raise the character's health by amount, up to MaxHealth. Never brings a dead character back (use Respawn). Returns false when the player has no character on foot, is dead, or is already at full health."""
         ...
@@ -156,8 +165,8 @@ class Player:
     def respawn(self, position: Optional[Vector3] = ...) -> bool:
         """Give the player a fresh character with full health right now, alive or dead: at position when given, otherwise at the spawn point the place's respawn mode picks. The old character (or a corpse waiting for its respawn) is removed. Returns false when the player is driving a vehicle (eject them first) or cannot be spawned."""
         ...
-    def take_damage(self, amount: float, source: Optional[Player] = ...) -> bool:
-        """Hurt the character through the same path weapons use, so the game's damage rules apply. source is the player to credit: if this hit kills, Died names them as the killer. Returns false when the player has no character on foot (respawning or driving), is already dead, or the damage was refused."""
+    def take_damage(self, amount: float, source: Optional[Player] = ..., damageType: Optional[str] = ...) -> bool:
+        """Hurt the character through the same path weapons use, so the game's damage rules apply: friendly fire, Armor, then Shield, then health. source is the player to credit: if this hit kills, Died names them as the killer. damageType tags the hit for Damaged and Died ('Generic' when left out); use a built-in such as 'Bullet', 'Melee', 'Explosion', 'Fall', 'Vehicle' or 'Area', or any word of your own up to 32 characters, such as 'Poison'. Returns false when the player has no character on foot (respawning or driving), is already dead, or nothing got through (friendly fire off, or Armor 100)."""
         ...
     def teleport(self, position: Vector3) -> bool:
         """Move the player's character instantly. Always lands exactly at position, even inside solid geometry; returns false only when the player has no character to move right now."""
@@ -611,6 +620,29 @@ class _LightsService:
 
 Lights: _LightsService
 
+class _MatchService:
+    """A small round lifecycle you drive yourself: start a round, end it (by calling EndRound or when its timer runs out), and read the round number and clock. The server runs it; State, Round and TimeRemaining are readable from client scripts too, for a HUD. It does not pick winners, move players or restart anything by itself: connect to RoundStarted and RoundEnded and do what your game needs. The match is Waiting before a round and between rounds, InProgress during one, and Ended after EndMatch."""
+    round: float
+    state: str
+    time_remaining: Optional[float]
+    round_ended: Signal
+    round_started: Signal
+    state_changed: Signal
+    def end_match(self, winner: Optional[str] = ...) -> bool:
+        """End the whole match. A running round ends first (RoundEnded fires with reason 'MatchEnded'), then State becomes Ended. Returns false when the match has already ended."""
+        ...
+    def end_round(self, winner: Optional[str] = ...) -> bool:
+        """End the running round: RoundEnded fires with winner (a team name, a player's name, anything up to 64 characters, or nil for none) and reason 'Ended', and State goes back to Waiting. Returns false when no round is running."""
+        ...
+    def reset(self) -> None:
+        """Start over: a running round ends first (reason 'MatchEnded'), then State is Waiting and Round is 0. Teams and players are not touched."""
+        ...
+    def start_round(self, seconds: Optional[float] = ...) -> bool:
+        """Begin the next round: Round goes up by one, State becomes InProgress, and RoundStarted fires. With seconds (up to 86400) the round ends by itself when the time is up, with reason 'Time' and no winner; without, it runs until EndRound. Returns false, changing nothing, while a round is already running or after EndMatch (call Reset first)."""
+        ...
+
+Match: _MatchService
+
 class _NPCsService:
     """Spawn characters the server walks around the place and animates (server only)."""
     def from_entity(self, entity: Entity) -> Optional[NPC]:
@@ -646,6 +678,13 @@ class _PlayersService:
         ...
 
 Players: _PlayersService
+
+class _RespawnService:
+    """How a death becomes a respawn. By default a dead player respawns on their own after a short wait at a spawn point the place picks. Change the wait, or turn automatic respawning off to run rounds where the dead stay down until you bring them back with Player:Respawn. The server decides; there is nothing for a client script here. Player.Respawned fires when a player gets a fresh character."""
+    auto_respawn: bool
+    delay: float
+
+Respawn: _RespawnService
 
 class _ScriptService:
     """Facts about the running script."""
@@ -703,6 +742,28 @@ class _StorageService:
         ...
 
 Storage: _StorageService
+
+class _TeamsService:
+    """Teams for a place: define them, put players on them, and decide whether teammates can hurt each other. The server decides everything; which team a player is on replicates, so client scripts and HUDs can read it. A team is named by its name (not case-sensitive) and has a colour. Friendly fire is off by default: once a player is on a team, damage from a teammate is ignored until Teams.FriendlyFire is set to true."""
+    friendly_fire: bool
+    player_team_changed: Signal
+    def create(self, name: str, color: Optional[str] = ...) -> None:
+        """Define a team. name is 1 to 32 characters and must be new. color is '#RRGGBB' (white when left out), for a HUD or a nameplate to use. Up to 16 teams. Example: Teams:Create('Red', '#E53935')"""
+        ...
+    def get_color(self, name: str) -> Optional[str]:
+        """The team's colour as '#RRGGBB', or nil when there is no such team."""
+        ...
+    def get_players(self, name: str) -> list[Player]:
+        """The players on the team right now (an empty list for a team nobody is on, or one that does not exist)."""
+        ...
+    def list(self) -> list[str]:
+        """The names of the teams, in the order they were created."""
+        ...
+    def remove(self, name: str) -> None:
+        """Delete a team. Its players are taken off it first, so PlayerTeamChanged fires for each."""
+        ...
+
+Teams: _TeamsService
 
 class _TimeService:
     """Clocks for scripts."""
