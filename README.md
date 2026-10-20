@@ -41,7 +41,7 @@ Fab has no publisher API, so a release is a tag here plus one step by hand in th
 4. **Wait for the release.** The Release workflow checks the plugin, packages `MantleCore-<version>-UE5.8.zip` (the source under a top-level `MantleCore/` folder, without Binaries, Intermediate or Saved), checks the zip, compiles it with `RunUAT BuildPlugin` on UE 5.8 (Fab Technical Requirements 4.3.6.2.b), and attaches it to a GitHub release for the tag. It fails without making a release if the tag doesn't match `VersionName`, a uplugin field is wrong (EngineVersion 5.8.0, Win64 only on every module, CreatedBy Joshua Eger), a source file lacks the copyright line, Content holds anything but IK rig and IK retargeter assets, a third-party library lacks its LICENSE, or BuildPlugin fails.
 5. **Paste the link into Fab.** In the Fab publishing portal, add a Project Version for UE 5.8, paste the link to the release's zip, and submit the update. Fab downloads the zip without signing in, so this works only once this repo is public. While the repo is private the zip stays on the release and isn't hosted anywhere else.
 
-After the first Fab submission, set `FabURL` in `MantleCore.uplugin` to the listing's address (Fab Technical Requirements 4.3.6.c); it stays out of the file until then.
+`FabURL` in `MantleCore.uplugin` is set to the Fab listing's address (Fab Technical Requirements 4.3.6.c), and the check fails if it is missing or points elsewhere.
 
 ### The BuildPlugin runner
 

@@ -9,8 +9,8 @@ Run it locally the same way before you tag:
 
 check runs every rule below on the plugin folder and exits 1 if any fails:
   version   the tag (when given) is "v" + VersionName from MantleCore.uplugin
-  uplugin   EngineVersion 5.8.0, PlatformAllowList ["Win64"] on every module, CreatedBy Joshua Eger
-            (Fab Technical Requirements 4.3.6.a and 4.3.6.b)
+  uplugin   EngineVersion 5.8.0, PlatformAllowList ["Win64"] on every module, CreatedBy Joshua Eger,
+            FabURL is the live Fab listing (Fab Technical Requirements 4.3.6.a, 4.3.6.b and 4.3.6.c)
   headers   every source file starts with the copyright line (4.3.6.1.b); same rules as the game
             repo's tools/copies/check_headers.py
   content   Content holds only IK rig and IK retargeter assets: no textures, materials, material
@@ -41,6 +41,8 @@ ENGINE_VERSION = "5.8.0"
 ENGINE_LABEL = "UE5.8"
 PLATFORMS = ["Win64"]
 CREATED_BY = "Joshua Eger"
+FAB_LISTING_ID = "0ab720ef-e3da-4dc7-81ee-7eafb573c6bc"
+FAB_URL = f"https://www.fab.com/listings/{FAB_LISTING_ID}"
 
 # Folders never shipped, anywhere in the tree, plus every file or folder whose name starts with "."
 # (.git, .github, .claude, .gitattributes, .gitignore, .vs).
@@ -105,6 +107,8 @@ def check_uplugin(plugin, _tag):
         problems.append(f"EngineVersion is {data.get('EngineVersion')!r}, expected {ENGINE_VERSION!r}")
     if data.get("CreatedBy") != CREATED_BY:
         problems.append(f"CreatedBy is {data.get('CreatedBy')!r}, expected {CREATED_BY!r}")
+    if data.get("FabURL") != FAB_URL:
+        problems.append(f"FabURL is {data.get('FabURL')!r}, expected {FAB_URL!r}")
     modules = data.get("Modules") or []
     if not modules:
         problems.append("no Modules listed")
@@ -112,7 +116,7 @@ def check_uplugin(plugin, _tag):
         if module.get("PlatformAllowList") != PLATFORMS:
             problems.append(f"module {module.get('Name')}: PlatformAllowList is "
                             f"{module.get('PlatformAllowList')!r}, expected {PLATFORMS!r}")
-    return problems, f"EngineVersion {ENGINE_VERSION}, CreatedBy {CREATED_BY}, {len(modules)} modules Win64 only"
+    return problems, f"EngineVersion {ENGINE_VERSION}, CreatedBy {CREATED_BY}, FabURL set, {len(modules)} modules Win64 only"
 
 
 def header_in_scope(relative):
