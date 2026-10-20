@@ -6,6 +6,9 @@
 // GarmentSubject: the engine's thumbnail scene, reference pose, framed on the garment, on that size's own body and face), from
 // the front and from the back, into <Directory>/<Outfit>_<size id>_{front,back}.png. Nothing is saved or uploaded. Logs
 // MANTLE_RENDER_FITS lines.
+// With an accessory slot it makes the rigid piece as CheckCosmetic does (FMantleParametricOutfit::PrepareRigid) and renders
+// the catalog thumbnail itself (AccessorySubject, <Outfit>_<slot>_thumbnail.png, and from behind, _thumbnail_back.png) and the piece worn on the body it was made on,
+// hung from that body's slot socket as an avatar wears it (<Outfit>_<slot>_worn_{front,back}.png).
 #include "MantleAvatarContract.h"
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticThumbnail.h"
@@ -14,6 +17,9 @@
 #include "MantlePng.h"
 
 #include "Engine/SkeletalMesh.h"
+#include "Engine/SkeletalMeshSocket.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
@@ -25,6 +31,83 @@ DEFINE_LOG_CATEGORY_STATIC(LogMantleRenderOutfitFits, Log, All);
 // Named, not anonymous: MantleEditor builds as a unity build.
 namespace MantleDevRenderOutfitFitsPrivate
 {
+	bool Save(const FMantleThumbnailSubject& Shot, int32 Size, const FString& File, FString& OutError)
+	{
+		TArray<FColor> Pixels;
+		return FMantleCosmeticThumbnail::Capture(Shot, Size, Pixels, OutError) && FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Size, Size, Pixels), *File);
+	}
+
+	void RunAccessory(UObject* Outfit, const FMantleAvatarContract& Contract, const FString& Slot, EMantleFitSex Sex, const FString& Directory, int32 Size)
+	{
+		const FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Accessory, Outfit, Slot, FString(), Contract, Sex);
+		FMantleCosmeticDraft Prepared;
+		TArray<TStrongObjectPtr<UObject>> KeepAlive;
+		FString Error, Note;
+		FMantleParametricOutfit::FRigidPivot Pivot;
+		UStaticMesh* Rigid = FMantleParametricOutfit::PrepareRigid(Draft, Contract, Prepared, KeepAlive, Error, &Note)
+			&& FMantleParametricOutfit::RigidPivot(Contract, Slot, Pivot, Error) ? Cast<UStaticMesh>(Prepared.Source.Get()) : nullptr;
+		if (!Rigid)
+		{
+			UE_LOG(LogMantleRenderOutfitFits, Error, TEXT("MANTLE_RENDER_FITS %s FAILED: %s"), *Slot, *Error);
+			return;
+		}
+		UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s rigid bounds=%s: %s"), *Slot, *Rigid->GetBoundingBox().ToString(), *Note);
+		for (const FStaticMaterial& Material : Rigid->GetStaticMaterials())
+		{
+			UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s material %s two-sided=%d"), *Slot,
+				Material.MaterialInterface ? *Material.MaterialInterface->GetPathName() : TEXT("none"), Material.MaterialInterface && Material.MaterialInterface->IsTwoSided() ? 1 : 0);
+		}
+		// The catalog thumbnail, as the upload renders it, and the same from behind.
+		for (const TCHAR* View : { TEXT("thumbnail"), TEXT("thumbnail_back") })
+		{
+			FMantleThumbnailSubject Shot = FMantleCosmeticThumbnail::AccessorySubject(Rigid, Prepared.AccessoryWorn, Prepared.bAccessoryBackFaces);
+			if (FCString::Strcmp(View, TEXT("thumbnail_back")) == 0) { Shot.View.Yaw += 180.0f; }
+			const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), *Slot, View));
+			const bool bWritten = Save(Shot, Size, File, Error);
+			UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s %s %s"), *Slot, View, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Error);
+		}
+
+		// Worn: the size's body parts in their reference pose, the piece on the slot socket of the first that has its bone.
+		TArray<FMantleOutfitSourceSize> Sizes;
+		FMantleParametricOutfit::ListSizes(Outfit, Sizes, Error);
+		const FMantleOutfitSourceSize* Source = Sizes.FindByPredicate([&Prepared](const FMantleOutfitSourceSize& Entry) { return Entry.Name == Prepared.OutfitSourceSize; });
+		TArray<USkeletalMesh*> Parts;
+		TOptional<FTransform> Socket;
+		for (const FSoftObjectPath& Path : Source ? Source->BodyParts : TArray<FSoftObjectPath>())
+		{
+			USkeletalMesh* Part = Cast<USkeletalMesh>(Path.TryLoad());
+			if (!Part) { continue; }
+			Parts.Add(Part);
+			const FReferenceSkeleton& Skeleton = Part->GetRefSkeleton();
+			const int32 Bone = Skeleton.FindRawBoneIndex(FName(*Pivot.Bone));
+			if (Socket.IsSet() || Bone == INDEX_NONE) { continue; }
+			FTransform Pose = FTransform::Identity;
+			for (int32 Index = Bone; Index != INDEX_NONE; Index = Skeleton.GetRawParentIndex(Index)) { Pose = Pose * Skeleton.GetRawRefBonePose()[Index]; }
+			// The body's own socket on that bone, when it carries one (its offset is what an avatar wears it with).
+			const USkeletalMeshSocket* Own = Part->FindSocket(FName(*Slot));
+			Socket = Own && Own->BoneName == FName(*Pivot.Bone) ? Own->GetSocketLocalTransform() * Pose : Pose;
+		}
+		if (Parts.IsEmpty() || !Socket.IsSet())
+		{
+			UE_LOG(LogMantleRenderOutfitFits, Error, TEXT("MANTLE_RENDER_FITS %s worn FAILED: no body part of size %s has a %s bone"), *Slot, *Prepared.OutfitSourceSize, *Pivot.Bone);
+			return;
+		}
+		const FBox Worn = Rigid->GetBoundingBox().TransformBy(Socket.GetValue());
+		FMantleThumbnailSubject Subject = FMantleCosmeticThumbnail::GarmentSubject(Parts[0], Parts.IsValidIndex(1) ? Parts[1] : nullptr,
+			Parts.IsValidIndex(2) ? Parts[2] : nullptr, nullptr, Worn);
+		Subject.StaticMesh = Rigid;
+		Subject.StaticTransform = Socket.GetValue();
+		if (Prepared.bAccessoryBackFaces) { Subject.StaticBackFaces.Reset(FMantleCosmeticThumbnail::BackFaces(Rigid)); }
+		for (const TCHAR* View : { TEXT("front"), TEXT("back") })
+		{
+			FMantleThumbnailSubject Shot = Subject;
+			if (FCString::Strcmp(View, TEXT("back")) == 0) { Shot.View.Yaw += 180.0f; }
+			const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_worn_%s.png"), *Outfit->GetName(), *Slot, View));
+			const bool bWritten = Save(Shot, Size, File, Error);
+			UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s worn %s %s %s"), *Slot, View, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Error);
+		}
+	}
+
 	void Run(const TArray<FString>& Args)
 	{
 		if (Args.Num() < 2)
@@ -50,6 +133,13 @@ namespace MantleDevRenderOutfitFitsPrivate
 		const FString Directory = Args[1];
 		const FString Slot = Args.Num() > 3 ? Args[3] : FString(TEXT("top"));
 		const int32 Size = Args.Num() > 4 ? FMath::Clamp(FCString::Atoi(*Args[4]), 128, 2048) : 1024;
+		const FMantleContractSlot* SlotEntry = Contract->FindSlot(Slot);
+		if (SlotEntry && SlotEntry->ItemClass == TEXT("rigid_accessory"))
+		{
+			RunAccessory(Outfit, *Contract, Slot, Sex, Directory, Size);
+			UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS done"));
+			return;
+		}
 		const FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Garment, Outfit, Slot, FString(), *Contract, Sex);
 		UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s: %d fit bodies (%s)"), *Outfit->GetPathName(), Draft.OutfitTargets.Num(), *Draft.FitBodiesStatus);
 		for (const FMantleOutfitAuthoringTarget& Target : Draft.OutfitTargets)
@@ -93,6 +183,6 @@ namespace MantleDevRenderOutfitFitsPrivate
 	FAutoConsoleCommand GMantleDevRenderOutfitFitsCommand(
 		TEXT("Mantle.Dev.RenderOutfitFits"),
 		TEXT("Mantle.Dev.RenderOutfitFits <Outfit> <Directory> [female|male|auto] [slot] [size] -- fits the Outfit onto the standard bodies as CheckCosmetic does and renders ")
-		TEXT("each as the catalog thumbnail does, front and back, into Directory. Saves and uploads nothing."),
+		TEXT("each as the catalog thumbnail does, front and back, into Directory; with an accessory slot, its catalog thumbnail and the piece worn on its body. Saves and uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&Run));
 }

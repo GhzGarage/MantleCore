@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UObject/StrongObjectPtr.h"
 
 class USkeletalMesh;
 class UStaticMesh;
@@ -27,6 +28,9 @@ struct FMantleThumbnailSubject
 
 	/** Where StaticMesh is drawn: identity, or turned upright as worn (an accessory made from a skinned source). */
 	FTransform StaticTransform = FTransform::Identity;
+
+	/** StaticMesh's back faces (FMantleCosmeticThumbnail::BackFaces), drawn with it: the inside of an open cloth surface. */
+	TStrongObjectPtr<UStaticMesh> StaticBackFaces;
 
 	/** What the camera fits into the frame (cm, the meshes' space). */
 	FBox Frame = FBox(ForceInit);
@@ -107,8 +111,14 @@ public:
 	/** #483: the material slots of a mesh with NumSlots slots that KeepSlots leaves out (none when it is null). Pure. */
 	static TArray<int32> HiddenSlotsFor(int32 NumSlots, const TArray<int32>* KeepSlots);
 
-	/** An accessory alone, three-quarter view from above. */
-	static FMantleThumbnailSubject AccessorySubject(UStaticMesh* Mesh, const FQuat& Worn = FQuat::Identity);
+	/** An accessory alone, three-quarter view from above; with bBackFaces its inside too (cloth, FMantleCosmeticDraft::bAccessoryBackFaces). */
+	static FMantleThumbnailSubject AccessorySubject(UStaticMesh* Mesh, const FQuat& Worn = FQuat::Identity, bool bBackFaces = false);
+
+	/**
+	 * A transient copy of Mesh's first LOD facing the other way: each triangle's winding reversed and its normals turned
+	 * round, so the copy draws exactly what a two-sided material shows from behind. Null when Mesh has no mesh description.
+	 */
+	static UStaticMesh* BackFaces(const UStaticMesh* Mesh);
 
 	/** True when this process can render (a real RHI, the editor, rendering allowed); OutWhyNot says why not. */
 	static bool CanCapture(FString* OutWhyNot = nullptr);

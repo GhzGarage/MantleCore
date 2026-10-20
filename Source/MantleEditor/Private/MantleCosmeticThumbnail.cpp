@@ -16,6 +16,8 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "MaterialShared.h"
+#include "MeshDescription.h"
+#include "StaticMeshAttributes.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/App.h"
 #include "RHIGlobals.h"
@@ -265,7 +267,7 @@ FMantleThumbnailSubject FMantleCosmeticThumbnail::GarmentSubject(USkeletalMesh* 
 	return Subject;
 }
 
-FMantleThumbnailSubject FMantleCosmeticThumbnail::AccessorySubject(UStaticMesh* Mesh, const FQuat& Worn)
+FMantleThumbnailSubject FMantleCosmeticThumbnail::AccessorySubject(UStaticMesh* Mesh, const FQuat& Worn, const bool bBackFaces)
 {
 	using namespace MantleCosmeticThumbnailPrivate;
 	FMantleThumbnailSubject Subject;
@@ -275,11 +277,54 @@ FMantleThumbnailSubject FMantleCosmeticThumbnail::AccessorySubject(UStaticMesh* 
 	}
 	Subject.StaticMesh = Mesh;
 	Subject.StaticTransform = FTransform(Worn);
+	if (bBackFaces)
+	{
+		Subject.StaticBackFaces.Reset(BackFaces(Mesh));
+	}
 	Subject.Frame = Mesh->GetBoundingBox().TransformBy(Subject.StaticTransform);
 	// Turned as worn, it is in a body's axes (facing +Y): seen from the front, a little above, like a body.
 	Subject.View = Worn.Equals(FQuat::Identity) ? AccessoryView : WornAccessoryView;
-	Subject.Describe = FString::Printf(TEXT("%s alone"), *Mesh->GetName());
+	Subject.Describe = FString::Printf(TEXT("%s alone%s"), *Mesh->GetName(), Subject.StaticBackFaces ? TEXT(", inside too") : TEXT(""));
 	return Subject;
+}
+
+UStaticMesh* FMantleCosmeticThumbnail::BackFaces(const UStaticMesh* Mesh)
+{
+	const FMeshDescription* Source = Mesh && Mesh->GetNumSourceModels() > 0 ? Mesh->GetMeshDescription(0) : nullptr;
+	if (!Source)
+	{
+		return nullptr;
+	}
+	FMeshDescription Description = *Source;
+	FStaticMeshAttributes Attributes(Description);
+	TVertexInstanceAttributesRef<FVector3f> Normals = Attributes.GetVertexInstanceNormals();
+	for (const FVertexInstanceID Instance : Description.VertexInstances().GetElementIDs())
+	{
+		Normals[Instance] = -Normals[Instance];
+	}
+	TArray<FTriangleID> Triangles;
+	for (const FTriangleID Triangle : Description.Triangles().GetElementIDs())
+	{
+		Triangles.Add(Triangle);
+	}
+	for (const FTriangleID Triangle : Triangles)
+	{
+		const TArray<FVertexInstanceID> Corners(Description.GetTriangleVertexInstances(Triangle));
+		const FPolygonGroupID Group = Description.GetTrianglePolygonGroup(Triangle);
+		Description.DeleteTriangle(Triangle);
+		Description.CreateTriangle(Group, { Corners[2], Corners[1], Corners[0] });
+	}
+	UStaticMesh* Out = NewObject<UStaticMesh>(GetTransientPackage(), MakeUniqueObjectName(GetTransientPackage(), UStaticMesh::StaticClass(),
+		FName(*FString::Printf(TEXT("%s_BackFaces"), *Mesh->GetName()))), RF_Transient);
+	Out->GetStaticMaterials() = Mesh->GetStaticMaterials();
+	Out->bAllowCPUAccess = true;
+	Out->SetNumSourceModels(1);
+	Out->GetSourceModel(0).BuildSettings = Mesh->GetSourceModel(0).BuildSettings;
+	Out->GetSourceModel(0).BuildSettings.bRecomputeNormals = false;
+	UStaticMesh::FBuildMeshDescriptionsParams Params;
+	Params.bMarkPackageDirty = false;
+	Params.bAllowCpuAccess = true;
+	return Out->BuildFromMeshDescriptions({ &Description }, Params) ? Out : nullptr;
 }
 
 bool FMantleCosmeticThumbnail::CanCapture(FString* OutWhyNot)
@@ -383,6 +428,14 @@ bool FMantleCosmeticThumbnail::Capture(const FMantleThumbnailSubject& Subject, i
 		Component->SetForcedLodModel(1);
 		Scene.AddComponent(Component, Subject.StaticTransform);
 		Drawn.Emplace(Component, Subject.StaticMesh);
+	}
+	if (Subject.StaticMesh && Subject.StaticBackFaces)
+	{
+		UStaticMeshComponent* Component = NewObject<UStaticMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+		Component->SetStaticMesh(Subject.StaticBackFaces.Get());
+		Component->SetForcedLodModel(1);
+		Scene.AddComponent(Component, Subject.StaticTransform);
+		Drawn.Emplace(Component, Subject.StaticBackFaces.Get());
 	}
 
 	UTextureRenderTarget2D* Target = NewObject<UTextureRenderTarget2D>(GetTransientPackage(), NAME_None, RF_Transient);

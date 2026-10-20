@@ -959,7 +959,7 @@ bool FMantleParametricOutfit::PrepareRigid(const FMantleCosmeticDraft& Draft, co
 	TArray<FMantleOutfitSourceSize> Sizes;
 	if (!ListSizes(Draft.Source.Get(), Sizes, OutError)) { return false; }
 	if (Sizes.IsEmpty()) { OutError = TEXT("the Outfit has no authored sizes"); return false; }
-	// A rigid piece is fitted to each wearer's head through its socket, so any authored size will do: the chosen one, else the first.
+	// A rigid piece is carried by each wearer's socket (fitted to the head on the head bone), so any authored size will do: the chosen one, else the first.
 	const FString Selected = Draft.OutfitSourceSize.IsEmpty() ? Sizes[0].Name : Draft.OutfitSourceSize;
 	const FMantleOutfitSourceSize* Size = Sizes.FindByPredicate([&Selected](const FMantleOutfitSourceSize& Candidate) { return Candidate.Name == Selected; });
 	if (!Size) { OutError = FString::Printf(TEXT("the Outfit has no size %s"), *Selected); return false; }
@@ -978,8 +978,10 @@ bool FMantleParametricOutfit::PrepareRigid(const FMantleCosmeticDraft& Draft, co
 	TArray<UMaterialInterface*> GlbMaterials;
 	int32 Triangles = 0;
 	if (!FMantleCosmeticExport::ReadSkeletalMesh(Garment, 0, Glb, GlbMaterials, Triangles, OutError)) { return false; }
-	const int32 Head = Glb.Joints.IndexOfByPredicate([](const FMantleGlbJoint& Joint) { return Joint.Name.IsEqual(TEXT("head"), ENameCase::IgnoreCase); });
-	if (Head == INDEX_NONE) { OutError = TEXT("the Outfit's skeleton has no head bone to hang it from"); return false; }
+	FRigidPivot Pivot;
+	if (!RigidPivot(Contract, Draft.Slot, Pivot, OutError)) { return false; }
+	const int32 Bone = Glb.Joints.IndexOfByPredicate([&Pivot](const FMantleGlbJoint& Joint) { return Joint.Name.ToString().Equals(Pivot.Bone, ESearchCase::IgnoreCase); });
+	if (Bone == INDEX_NONE) { OutError = FString::Printf(TEXT("the Outfit's skeleton has no %s bone to hang it from (%s's socket bone)"), *Pivot.Bone, *Draft.Slot); return false; }
 	TArray<FTransform> Component;
 	Component.SetNum(Glb.Joints.Num());
 	for (int32 Index = 0; Index < Glb.Joints.Num(); ++Index)
@@ -988,34 +990,58 @@ bool FMantleParametricOutfit::PrepareRigid(const FMantleCosmeticDraft& Draft, co
 		Component[Index] = Parent == INDEX_NONE ? Glb.Joints[Index].Local : Glb.Joints[Index].Local * Component[Parent];
 	}
 
-	// Hats are stored fitted to the reference head: the head it was authored on, measured, maps onto it.
-	FBox3f Reference;
-	if (!FMantleHeadFit::ReferenceCranium(Reference)) { OutError = TEXT("the plugin's head reference (Resources/AvatarConvert/head-reference.json) is missing"); return false; }
+	// The socket bone's frame the piece is placed in: the authoring body's own bind pose of it (an Outfit's exported skeleton
+	// can bind its head elsewhere, 6.8 cm off on one Fab cap), else the exported skeleton's.
+	FTransform Pose = Component[Bone];
 	FMantleHeadFit::FFit Fit;
-	// The head frame the hat is placed in: the measured head's own (an Outfit's exported skeleton can bind its head
-	// elsewhere, 6.8 cm off on one Fab cap), else the exported skeleton's.
-	FTransform HeadPose = Component[Head];
 	bool bMeasured = false;
-	for (const FSoftObjectPath& Path : Size->BodyParts)
+	if (Pivot.bHeadFit)
 	{
-		USkeletalMesh* Part = Cast<USkeletalMesh>(Path.TryLoad());
-		FBox3f Authoring;
-		int32 Vertices = 0;
-		FString Why;
-		if (Part && FMantleHeadFit::MeasureCranium(Part, nullptr, FTransform::Identity, Authoring, Vertices, Why))
+		// Hats are stored fitted to the reference head: the head it was authored on, measured, maps onto it.
+		FBox3f Reference;
+		if (!FMantleHeadFit::ReferenceCranium(Reference)) { OutError = TEXT("the plugin's head reference (Resources/AvatarConvert/head-reference.json) is missing"); return false; }
+		for (const FSoftObjectPath& Path : Size->BodyParts)
 		{
+			USkeletalMesh* Part = Cast<USkeletalMesh>(Path.TryLoad());
+			FBox3f Authoring;
+			int32 Vertices = 0;
+			FString Why;
+			if (Part && FMantleHeadFit::MeasureCranium(Part, nullptr, FTransform::Identity, Authoring, Vertices, Why))
+			{
+				KeepAlive.Emplace(Part);
+				Fit = FMantleHeadFit::FitTo(Reference, Authoring);
+				FMantleHeadFit::HeadPose(Part, Pose);
+				bMeasured = true;
+				Notes.Add(FString::Printf(TEXT("Fitted from the head it was made on (%s, %s) to the reference head (%s)."), *Part->GetName(),
+					*FMantleHeadFit::Describe(Authoring), *FMantleHeadFit::Describe(Reference)));
+				break;
+			}
+		}
+		if (!bMeasured) { Notes.Add(TEXT("The head it was made on could not be measured, so it is taken as the reference head's size.")); }
+	}
+	else
+	{
+		// Away from the head there is no per-avatar fit: each avatar's own bone carries the piece, at the size it was made.
+		bool bPosed = false;
+		for (const FSoftObjectPath& Path : Size->BodyParts)
+		{
+			USkeletalMesh* Part = Cast<USkeletalMesh>(Path.TryLoad());
+			const int32 PartBone = Part ? Part->GetRefSkeleton().FindRawBoneIndex(FName(*Pivot.Bone)) : INDEX_NONE;
+			if (PartBone == INDEX_NONE) { continue; }
 			KeepAlive.Emplace(Part);
-			Fit = FMantleHeadFit::FitTo(Reference, Authoring);
-			FMantleHeadFit::HeadPose(Part, HeadPose);
-			bMeasured = true;
-			Notes.Add(FString::Printf(TEXT("Fitted from the head it was made on (%s, %s) to the reference head (%s)."), *Part->GetName(),
-				*FMantleHeadFit::Describe(Authoring), *FMantleHeadFit::Describe(Reference)));
+			Pose = FTransform::Identity;
+			for (int32 Index = PartBone; Index != INDEX_NONE; Index = Part->GetRefSkeleton().GetRawParentIndex(Index))
+			{
+				Pose = Pose * Part->GetRefSkeleton().GetRawRefBonePose()[Index];
+			}
+			bPosed = true;
+			Notes.Add(FString::Printf(TEXT("Hung from %s's %s bone (the %s socket), at the size it was made."), *Part->GetName(), *Pivot.Bone, *Draft.Slot));
 			break;
 		}
+		if (!bPosed) { Notes.Add(FString::Printf(TEXT("Hung from the Outfit skeleton's %s bone (the %s socket), at the size it was made."), *Pivot.Bone, *Draft.Slot)); }
 	}
-	if (!bMeasured) { Notes.Add(TEXT("The head it was made on could not be measured, so it is taken as the reference head's size.")); }
 
-	// The kept sections, by material, in the head bone's frame (the hat socket sits there at identity), then onto the reference head.
+	// The kept sections, by material, in the socket bone's frame (Mantle's socket sits there at identity), then onto the reference head.
 	TSet<UMaterialInterface*> KeptMaterials;
 	const TArray<FSkeletalMaterial>& GarmentMaterials = Garment->GetMaterials();
 	for (int32 Slot = 0; Slot < GarmentMaterials.Num(); ++Slot)
@@ -1045,12 +1071,10 @@ bool FMantleParametricOutfit::PrepareRigid(const FMantleCosmeticDraft& Draft, co
 		for (int32 Local = 0; Local < Primitive.NumVertices; ++Local)
 		{
 			const int32 Vertex = Primitive.FirstVertex + Local;
-			const FVector3f InHead = FVector3f(HeadPose.InverseTransformPositionNoScale(FVector(Glb.Positions[Vertex])));
 			const FVertexID Id = Description.CreateVertex();
-			Positions[Id] = (InHead - Fit.Offset) / Fit.Scale;
+			Positions[Id] = RigidPosition(Glb.Positions[Vertex], Pose, Fit);
 			Instances[Local] = Description.CreateVertexInstance(Id);
-			// The inverse map's normals scale by the fit, not its inverse.
-			Normals[Instances[Local]] = (FVector3f(HeadPose.InverseTransformVectorNoScale(FVector(Glb.Normals[Vertex]))) * Fit.Scale).GetSafeNormal();
+			Normals[Instances[Local]] = RigidNormal(Glb.Normals[Vertex], Pose, Fit);
 			UVs.Set(Instances[Local], 0, Glb.UVs[Vertex]);
 		}
 		for (int32 Index = 0; Index + 2 < Primitive.Indices.Num(); Index += 3)
@@ -1073,12 +1097,38 @@ bool FMantleParametricOutfit::PrepareRigid(const FMantleCosmeticDraft& Draft, co
 	Params.bMarkPackageDirty = false;
 	Params.bAllowCpuAccess = true;
 	if (!Rigid->BuildFromMeshDescriptions({ &Description }, Params)) { OutError = TEXT("the engine could not build the rigid mesh"); return false; }
-	UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_OUTFIT_RIGID asset=%s size=%s triangles=%d measured=%d scale=%s offset=%s bounds=%s"),
-		*Asset->GetName(), *Selected, After, bMeasured ? 1 : 0, *Fit.Scale.ToString(), *Fit.Offset.ToString(), *Rigid->GetBoundingBox().ToString());
+	UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_OUTFIT_RIGID asset=%s size=%s bone=%s triangles=%d measured=%d scale=%s offset=%s bounds=%s"),
+		*Asset->GetName(), *Selected, *Pivot.Bone, After, bMeasured ? 1 : 0, *Fit.Scale.ToString(), *Fit.Offset.ToString(), *Rigid->GetBoundingBox().ToString());
 	OutDraft.Source = Rigid;
-	OutDraft.AccessoryWorn = HeadPose.GetRotation();
+	OutDraft.AccessoryWorn = Pose.GetRotation();
+	OutDraft.bAccessoryBackFaces = true;
 	OutDraft.KeepSlots.Reset();
 	OutDraft.OutfitSourceSize = Selected;
 	if (OutNote) { *OutNote = FString::Join(Notes, TEXT(" ")); }
 	return true;
+}
+
+bool FMantleParametricOutfit::RigidPivot(const FMantleAvatarContract& Contract, const FString& Slot, FRigidPivot& OutPivot, FString& OutError)
+{
+	const FMantleContractSlot* Entry = Contract.FindSlot(Slot);
+	if (!Entry || Entry->ItemClass != TEXT("rigid_accessory") || Entry->SocketBone.IsEmpty())
+	{
+		OutError = FString::Printf(TEXT("\"%s\" is not an accessory slot with a socket bone"), *Slot);
+		return false;
+	}
+	OutPivot.Bone = Entry->SocketBone;
+	// Only the hat socket has a per-avatar fit (FMantleHeadFit::HatSocket moves and scales it onto each cranium at upload).
+	OutPivot.bHeadFit = Entry->Socket == TEXT("acc_hat");
+	return true;
+}
+
+FVector3f FMantleParametricOutfit::RigidPosition(const FVector3f& Position, const FTransform& Pose, const FMantleHeadFit::FFit& Fit)
+{
+	return (FVector3f(Pose.InverseTransformPositionNoScale(FVector(Position))) - Fit.Offset) / Fit.Scale;
+}
+
+FVector3f FMantleParametricOutfit::RigidNormal(const FVector3f& Normal, const FTransform& Pose, const FMantleHeadFit::FFit& Fit)
+{
+	// The inverse map's normals scale by the fit, not its inverse.
+	return (FVector3f(Pose.InverseTransformVectorNoScale(FVector(Normal))) * Fit.Scale).GetSafeNormal();
 }

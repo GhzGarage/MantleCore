@@ -204,6 +204,12 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	FQuat AccessoryWorn = FQuat::Identity;
 
 	/**
+	 * Accessories made from cloth (a MetaHuman Outfit): an open surface whose inside shows, as the game draws it (a
+	 * two-sided material). The thumbnail draws its back faces too; a seller's cloth material may not, even when marked two-sided.
+	 */
+	bool bAccessoryBackFaces = false;
+
+	/**
 	 * Render the 512 x 512 thumbnail: a scene capture of the avatar's headshot (#625), the garment on its
 	 * authoring body or the accessory alone (#364), else the editor's thumbnail renderer. Off, or
 	 * in a process that cannot render (-NullRHI), a plain one is used.

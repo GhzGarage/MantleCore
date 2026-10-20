@@ -2839,7 +2839,7 @@ namespace MantleCosmeticExportPrivate
 				FMantleCosmeticExport::FindAuthoringFace(Draft, AuthoringBody), Draft.KeepSlots.GetPtrOrNull(), GarmentFrame);
 			break;
 		case EMantleCosmeticClass::Accessory:
-			Subject = FMantleCosmeticThumbnail::AccessorySubject(Cast<UStaticMesh>(Source), Draft.AccessoryWorn);
+			Subject = FMantleCosmeticThumbnail::AccessorySubject(Cast<UStaticMesh>(Source), Draft.AccessoryWorn, Draft.bAccessoryBackFaces);
 			break;
 		default:
 			break;
