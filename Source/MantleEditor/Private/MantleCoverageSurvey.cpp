@@ -10,6 +10,7 @@
 #include "MantlePlaceAssets.h"
 #include "MantlePlaceExporter.h"
 #include "MantlePlaceLimits.h"
+#include "MantleSkyMesh.h"
 #include "MantleTargetFeatures.h"
 #include "MantleTerrainExport.h"
 
@@ -250,6 +251,12 @@ namespace MantleCoverageSurveyPrivate
 			if (FMantlePlaceExporter::IsProvidedByMantle(Actor))
 			{
 				const bool bFog = Actor->IsA(AExponentialHeightFog::StaticClass());
+				// #63: a sky dome mesh placed on its own is left out whole.
+				if (FMantleSkyMesh::IsSkyMeshActor(Actor))
+				{
+					Coverage.Add(Cat::Sky, EOutcome::Dropped, Label, FMantleSkyMesh::StandaloneDetail());
+					continue;
+				}
 				Coverage.Add(bFog ? Cat::Fog : Cat::Sky, EOutcome::Dropped, Label,
 					bFog ? TEXT("Mantle supplies its own fog; this actor's settings are not published.")
 						 : TEXT("Mantle supplies its own sky; this actor's settings are not published."));

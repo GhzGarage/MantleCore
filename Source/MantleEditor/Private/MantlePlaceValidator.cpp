@@ -17,6 +17,7 @@
 #include "MantlePlaceWorldPartition.h"
 #include "MantleReflectionProbeExport.h"
 #include "MantleRuntime.h"
+#include "MantleSkyMesh.h"
 #include "MantleScatterVolume.h"
 #include "MantleScriptApiUsage.h"
 #include "MantleScriptCatalogFiles.h"
@@ -1625,7 +1626,8 @@ FMantleValidationResult FMantlePlaceValidator::Validate(UWorld* World)
 			Result.Issues.Add(FMantleValidationIssue{
 				EMantleIssueSeverity::Warning,
 				LabelOf(Actor),
-				TEXT("Mantle provides the sky; this actor's settings are not published."),
+				FMantleSkyMesh::IsSkyMeshActor(Actor) ? FMantleSkyMesh::StandaloneDetail()
+					: FString(TEXT("Mantle provides the sky; this actor's settings are not published.")),
 				FString() });
 			continue;
 		}
