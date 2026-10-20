@@ -24,6 +24,9 @@
 #include "Engine/Scene.h"
 #include "Engine/SkyLight.h"
 #include "CollisionQueryParams.h"
+#include "Misc/App.h"
+#include "RenderingThread.h"
+#include "SceneInterface.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
@@ -48,10 +51,11 @@ namespace MantleEnvironmentExportPrivate
 
 	/**
 	 * Mantle's sky light's mean luminance at noon, in the units SkyLightMeanLuminance reads: the average radiance of a sky light
-	 * capturing Mantle's open sky, at its full intensity. A calibration, to be measured from a capture in the client (#722);
-	 * the estimate's shape does not depend on it, only where a given room lands between dark and Mantle's own.
+	 * capturing Mantle's open sky, at its full intensity. Measured in the client (#722) over 9 captures (0.07600 to 0.07607, clear
+	 * weather, clock at 12, time scale 0) with this same formula: the irradiance map's integral luminance / 4 pi x Intensity x
+	 * Indirect Lighting Intensity x the light colour's luminance.
 	 */
-	constexpr double MantleSkyMeanLuminanceAtNoon = 1.0;
+	constexpr double MantleSkyMeanLuminanceAtNoon = 0.0761;
 
 	/** Mantle's sky's mean luminance at night, as a share of noon's: the moon and the stars. */
 	constexpr double MantleSkyNightShare = 0.02;
@@ -283,6 +287,43 @@ namespace MantleEnvironmentExportPrivate
 			FString::Printf(TEXT("Mantle drives the sun's angle; its %s are kept, and %s."), *FString::Join(Carried, TEXT(", ")), *Angle));
 	}
 
+	/**
+	 * A one-off capture of Source's scene, for a sky light whose own capture is not readable here: with real-time capture on, the
+	 * irradiance map stays empty on the game thread, and a light that has not captured has none. The creator's level is left as it
+	 * is: a transient copy (real-time capture off, the same capture settings) is spawned at the light, captured into Out
+	 * and destroyed. False when it cannot be done: no renderer, no scene, or a cubemap source, which is not captured.
+	 */
+	bool CaptureCopyOf(const USkyLightComponent* Source, FSHVectorRGB3& Out)
+	{
+		UWorld* World = Source->GetWorld();
+		if (!World || !World->Scene || !FApp::CanEverRender() || Source->SourceType != SLS_CapturedScene)
+		{
+			return false;
+		}
+		FActorSpawnParameters Params;
+		Params.ObjectFlags = RF_Transient;
+		Params.bTemporaryEditorActor = true;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		ASkyLight* Copy = World->SpawnActor<ASkyLight>(Source->GetComponentLocation(), FRotator::ZeroRotator, Params);
+		USkyLightComponent* Light = Copy ? Copy->GetLightComponent() : nullptr;
+		if (!Light)
+		{
+			return false;
+		}
+		Light->SkyDistanceThreshold = Source->SkyDistanceThreshold;
+		Light->bLowerHemisphereIsBlack = Source->bLowerHemisphereIsBlack;
+		Light->LowerHemisphereColor = Source->LowerHemisphereColor;
+		Light->bCaptureEmissiveOnly = Source->bCaptureEmissiveOnly;
+		Light->CubemapResolution = Source->CubemapResolution;
+		float AverageBrightness = 1.0f;
+		FLinearColor* NoColorScale = nullptr;
+		World->Scene->UpdateSkyCaptureContents(Light, Light->bCaptureEmissiveOnly, nullptr, nullptr, AverageBrightness, Out, nullptr, NoColorScale);
+		// Wait until the render thread has written Out.
+		FlushRenderingCommands();
+		World->DestroyActor(Copy);
+		return true;
+	}
+
 	/** The actor an entity id was exported from, null when none. */
 	const AActor* ActorForEntity(const TMap<const AActor*, FString>& IdByActor, const FString& Id)
 	{
@@ -327,7 +368,7 @@ namespace MantleEnvironmentExportPrivate
 		const double LevelMean = FMantleEnvironmentExport::SkyLightMeanLuminance(Component);
 		if (LevelMean < 0.0)
 		{
-			NotCarried.Add(TEXT("Sky Light (it has not captured its scene yet, so Mantle's own is used at full strength; let the level's sky light capture, then export again)"));
+			NotCarried.Add(TEXT("Sky Light (its scene could not be captured here, which needs the editor to render, so Mantle's own is used at full strength; export from the open editor)"));
 			return;
 		}
 		Accounted = { FName(TEXT("Intensity")), FName(TEXT("IndirectLightingIntensity")), FName(TEXT("LightColor")) };
@@ -886,11 +927,20 @@ double FMantleEnvironmentExport::SkyLightMeanLuminance(USkyLightComponent* Compo
 		return -1.0;
 	}
 	// The zeroth coefficient integrates to the radiance's total over the sphere; the mean is that over the sphere's 4 pi.
-	const FLinearColor Integral = Component->GetIrradianceEnvironmentMap().CalcIntegral();
-	const double Mean = static_cast<double>(Integral.GetLuminance()) / (4.0 * UE_DOUBLE_PI);
+	auto MeanOf = [](FSHVectorRGB3 Radiance)
+	{
+		return static_cast<double>(Radiance.CalcIntegral().GetLuminance()) / (4.0 * UE_DOUBLE_PI);
+	};
+	double Mean = MeanOf(Component->GetIrradianceEnvironmentMap());
+	FSHVectorRGB3 OneOff;
+	if ((!FMath::IsFinite(Mean) || Mean <= 0.0) && MantleEnvironmentExportPrivate::CaptureCopyOf(Component, OneOff))
+	{
+		// A real-time capture's map is empty here, and so is one that never captured: take it from a one-off capture.
+		Mean = MeanOf(OneOff);
+	}
 	if (!FMath::IsFinite(Mean) || Mean <= 0.0)
 	{
-		// All zero is a light that never captured: a dark room's capture still has its walls' light.
+		// All zero is a light that could not be captured: a dark room's capture still has its walls' light.
 		return -1.0;
 	}
 	return Mean * Component->Intensity * Component->IndirectLightingIntensity * static_cast<double>(Component->GetLightColor().GetLuminance());

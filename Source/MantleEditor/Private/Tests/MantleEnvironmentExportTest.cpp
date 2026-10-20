@@ -23,6 +23,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -813,6 +814,7 @@ bool FMantleEnvironmentSkyLightScaleTest::RunTest(const FString& Parameters)
 {
 	// #722: the scale on Mantle's sky light is the level's sky light's brightness over Mantle's sky at the clock's hour.
 	const double Noon = FMantleEnvironmentExport::MantleSkyMeanLuminance(12.0);
+	TestNearlyEqual(TEXT("Mantle's sky at noon is the client's measured 0.0761"), Noon, 0.0761, 1.0e-9);
 	const double Midnight = FMantleEnvironmentExport::MantleSkyMeanLuminance(0.0);
 	const double Morning = FMantleEnvironmentExport::MantleSkyMeanLuminance(9.0);
 	TestTrue(TEXT("Mantle's sky is brightest at noon"), Noon > Morning && Morning > Midnight);
@@ -849,8 +851,25 @@ bool FMantleEnvironmentSkyLightExportTest::RunTest(const FString& Parameters)
 		FMantleEnvironmentExport::Apply(Test.World, IdByActor, Place, Coverage);
 		TestFalse(TEXT("a sky light that has not captured writes no strength"), Place.Settings.Environment.SkyLightIntensity.IsSet());
 		const FString Dropped = DetailsOf(Coverage, MantleCoverageCategory::Sky, EOutcome::Dropped);
-		TestTrue(TEXT("and the report says why"), Dropped.Contains(TEXT("not captured")));
+		TestTrue(TEXT("and the report says why"), Dropped.Contains(TEXT("could not be captured")));
 		TestFalse(TEXT("and no longer that the place has no setting for it"), Dropped.Contains(TEXT("no setting")));
+	}
+
+	// A real-time-capture sky light has an empty map on the game thread: it is captured once from a transient copy or, where
+	// nothing can render, reported as not captured. Either way the creator's light is not changed and no copy is left spawned.
+	{
+		SkyLight->GetLightComponent()->bRealTimeCapture = true;
+		FMantlePlace Place;
+		FMantleCoverage Coverage;
+		FMantleEnvironmentExport::Apply(Test.World, IdByActor, Place, Coverage);
+		TestTrue(TEXT("the creator's sky light is still real-time"), SkyLight->GetLightComponent()->bRealTimeCapture);
+		int32 SkyLights = 0;
+		for (TActorIterator<ASkyLight> It(Test.World); It; ++It)
+		{
+			++SkyLights;
+		}
+		TestEqual(TEXT("and no copy is left in the level"), SkyLights, 1);
+		SkyLight->GetLightComponent()->bRealTimeCapture = false;
 	}
 
 	// A target client that does not read the lighting keys is told so, and nothing is written.
