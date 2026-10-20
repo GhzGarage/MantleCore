@@ -73,7 +73,7 @@ class Entity:
         """Push a physics entity: impulse is in kg*cm/s along the world axes, so its velocity changes by impulse / Mass. Does nothing while it is Anchored. Errors on an entity with no physics block."""
         ...
     def clone(self) -> Entity:
-        """Make a copy (same look, tags and place). On the server the copy appears for everyone; on a client only for that player. Tip: keep a hidden template and clone it."""
+        """Make a copy (same look, tags and place). On the server the copy appears for everyone; on a client only for that player. Tip: keep a hidden template and clone it. A physics entity, a Constraint or an NPC can't be cloned (it errors, and says how to make another)."""
         ...
     def destroy(self) -> None:
         """Remove the entity. On the server it disappears for everyone; on a client only for that player."""
@@ -127,7 +127,7 @@ class Entity:
         """Sound emitters only: stop the emitter's sound, fading it out over fadeOut seconds (0 by default). It stays silent until PlaySound, from a server script for players who join later too."""
         ...
     def tween(self, goal: dict[str, Any], seconds: float, style: Optional[str] = ..., direction: Optional[str] = ...) -> Signal:
-        """Smoothly move/rotate/scale to the goal. Since script API 1.8 the goal can also fade a light's LightColor or LightIntensity, or a mesh's Color; those errors like setting them would. style: Linear, Sine, Quad, Cubic, Quart, Quint, Exponential, Circular, Back, Bounce, Elastic. direction: In, Out, InOut. Returns a Completed signal."""
+        """Smoothly move/rotate/scale to the goal. Since script API 1.8 the goal can also fade a light's LightColor or LightIntensity, or a mesh's Color; those errors like setting them would. style: Linear, Sine, Quad, Cubic, Quart, Quint, Exponential, Circular, Back, Bounce, Elastic. direction: In, Out, InOut. Returns a Completed signal. A Position, Rotation or Scale goal on an entity the place did not mark dynamic is a script error, like setting them."""
         ...
 
 class Player:
@@ -236,10 +236,10 @@ class NPC:
         """Walk to position along the ground, around walls and obstacles, replacing any walk in progress. Returns false at once when position is more than 500 m away or the NPC is dead; otherwise true, and MoveCompleted fires when the walk ends: true when the NPC arrived, false when there is no way there (no walkable ground, a blocked or too long path). The first walk in a place waits for its navigation to build, which can take a few seconds."""
         ...
     def play_asset_clip(self, clipAssetId: str, params: Optional[dict[str, Any]] = ...) -> None:
-        """Play one of the place's AnimClip assets on the NPC, starting now, on every player's screen and in step, players who join later included. params: Loop (false by default: the clip plays once and the NPC goes back to walking and standing on its own; true keeps it playing until StopClip or the next PlayClip), PlayRate (clip seconds per second, 1 by default, clamped to 0..10) and StartOffset (seconds into the clip to start at, 0 by default, clamped to 0..3600). The clip must be authored on the skeleton of the NPC's body (the avatars' MetaHuman body). Errors when the id is not an AnimClip in the place's assets or, where the server draws the NPC, the clip is on another skeleton; a dedicated server never loads clips, so there that last one shows on each player's screen as the NPC walking and standing on its own instead."""
+        """Play one of the place's AnimClip assets on the NPC, starting now, on every player's screen and in step, players who join later included. params: Loop (false by default: the clip plays once and the NPC goes back to walking and standing on its own; true keeps it playing until StopClip or the next PlayClip), PlayRate (clip seconds per second, 1 by default, clamped to 0..10) and StartOffset (seconds into the clip to start at, 0 by default, clamped to 0..3600). The clip must be authored on the skeleton of the NPC's body (the avatars' MetaHuman body). Errors when the id is not an AnimClip in the place's assets or, where the server draws the NPC, the clip is on another skeleton; a dedicated server never loads clips, so it cannot check the skeleton: there a clip on another skeleton shows on each player's screen as the NPC walking and standing on its own instead, with no error for the script."""
         ...
     def play_clip(self, clip: str, loop: Optional[bool] = ...) -> None:
-        """Play one of the NPC clips on every player's screen: 'walk', 'idle', 'turn_left' or 'turn_right', or (script API 1.23) one of the place's AnimClip asset ids at normal speed (PlayAssetClip also sets its speed and start). It plays once and the NPC goes back to walking and standing on its own, or with loop true keeps playing until StopClip or the next PlayClip. Players who join later see it too."""
+        """Play one of the NPC clips on every player's screen: 'walk', 'idle', 'turn_left' or 'turn_right', or (script API 1.23) one of the place's AnimClip asset ids at normal speed (PlayAssetClip also sets its speed and start). It plays once and the NPC goes back to walking and standing on its own, or with loop true keeps playing until StopClip or the next PlayClip. Players who join later see it too. A clip on another skeleton than the NPC's body can't be checked on a dedicated server, which never loads clips; each player's screen then shows the NPC walking and standing on its own instead."""
         ...
     def respawn(self, position: Optional[Vector3] = ...) -> bool:
         """Bring the NPC back with full health, dead or alive: standing at position (its feet) when given, otherwise where NPCs:Spawn first put it. Its clip stops, and a walk in progress ends without MoveCompleted. Returns false when it could not be put there."""
