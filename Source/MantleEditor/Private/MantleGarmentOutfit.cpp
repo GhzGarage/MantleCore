@@ -3,7 +3,6 @@
 
 #include "MantleAvatarContract.h"
 #include "MantleAvatarConverter.h"
-#include "MantleAvatarReposeFixer.h"
 #include "MantleAvatarStripFixer.h"
 #include "MantleCosmeticExport.h"
 #include "MantleMetaHumanPose.h"
@@ -27,6 +26,9 @@
 #include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
 #include "PreviewScene.h"
+#include "Rendering/SkeletalMeshModel.h"
+#include "Rendering/SkeletalMeshLODModel.h"
+#include "MeshDescription.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -250,27 +252,40 @@ namespace MantleGarmentOutfitPrivate
 USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FString& Folder, const FString& Name, FString& OutError)
 {
 	using namespace MantleGarmentOutfitPrivate;
-	TArray<FName> Names;
-	TArray<int32> Parents;
-	TArray<FTransform> Local;
-	FMantleAvatarRepose::ReadMesh(Source, Names, Parents, Local);
+	// A new mesh built from Source's LOD 0 geometry, never a duplicate: MetaHuman Creator's in-memory meshes don't duplicate.
+	TArray<USkinnedAsset*> Compiling = { &Source };
+	FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
+	FMeshDescription Description;
+	if (const FMeshDescription* Own = Source.HasMeshDescription(0) ? Source.GetMeshDescription(0) : nullptr)
+	{
+		Description = *Own;
+	}
+	else if (Source.GetImportedModel() && Source.GetImportedModel()->LODModels.IsValidIndex(0))
+	{
+		Source.GetImportedModel()->LODModels[0].GetMeshDescription(&Source, 0, Description);
+	}
+	if (Description.Vertices().Num() == 0)
+	{
+		OutError = FString::Printf(TEXT("%s has no geometry to copy"), *Source.GetName());
+		return nullptr;
+	}
 	const FString PackageName = FMantleMetaHumanSteps::UniquePackageName(Folder, Name);
-	USkeletalMesh* Copy = FMantleAvatarRepose::WriteWithPose(&Source, Local, Folder, FPackageName::GetShortName(PackageName),
-		[](int32, FMeshDescription&, FString&) { return true; }, OutError);
+	const FString AssetName = FPackageName::GetShortName(PackageName);
+	UPackage* Package = CreatePackage(*PackageName);
+	USkeletalMesh* Copy = Package ? NewObject<USkeletalMesh>(Package, FName(*AssetName), RF_Public | RF_Standalone | RF_Transactional) : nullptr;
 	if (!Copy)
 	{
+		OutError = FString::Printf(TEXT("could not create %s"), *PackageName);
 		return nullptr;
 	}
 	auto IsTransient = [](const UObject* Object) { return Object && (Object->HasAnyFlags(RF_Transient) || Object->GetPackage() == GetTransientPackage()); };
-	if (!Copy->GetSkeleton() || IsTransient(Copy->GetSkeleton()))
-	{
-		if (!GarmentGiveSkeleton(*Copy, Folder, FPackageName::GetShortName(PackageName) + TEXT("_Skeleton"), OutError))
-		{
-			return nullptr;
-		}
-	}
+	Copy->PreEditChange(nullptr);
+	Copy->SetRefSkeleton(Source.GetRefSkeleton());
+	Copy->GetRefBasesInvMatrix().Reset();
+	Copy->CalculateInvRefMatrices();
 	// Creator's preview materials are made in memory: a saved asset can't point at them.
-	for (FSkeletalMaterial& Slot : Copy->GetMaterials())
+	TArray<FSkeletalMaterial> Materials = Source.GetMaterials();
+	for (FSkeletalMaterial& Slot : Materials)
 	{
 		UMaterialInterface* Material = Slot.MaterialInterface;
 		while (IsTransient(Material))
@@ -280,15 +295,31 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 		}
 		Slot.MaterialInterface = Material;
 	}
-	if (IsTransient(Copy->GetPhysicsAsset()))
+	Copy->SetMaterials(Materials);
+	Copy->AddLODInfo();
+	Copy->GetImportedModel()->LODModels.Add(new FSkeletalMeshLODModel);
+	Copy->CreateMeshDescription(0, MoveTemp(Description));
+	Copy->CommitMeshDescription(0);
+	Copy->SetImportedBounds(Source.GetImportedBounds());
+	USkeleton* Skeleton = Source.GetSkeleton();
+	if (Skeleton && !IsTransient(Skeleton))
 	{
-		Copy->SetPhysicsAsset(nullptr);
+		Copy->SetSkeleton(Skeleton);
+	}
+	Copy->PostEditChange();
+	TArray<USkinnedAsset*> Built = { Copy };
+	FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
+	FAssetRegistryModule::AssetCreated(Copy);
+	if (!Copy->GetSkeleton() && !GarmentGiveSkeleton(*Copy, Folder, AssetName + TEXT("_Skeleton"), OutError))
+	{
+		return nullptr;
 	}
 	if (!GarmentSave(Copy))
 	{
 		OutError = FString::Printf(TEXT("%s could not be saved"), *Copy->GetPathName());
 		return nullptr;
 	}
+	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT saved %s from %s"), *Copy->GetPathName(), *Source.GetPathName());
 	return Copy;
 }
 
