@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MantleHeadFit.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -39,11 +40,24 @@ struct MANTLEEDITOR_API FMantleParametricOutfit
 		FMantleCosmeticDraft& OutDraft, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutError, FString* OutNote = nullptr);
 
 	/**
-	 * Converts Draft's Outfit into a rigid accessory (a hat from a MetaHuman Outfit): one authored size's kept sections,
-	 * reduced to the accessory limit, as a transient static mesh whose pivot is the head bone (where the acc_hat socket
-	 * sits), fitted from the head it was authored on to the reference head (FMantleHeadFit), so each avatar's fitted
-	 * hat socket puts it on that avatar's head. OutNote says what was reduced and measured. KeepAlive must outlive OutDraft.
+	 * Converts Draft's Outfit into a rigid accessory (a hat, a shirt tied round the waist): one authored size's kept sections,
+	 * reduced to the accessory limit, as a transient static mesh whose pivot is the slot's socket bone (limits.json
+	 * socketBone, where Mantle's socket sits at identity). A hat (acc_hat) is also fitted from the head it was authored on
+	 * to the reference head (FMantleHeadFit), so each avatar's fitted hat socket puts it on that avatar's head; other slots'
+	 * sockets are not fitted per avatar, so their pieces keep the authored size. OutNote says what was reduced and measured. KeepAlive must outlive OutDraft.
 	 */
 	static bool PrepareRigid(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract,
 		FMantleCosmeticDraft& OutDraft, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutError, FString* OutNote = nullptr);
+
+	/** Where PrepareRigid hangs a piece for an accessory slot: its socket bone, and whether the head-size fit applies (acc_hat only). */
+	struct FRigidPivot
+	{
+		FString Bone;
+		bool bHeadFit = false;
+	};
+	static bool RigidPivot(const FMantleAvatarContract& Contract, const FString& Slot, FRigidPivot& OutPivot, FString& OutError);
+
+	/** A source vertex (component space, cm) as PrepareRigid stores it: in Pose's frame (the socket bone's), the head fit undone. */
+	static FVector3f RigidPosition(const FVector3f& Position, const FTransform& Pose, const FMantleHeadFit::FFit& Fit);
+	static FVector3f RigidNormal(const FVector3f& Normal, const FTransform& Pose, const FMantleHeadFit::FFit& Fit);
 };
