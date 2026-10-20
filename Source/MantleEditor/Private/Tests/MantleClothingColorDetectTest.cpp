@@ -349,6 +349,16 @@ bool FMantleClothingColorDetectExportTest::RunTest(const FString& Parameters)
 	FMantleCosmeticPackage HatPackage = GreyGarmentPackage();
 	FMantleCosmeticExport::AddDetectedClothingColors(HatPackage, Mesh, Materials, Hat, 2048, *Contract);
 	TestEqual(TEXT("no areas on other slots"), HatPackage.Materials[0].ColorRegions.Num(), 0);
+
+	// A rigid accessory (a baseball cap) gets its colour areas as clothing does.
+	FMantleCosmeticDraft Cap = GarmentDraft();
+	Cap.Class = EMantleCosmeticClass::Accessory;
+	Cap.Slot = TEXT("acc_hat");
+	FMantleCosmeticPackage CapPackage = GreyGarmentPackage();
+	FMantleCosmeticExport::AddDetectedClothingColors(CapPackage, Mesh, Materials, Cap, 2048, *Contract);
+	TestFalse(TEXT("no error on an accessory"), CapPackage.HasErrors());
+	TestEqual(TEXT("an accessory finds all three areas"), RegionIds(CapPackage.Materials[0]), TArray<FString>({ TEXT("main"), TEXT("accent_1"), TEXT("accent_2") }));
+	TestFalse(TEXT("its area map uploads"), CapPackage.Materials[0].ColorMaskKey.IsEmpty());
 	return true;
 }
 

@@ -249,9 +249,11 @@ bool FMantleCosmeticPackage::MakeItemJson(const TMap<FString, FString>& IdsByKey
 		{
 			if (!ValidateNativeHairRef(Ref, Class, &Refs == &FaceMaterials, OutError)) return false;
 			if (Ref.ColorRegions.IsEmpty() && Ref.ColorMaskKey.IsEmpty()) continue;
-			if (Class != EMantleCosmeticClass::Garment || (Slot != TEXT("top") && Slot != TEXT("bottom") && Slot != TEXT("footwear")) ||
-				Ref.ColorMaskKey.IsEmpty() || Ref.ColorRegions.IsEmpty() || !MantleClothingColor::ValidateRegions(Ref.ColorRegions, OutError))
-			{ OutError = TEXT("Clothing color declarations need a clothing material, mask and measured regions."); return false; }
+			// Clothing (top, bottom, footwear) and rigid accessories (a hat) carry colour areas.
+			const bool bColorClass = (Class == EMantleCosmeticClass::Garment && (Slot == TEXT("top") || Slot == TEXT("bottom") || Slot == TEXT("footwear")))
+				|| Class == EMantleCosmeticClass::Accessory;
+			if (!bColorClass || Ref.ColorMaskKey.IsEmpty() || Ref.ColorRegions.IsEmpty() || !MantleClothingColor::ValidateRegions(Ref.ColorRegions, OutError))
+			{ OutError = TEXT("Color declarations need a clothing or accessory material, mask and measured regions."); return false; }
 			for (const FMantleClothingColorRegion& Region : Ref.ColorRegions)
 			{
 				const TPair<FString, FColor> Definition(Region.Label, Region.DefaultColor);
