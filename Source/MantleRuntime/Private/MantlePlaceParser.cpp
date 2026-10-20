@@ -1952,6 +1952,50 @@ namespace
 		ReadProbeNumber(Ctx, Props, TEXT("skylightScale"), Path, 0.0, 1.0, P.SkylightScale);
 	}
 
+	/**
+	 * A Text entity's properties (GhzGarage/mantle#724): only `text` is required; a key left out keeps
+	 * FMantleTextProps' default. The colour is linear RGBA.
+	 */
+	void ParseText(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Props, const FString& Path, FMantleTextProps& P)
+	{
+		RequireNoUnknownKeys(Ctx, Props,
+			{ TEXT("text"), TEXT("color"), TEXT("worldSize"), TEXT("horizontalAlignment"), TEXT("verticalAlignment"), TEXT("xScale"), TEXT("yScale") },
+			Path);
+		if (RequireString(Ctx, Props, TEXT("text"), Path, P.Text))
+		{
+			const int32 Length = FMantlePlaceParser::CodePointLength(P.Text);
+			if (Length < 1 || Length > FMantlePlaceLimits::MaxTextLength)
+			{
+				Ctx.Fail(Join(Path, TEXT("text")),
+					FString::Printf(TEXT("is %d characters; it must be 1 to %d"), Length, FMantlePlaceLimits::MaxTextLength));
+			}
+		}
+		if (Props->HasField(TEXT("color")))
+		{
+			TArray<double> Values;
+			if (ReadNumberArray(Ctx, Props, TEXT("color"), 4, Path, Values))
+			{
+				for (int32 Channel = 0; Channel < 4; ++Channel)
+				{
+					RangeCheck(Ctx, Values[Channel], 0.0, 1.0, Index(Join(Path, TEXT("color")), Channel));
+				}
+				P.Color = FLinearColor(static_cast<float>(Values[0]), static_cast<float>(Values[1]), static_cast<float>(Values[2]), static_cast<float>(Values[3]));
+			}
+		}
+		ReadProbeNumber(Ctx, Props, TEXT("worldSize"), Path, FMantlePlaceLimits::MinTextWorldSize, FMantlePlaceLimits::MaxTextWorldSize, P.WorldSize);
+		ReadProbeNumber(Ctx, Props, TEXT("xScale"), Path, FMantlePlaceLimits::MinTextScale, FMantlePlaceLimits::MaxTextScale, P.XScale);
+		ReadProbeNumber(Ctx, Props, TEXT("yScale"), Path, FMantlePlaceLimits::MinTextScale, FMantlePlaceLimits::MaxTextScale, P.YScale);
+		FString Alignment;
+		if (Props->TryGetStringField(TEXT("horizontalAlignment"), Alignment) && !MantleParseTextHorizontalAlignment(Alignment, P.HorizontalAlignment))
+		{
+			Ctx.Fail(Join(Path, TEXT("horizontalAlignment")), FString::Printf(TEXT("'%s' is not left, center or right"), *Alignment));
+		}
+		if (Props->TryGetStringField(TEXT("verticalAlignment"), Alignment) && !MantleParseTextVerticalAlignment(Alignment, P.VerticalAlignment))
+		{
+			Ctx.Fail(Join(Path, TEXT("verticalAlignment")), FString::Printf(TEXT("'%s' is not top, center, bottom or baseline"), *Alignment));
+		}
+	}
+
 	// An entity's interactable block (the schema's interactable). Colours are linear RGB arrays like every other
 	// colour of the place; entity references are checked for existence once every entity is read (ParseFromString).
 
@@ -2776,6 +2820,15 @@ namespace
 			FMantleReflectionProbeProps P;
 			ParseReflectionProbe(Ctx, Props, Path, P);
 			Entity.Props.Set<FMantleReflectionProbeProps>(MoveTemp(P));
+			break;
+		}
+
+		case EMantleEntityType::Text:
+		{
+			// World text, drawn on each client in Mantle's built-in font (GhzGarage/mantle#724).
+			FMantleTextProps P;
+			ParseText(Ctx, Props, Path, P);
+			Entity.Props.Set<FMantleTextProps>(MoveTemp(P));
 			break;
 		}
 		}
@@ -3992,6 +4045,18 @@ FMantleParseResult FMantlePlaceParser::ParseFromString(const FString& Json, cons
 				Join(Index(TEXT("/entities"), i), TEXT("type")),
 				FString::Printf(TEXT("is ReflectionProbe number %d; a place may have at most %d"),
 					ReflectionProbes, FMantlePlaceLimits::MaxReflectionProbesPerPlace));
+		}
+	}
+
+	// The Text budget (GhzGarage/mantle#724), stated in the schema's prose and reported the same way as the Effect's.
+	int32 Texts = 0;
+	for (int32 i = 0; i < Place.Entities.Num(); ++i)
+	{
+		if (Place.Entities[i].Type == EMantleEntityType::Text && ++Texts == FMantlePlaceLimits::MaxTextsPerPlace + 1)
+		{
+			Ctx.Fail(
+				Join(Index(TEXT("/entities"), i), TEXT("type")),
+				FString::Printf(TEXT("is Text number %d; a place may have at most %d"), Texts, FMantlePlaceLimits::MaxTextsPerPlace));
 		}
 	}
 

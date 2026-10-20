@@ -68,6 +68,8 @@ namespace MantleClientFeatures
 	inline const TCHAR* const MaterialAdditive = TEXT("materialAdditive");
 	/** A preview manifest's "weapons" section (#729): a weapon document, its model, and equipping it on spawn. */
 	inline const TCHAR* const WeaponDocument = TEXT("weaponDocument");
+	/** Text entities (GhzGarage/mantle#724): world text drawn in Mantle's built-in font. */
+	inline const TCHAR* const WorldText = TEXT("worldText");
 
 	/** Every feature this build reads, in the order above. */
 	inline TArray<FString> All()
@@ -76,7 +78,7 @@ namespace MantleClientFeatures
 			InstancedMesh, CrowdSpawner, CrowdPointsOfInterest, SkeletalMesh, RectLight, Decal, LightShape, Terrain, TerrainGrass,
 			Vehicle, VehicleLinkage, VehicleParts, VehicleCarInteraction, VehicleContactPoints, VehicleHiddenSeat, VehicleFliers, VehicleHover, VehicleSeatKind, VehicleWeaponArc, Effect, EffectSprites, Constraint, Scatter, ReflectionProbes, Storage,
 			UIDocuments, EnvironmentDefaults, EnvironmentLighting, AvatarHeight, SoundEmitterAutoplay, StaticMeshPhysics, PhysicsMaterial, Surface, DrawDistance, CarPaint,
-			MaterialFidelity, MaterialAdditive, WeaponDocument
+			MaterialFidelity, MaterialAdditive, WeaponDocument, WorldText
 		};
 	}
 }

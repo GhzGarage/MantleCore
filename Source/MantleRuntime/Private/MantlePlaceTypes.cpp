@@ -38,9 +38,23 @@ namespace
 		TEXT("Scatter"),
 		TEXT("ReflectionProbe"),
 		TEXT("WeaponSpawn"),
-		TEXT("ScriptPoint")
+		TEXT("ScriptPoint"),
+		TEXT("Text")
 	};
-	static_assert(UE_ARRAY_COUNT(GEntityTypeNames) == static_cast<SIZE_T>(EMantleEntityType::ScriptPoint) + 1, "one name per EMantleEntityType");
+	static_assert(UE_ARRAY_COUNT(GEntityTypeNames) == static_cast<SIZE_T>(EMantleEntityType::Text) + 1, "one name per EMantleEntityType");
+
+	// In EMantleTextHorizontalAlignment and EMantleTextVerticalAlignment order; a Text entity's alignments (#724).
+	const TCHAR* const GTextHorizontalAlignmentNames[] = {
+		TEXT("left"),
+		TEXT("center"),
+		TEXT("right")
+	};
+	const TCHAR* const GTextVerticalAlignmentNames[] = {
+		TEXT("top"),
+		TEXT("center"),
+		TEXT("bottom"),
+		TEXT("baseline")
+	};
 
 	// In EMantleReflectionProbeShape order; a ReflectionProbe's shape (#628).
 	const TCHAR* const GReflectionProbeShapeNames[] = {
@@ -285,4 +299,26 @@ const TCHAR* MantleReflectionProbeShapeToString(EMantleReflectionProbeShape Shap
 bool MantleParseReflectionProbeShape(const FString& In, EMantleReflectionProbeShape& Out)
 {
 	return ParseEnum(In, GReflectionProbeShapeNames, Out);
+}
+
+const TCHAR* MantleTextHorizontalAlignmentToString(EMantleTextHorizontalAlignment Alignment)
+{
+	const int32 Index = static_cast<int32>(Alignment);
+	return (Index >= 0 && Index < UE_ARRAY_COUNT(GTextHorizontalAlignmentNames)) ? GTextHorizontalAlignmentNames[Index] : TEXT("left");
+}
+
+bool MantleParseTextHorizontalAlignment(const FString& In, EMantleTextHorizontalAlignment& Out)
+{
+	return ParseEnum(In, GTextHorizontalAlignmentNames, Out);
+}
+
+const TCHAR* MantleTextVerticalAlignmentToString(EMantleTextVerticalAlignment Alignment)
+{
+	const int32 Index = static_cast<int32>(Alignment);
+	return (Index >= 0 && Index < UE_ARRAY_COUNT(GTextVerticalAlignmentNames)) ? GTextVerticalAlignmentNames[Index] : TEXT("top");
+}
+
+bool MantleParseTextVerticalAlignment(const FString& In, EMantleTextVerticalAlignment& Out)
+{
+	return ParseEnum(In, GTextVerticalAlignmentNames, Out);
 }

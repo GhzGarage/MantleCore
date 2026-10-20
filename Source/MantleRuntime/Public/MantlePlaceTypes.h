@@ -92,7 +92,29 @@ enum class EMantleEntityType : uint8
 	 * package and its parameters. The package's scripts run once per side and read their points through
 	 * Script.Points. Added without a schema version bump, like WeaponSpawn.
 	 */
-	ScriptPoint
+	ScriptPoint,
+	/**
+	 * Text drawn in the world (GhzGarage/mantle#724): a UTextRenderComponent in Mantle's built-in font. Client-only
+	 * content; a server keeps the entity. Added without a schema version bump, gated by the worldText client feature.
+	 */
+	Text
+};
+
+/** A Text entity's horizontal alignment (#724), the place file's properties.horizontalAlignment. */
+enum class EMantleTextHorizontalAlignment : uint8
+{
+	Left,
+	Center,
+	Right
+};
+
+/** A Text entity's vertical alignment (#724), the place file's properties.verticalAlignment: where the entity's origin sits on the text. */
+enum class EMantleTextVerticalAlignment : uint8
+{
+	Top,
+	Center,
+	Bottom,
+	Baseline
 };
 
 /** A ReflectionProbe's influence volume (#628), the place file's properties.shape: "box" or "sphere". */
@@ -262,6 +284,10 @@ MANTLERUNTIME_API bool MantleParseConstraintType(const FString& In, EMantleConst
 /** "box", "sphere" (#628); parsing is case-exact, as the schema's enum is. */
 MANTLERUNTIME_API const TCHAR* MantleReflectionProbeShapeToString(EMantleReflectionProbeShape Shape);
 MANTLERUNTIME_API bool MantleParseReflectionProbeShape(const FString& In, EMantleReflectionProbeShape& Out);
+MANTLERUNTIME_API const TCHAR* MantleTextHorizontalAlignmentToString(EMantleTextHorizontalAlignment Alignment);
+MANTLERUNTIME_API bool MantleParseTextHorizontalAlignment(const FString& In, EMantleTextHorizontalAlignment& Out);
+MANTLERUNTIME_API const TCHAR* MantleTextVerticalAlignmentToString(EMantleTextVerticalAlignment Alignment);
+MANTLERUNTIME_API bool MantleParseTextVerticalAlignment(const FString& In, EMantleTextVerticalAlignment& Out);
 
 struct FMantleRevision
 {
@@ -1179,6 +1205,25 @@ struct FMantleReflectionProbeProps
 	double SkylightScale = 0.1;
 };
 
+/**
+ * World text (GhzGarage/mantle#724), drawn in Mantle's built-in font and material. The entity's transform places the text
+ * and turns it; its scale plays no part (WorldSize, XScale and YScale size it).
+ */
+struct FMantleTextProps
+{
+	/** UTF-8, 1 to FMantlePlaceLimits::MaxTextLength code points; a line break is "\n". */
+	FString Text;
+	/** Linear RGBA, each channel 0 to 1. */
+	FLinearColor Color = FLinearColor::White;
+	/** The glyph height, cm, FMantlePlaceLimits::MinTextWorldSize to MaxTextWorldSize. */
+	double WorldSize = 30.0;
+	EMantleTextHorizontalAlignment HorizontalAlignment = EMantleTextHorizontalAlignment::Left;
+	EMantleTextVerticalAlignment VerticalAlignment = EMantleTextVerticalAlignment::Top;
+	/** Each FMantlePlaceLimits::MinTextScale to MaxTextScale. */
+	double XScale = 1.0;
+	double YScale = 1.0;
+};
+
 using FMantleEntityProps = TVariant<
 	FMantleStaticMeshProps,
 	FMantleEmptyProps,
@@ -1199,7 +1244,8 @@ using FMantleEntityProps = TVariant<
 	FMantleScatterParams,
 	FMantleReflectionProbeProps,
 	FMantleWeaponSpawnProps,
-	FMantleScriptPointProps>;
+	FMantleScriptPointProps,
+	FMantleTextProps>;
 
 /** What happens to an interaction option once it has been used (the schema's afterUse). */
 enum class EMantleInteractableAfterUse : uint8
