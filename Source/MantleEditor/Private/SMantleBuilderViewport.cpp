@@ -476,7 +476,7 @@ void FMantleBuilderViewportClient::Draw(const FSceneView* View, FPrimitiveDrawIn
 		const bool bSelected = Point.Role == SelectedRole;
 		const FTransform ToMesh = PointToView(Point);
 		const FVector Location = ToMesh.GetLocation();
-		const double PixelScale = View->WorldToScreen(Location).W * (4.0 / View->UnscaledViewRect.Width() / View->ViewMatrices.GetProjectionMatrix().M[0][0]);
+		const double PixelScale = View->WorldToScreen(Location).W * (4.0 / View->UnscaledViewRect.Width() / View->ViewMatrices.GetViewToClip().M[0][0]);
 		const double Size = 6.0 * PixelScale;
 		// A guess is dimmer and smaller than a placement the creator made.
 		const FLinearColor Color = bCreator ? ShapeColor(Shape) : ShapeColor(Shape) * 0.55f;
@@ -538,7 +538,7 @@ void FMantleBuilderViewportClient::DrawCanvas(FViewport& InViewport, FSceneView&
 		if (const FMantleBuilderPointRole* Role = FindRole(Point.Role))
 		{
 			FVector2D Screen;
-			if (FSceneView::ProjectWorldToScreen(PointToView(Point).GetLocation(), View.UnscaledViewRect, View.ViewMatrices.GetViewProjectionMatrix(), Screen))
+			if (FSceneView::ProjectWorldToScreen(PointToView(Point).GetLocation(), View.UnscaledViewRect, View.ViewMatrices.GetWorldToClip(), Screen))
 			{
 				const bool bSelected = Point.Role == SelectedRole;
 				DrawLabel(Role->Label, Screen.X / Dpi + 14.f, Screen.Y / Dpi - 24.f, bSelected ? FLinearColor::White : FLinearColor(0.7f, 0.7f, 0.7f));
@@ -551,7 +551,7 @@ void FMantleBuilderViewportClient::DrawCanvas(FViewport& InViewport, FSceneView&
 		for (const FMantleBuilderOverlayMarker& Marker : Overlay.Markers)
 		{
 			FVector2D Screen;
-			if (!Marker.Label.IsEmpty() && FSceneView::ProjectWorldToScreen(ToView(Marker.Location), View.UnscaledViewRect, View.ViewMatrices.GetViewProjectionMatrix(), Screen))
+			if (!Marker.Label.IsEmpty() && FSceneView::ProjectWorldToScreen(ToView(Marker.Location), View.UnscaledViewRect, View.ViewMatrices.GetWorldToClip(), Screen))
 			{
 				DrawLabel(Marker.Label, Screen.X / Dpi + 10.f, Screen.Y / Dpi - 20.f, Marker.Color);
 			}
@@ -582,7 +582,7 @@ void FMantleBuilderViewportClient::ProcessClick(FSceneView& View, HHitProxy* Hit
 			{
 				MantleBuilderViewportMath::FScreenHandle& Handle = Handles.AddDefaulted_GetRef();
 				Handle.Role = Point.Role;
-				if (!FSceneView::ProjectWorldToScreen(PointToView(Point).GetLocation(), View.UnscaledViewRect, View.ViewMatrices.GetViewProjectionMatrix(), Handle.Screen))
+				if (!FSceneView::ProjectWorldToScreen(PointToView(Point).GetLocation(), View.UnscaledViewRect, View.ViewMatrices.GetWorldToClip(), Handle.Screen))
 				{
 					Handles.Pop();
 				}
@@ -747,7 +747,7 @@ bool FMantleBuilderViewportClient::BeginPointDrag(FViewport* InViewport, int32 X
 	{
 		MantleBuilderViewportMath::FScreenHandle& Handle = Handles.AddDefaulted_GetRef();
 		Handle.Role = Point.Role;
-		if (!FSceneView::ProjectWorldToScreen(PointToView(Point).GetLocation(), View->UnscaledViewRect, View->ViewMatrices.GetViewProjectionMatrix(), Handle.Screen))
+		if (!FSceneView::ProjectWorldToScreen(PointToView(Point).GetLocation(), View->UnscaledViewRect, View->ViewMatrices.GetWorldToClip(), Handle.Screen))
 		{
 			Handles.Pop();
 		}
