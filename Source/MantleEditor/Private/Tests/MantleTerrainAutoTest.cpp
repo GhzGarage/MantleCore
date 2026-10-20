@@ -10,6 +10,7 @@
 #include "Materials/MaterialExpressionFunctionInput.h"
 #include "Materials/MaterialExpressionFunctionOutput.h"
 #include "Materials/MaterialExpressionLandscapeLayerBlend.h"
+#include "Materials/MaterialExpressionLandscapeLayerCoords.h"
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionMultiply.h"
@@ -211,6 +212,46 @@ namespace MantleTerrainAutoTestPrivate
 		Scaled->A.Connect(0, Above);
 		Scaled->ConstB = 0.001f;
 		return AddSaturate(Material, Scaled);
+	}
+
+	/** A 2 x 2 linear texture whose red is 0 and 255 on the top row, 255 and 0 on the bottom: a checker, for a mask to sample. */
+	UTexture2D* MakeCheckerTexture()
+	{
+		UTexture2D* Texture = NewObject<UTexture2D>(GetTransientPackage());
+		const uint8 Bgra[16] = { 0, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 0, 255 };
+		Texture->Source.Init(2, 2, 1, 1, TSF_BGRA8, Bgra);
+		Texture->SRGB = false;
+		Texture->CompressionSettings = TC_Masks;
+		Texture->AddressX = TA_Wrap;
+		Texture->AddressY = TA_Wrap;
+		return Texture;
+	}
+
+	/** The material: ground, then rock over it by the red of the checker sampled at Uv. */
+	UMaterial* MakeCheckerMaterial(const TFunctionRef<UMaterialExpression*(UMaterial*)>& MakeUv, const bool bConnectUv)
+	{
+		UMaterial* Material = NewObject<UMaterial>(GetTransientPackage());
+		UMaterialExpressionTextureSample* Sample = AddSample(Material, MakeCheckerTexture());
+		if (bConnectUv)
+		{
+			Sample->Coordinates.Connect(0, MakeUv(Material));
+		}
+		UMaterialExpressionComponentMask* Red = AddNode<UMaterialExpressionComponentMask>(Material);
+		Red->Input.Connect(0, Sample);
+		Red->R = true;
+		Red->G = false;
+		Red->B = false;
+		Red->A = false;
+		// Reads the world position too, so the blend is a mask of the surface's shape.
+		UMaterialExpressionAdd* Mask = AddNode<UMaterialExpressionAdd>(Material);
+		Mask->A.Connect(0, Red);
+		UMaterialExpressionMultiply* Zero = AddNode<UMaterialExpressionMultiply>(Material);
+		Zero->A.Connect(2, AddNode<UMaterialExpressionWorldPosition>(Material));
+		Zero->ConstB = 0.0f;
+		Mask->B.Connect(0, Zero);
+		Material->GetEditorOnlyData()->BaseColor.Connect(0,
+			AddBlend(Material, AddColour(Material, TEXT("GroundColor"), FLinearColor::Green), AddColour(Material, TEXT("RockColor"), FLinearColor::Gray), AddSaturate(Material, Mask)));
+		return Material;
 	}
 
 	/** The surface where the ground rises SlopeX in X and SlopeY in Y (cm per cm), at the world position Position: the frame BakeAutoWeights builds. */
@@ -667,6 +708,98 @@ bool FMantleTerrainAutoCoverageTest::RunTest(const FString& Parameters)
 	if (TestTrue(TEXT("a material with a normal fade is read"), FMantleLandscapeMaterialReader::Read(Other, 100.0, OtherRead, Problem)))
 	{
 		TestTrue(TEXT("what the chain does not cover is still reported"), HasNote(OtherRead.Approximations, TEXT("reads the surface normal")));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleTerrainAutoSamplesMaskTexturesTest,
+	"Mantle.Editor.Terrain.AutoSamplesMaskTextures",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleTerrainAutoSamplesMaskTexturesTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleTerrainAutoTestPrivate;
+
+	auto Evaluate = [this](UMaterial* Material, const FMantleSurfaceSample& Sample, double& OutMask) -> bool
+	{
+		FMantleLandscapeMaterialRead Read;
+		FString Problem;
+		if (!FMantleLandscapeMaterialReader::Read(Material, 100.0, Read, Problem))
+		{
+			AddError(Problem);
+			return false;
+		}
+		if (!Read.AutoChain.bFound || Read.AutoChain.Program->NumOutputs() != 1)
+		{
+			AddError(TEXT("the material's chain was not found"));
+			return false;
+		}
+		TestFalse(TEXT("a sampled texture is not said to be taken as its average"), HasNote(Read.Approximations, TEXT("edge noise")));
+		Read.AutoChain.Program->Evaluate(Sample, &OutMask);
+		return true;
+	};
+
+	// UVs from the world position: 0.005 a cm, so the 2 x 2 texture repeats every 200 cm and a texel is 100 cm.
+	UMaterial* World = MakeCheckerMaterial([](UMaterial* Material) -> UMaterialExpression*
+	{
+		UMaterialExpressionMultiply* Scaled = AddNode<UMaterialExpressionMultiply>(Material);
+		Scaled->A.Connect(0, AddNode<UMaterialExpressionWorldPosition>(Material));
+		Scaled->ConstB = 0.005f;
+		UMaterialExpressionComponentMask* Xy = AddNode<UMaterialExpressionComponentMask>(Material);
+		Xy->Input.Connect(0, Scaled);
+		Xy->R = true;
+		Xy->G = true;
+		Xy->B = false;
+		Xy->A = false;
+		return Xy;
+	}, true);
+	// Texel centres are at 50 and 150 cm: the top row is 0 then 1, the bottom 1 then 0; the texture wraps; between centres it is bilinear.
+	const struct { double X; double Y; double Expected; const TCHAR* What; } Cases[] = {
+		{ 50.0, 50.0, 0.0, TEXT("texel (0, 0)") },
+		{ 150.0, 50.0, 1.0, TEXT("texel (1, 0)") },
+		{ 50.0, 150.0, 1.0, TEXT("texel (0, 1)") },
+		{ 150.0, 150.0, 0.0, TEXT("texel (1, 1)") },
+		{ 100.0, 50.0, 0.5, TEXT("half way between two texels") },
+		{ 100.0, 100.0, 0.5, TEXT("the middle of four") },
+		{ 250.0, 50.0, 0.0, TEXT("wrapped past the right edge") },
+		{ -50.0, 50.0, 1.0, TEXT("wrapped past the left edge") },
+	};
+	for (const auto& Case : Cases)
+	{
+		double Mask = -1.0;
+		if (Evaluate(World, MakeSample(0.0, 0.0, FVector(Case.X, Case.Y, 0.0)), Mask))
+		{
+			TestNearlyEqual(Case.What, Mask, Case.Expected, 0.01);
+		}
+	}
+
+	// UVs from the landscape's own: one unit a sample, a mapping scale of 2 makes the texture repeat every 2 samples (a texel a sample).
+	UMaterial* Landscape = MakeCheckerMaterial([](UMaterial* Material) -> UMaterialExpression*
+	{
+		UMaterialExpressionLandscapeLayerCoords* Coords = AddNode<UMaterialExpressionLandscapeLayerCoords>(Material);
+		Coords->MappingScale = 2.0f;
+		return Coords;
+	}, true);
+	for (const auto& Case : { TPair<double, double>(0.5, 0.5), TPair<double, double>(1.5, 0.5), TPair<double, double>(0.5, 1.5), TPair<double, double>(1.5, 1.5) })
+	{
+		FMantleSurfaceSample Sample = MakeSample(0.0, 0.0);
+		Sample.LandscapeSample = FVector2D(Case.Key, Case.Value);
+		double Mask = -1.0;
+		if (Evaluate(Landscape, Sample, Mask))
+		{
+			TestNearlyEqual(*FString::Printf(TEXT("landscape sample (%g, %g)"), Case.Key, Case.Value), Mask, (Case.Key < 1.0) == (Case.Value < 1.0) ? 0.0 : 1.0, 0.01);
+		}
+	}
+
+	// A sample with no coordinates connected reads the landscape's first UV set the same way: one repeat a sample.
+	UMaterial* Plain = MakeCheckerMaterial([](UMaterial*) -> UMaterialExpression* { return nullptr; }, false);
+	FMantleSurfaceSample Quarter = MakeSample(0.0, 0.0);
+	Quarter.LandscapeSample = FVector2D(7.75, 3.25);
+	double Mask = -1.0;
+	if (Evaluate(Plain, Quarter, Mask))
+	{
+		TestNearlyEqual(TEXT("the first texture coordinate set is the landscape's: (0.75, 0.25) is texel (1, 0)"), Mask, 1.0, 0.01);
 	}
 	return true;
 }
