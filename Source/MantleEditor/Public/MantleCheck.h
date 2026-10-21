@@ -31,7 +31,7 @@ struct MANTLEEDITOR_API FMantleCheckReport
 	/** When the place is too big and thinning would fix it: what it would do. */
 	FString ThinOffer;
 
-	/** The Water plugin's bodies and zone in the level (GhzGarage/mantle#997); read, not yet published. Empty when the plugin is off. */
+	/** The Water plugin's bodies and zone in the level (GhzGarage/mantle#997), published as WaterBody entities and settings.water. Empty when the plugin is off. */
 	FMantleWaterBodies Water;
 
 	/** The coverage report, when the level was exported. */

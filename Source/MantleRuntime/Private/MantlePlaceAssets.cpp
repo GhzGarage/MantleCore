@@ -219,6 +219,15 @@ namespace MantlePlaceAssetsPrivate
 				}
 				continue;
 			}
+			// A custom WaterBody's surface mesh (#997): Prepare takes it on every machine, as a StaticMesh's.
+			if (const FMantleWaterBodyProps* Water = Entity.Props.TryGet<FMantleWaterBodyProps>())
+			{
+				if (FMantlePlaceAssets::IsUploadedId(Water->MeshId))
+				{
+					Used.Add(Water->MeshId);
+				}
+				continue;
+			}
 			if (const FMantleStaticMeshProps* Props = MantleMeshPropsOf(Entity))
 			{
 				if (FMantlePlaceAssets::IsUploadedId(Props->Mesh))
@@ -611,6 +620,15 @@ bool FMantlePlaceAssets::HasUploadedAssets(const FMantlePlace& Place)
 		if (const FMantleTerrainProps* Terrain = Entity.Props.TryGet<FMantleTerrainProps>())
 		{
 			if (IsUploadedId(Terrain->Heightfield))
+			{
+				return true;
+			}
+			continue;
+		}
+		// A custom WaterBody's surface mesh (#997): the server needs it for the water's collision.
+		if (const FMantleWaterBodyProps* Water = Entity.Props.TryGet<FMantleWaterBodyProps>())
+		{
+			if (IsUploadedId(Water->MeshId))
 			{
 				return true;
 			}
@@ -1354,6 +1372,17 @@ void FMantlePlaceAssets::Start(const FMantlePlace& Place)
 						EnsureRecord(Material, EAssetKind::Material);
 					}
 				}
+			}
+			continue;
+		}
+
+		// A custom WaterBody's surface mesh (#997), on every machine: its collision is the water's.
+		if (const FMantleWaterBodyProps* Water = Entity.Props.TryGet<FMantleWaterBodyProps>())
+		{
+			if (IsUploadedId(Water->MeshId))
+			{
+				FRecord& Record = EnsureRecord(Water->MeshId, EAssetKind::Mesh);
+				Record.bCollision = Record.bCollision || Water->bCollision;
 			}
 			continue;
 		}
