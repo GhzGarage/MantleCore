@@ -29,6 +29,7 @@ namespace MantleCoverageCategory
 	inline const TCHAR* const LandscapeMaterial = TEXT("Landscape material");
 	inline const TCHAR* const LandscapeGrass = TEXT("Landscape grass");
 	inline const TCHAR* const SplineMeshes = TEXT("Spline meshes");
+	inline const TCHAR* const Water = TEXT("Water");
 	inline const TCHAR* const Lights = TEXT("Lights");
 	inline const TCHAR* const Sky = TEXT("Sky");
 	inline const TCHAR* const Fog = TEXT("Fog");

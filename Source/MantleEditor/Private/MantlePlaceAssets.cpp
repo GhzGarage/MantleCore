@@ -1490,7 +1490,13 @@ FMantlePlaceDependencies FMantlePlaceDependencies::Gather(UWorld* World)
 			FMantlePlaceExporter::CollectPrefabParts(Actor, Parts);
 			for (const FMantlePrefabPart& Part : Parts)
 			{
-				if (Part.Type == EMantleEntityType::StaticMesh)
+				if (Part.Type == EMantleEntityType::StaticMesh && Part.WaterMesh)
+				{
+					// A Water plugin body (GhzGarage/mantle#818): its mesh, drawn with its water material.
+					Out.AddMesh(Part.WaterMesh, Label);
+					Out.AddMaterial(Part.WaterMaterial, Label);
+				}
+				else if (Part.Type == EMantleEntityType::StaticMesh)
 				{
 					Out.AddComponent(Cast<UStaticMeshComponent>(Part.Component), Label, Part.MirroredMesh);
 				}

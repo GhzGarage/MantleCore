@@ -38,6 +38,7 @@
 #include "MantleVehicleConverter.h"
 #include "MantleVehicleSource.h"
 #include "MantleVehicleSpawnPoint.h"
+#include "MantleWaterBody.h"
 #include "MantleWeaponSpawnPoint.h"
 #include "MantleScriptPoint.h"
 #include "MantleScriptPackages.h"
@@ -713,6 +714,57 @@ namespace
 		Props.Surface = FMantlePlaceExporter::ReadSurface(Component);
 		// GhzGarage/mantle#630: the component's cull distance, else a size-based default; nothing for a client that doesn't read them.
 		FMantleDrawDistance::Apply(FMantleDrawDistance::ReadComponent(Component, Mesh), FMantleTargetFeatures::Current(), Props);
+	}
+
+	/**
+	 * A Water plugin body part's mesh (FMantleWaterBody) and the water material it draws with, written as a StaticMesh names them: a
+	 * library mesh by its id, a project or generated mesh by its upload's id with the water material on every slot. Water is
+	 * walked through and casts no shadow.
+	 */
+	void ExporterReadWaterMesh(
+		const FMantlePrefabPart& Part,
+		const FString& Path,
+		TSet<FString>& ReferencedAssets,
+		MantlePlaceExporterUploads::FContext& Uploads,
+		TArray<FMantleParseError>& Errors,
+		FMantleStaticMeshProps& Props)
+	{
+		const FMantleAssetLibrary& Library = FMantleAssetLibrary::Get();
+		const UStaticMesh* Mesh = Part.WaterMesh;
+		if (!Mesh)
+		{
+			Errors.Add(FMantleParseError{ Path + TEXT("/properties/mesh"), TEXT("has no mesh assigned") });
+			return;
+		}
+		if (FMantlePlaceAssets::IsLibraryAsset(Mesh))
+		{
+			Props.Mesh = Library.FindIdByPath(FSoftObjectPath(Mesh));
+			ReferencedAssets.Add(Props.Mesh);
+			if (Part.WaterMaterial)
+			{
+				Props.Materials.Add(ExporterMaterialId(Library, ReferencedAssets, Uploads, Part.WaterMaterial));
+			}
+		}
+		else
+		{
+			TArray<FMantleValidationIssue> MeshIssues;
+			FMantlePlaceAssets::CheckMesh(Mesh, FString(), Uploads.Limits, MeshIssues);
+			for (const FMantleValidationIssue& Issue : MeshIssues)
+			{
+				if (Issue.Severity == EMantleIssueSeverity::Error)
+				{
+					Errors.Add(FMantleParseError{ Path + TEXT("/properties/mesh"), Issue.Problem + TEXT(" ") + Issue.Remedy });
+				}
+			}
+			Props.Mesh = Uploads.IdFor(FMantlePlaceAssets::MeshKey(Mesh), EMantleAssetKind::StaticMesh, Mesh);
+			for (const int32 Slot : FMantlePlaceAssets::UploadSlots(Mesh))
+			{
+				const UMaterialInterface* Material = Part.WaterMaterial ? Part.WaterMaterial : FMantlePlaceAssets::MeshSlotMaterial(Mesh, Slot);
+				Props.Materials.Add(ExporterMaterialId(Library, ReferencedAssets, Uploads, Material));
+			}
+		}
+		Props.Collision = EMantleCollision::None;
+		Props.bCastShadow = false;
 	}
 
 	/**
@@ -1897,7 +1949,11 @@ namespace MantlePlaceExporterPrefab
 		case EMantleEntityType::StaticMesh:
 		{
 			FMantleStaticMeshProps Props;
-			if (const UStaticMeshComponent* Mesh = Cast<UStaticMeshComponent>(Part.Component))
+			if (Part.WaterMesh)
+			{
+				ExporterReadWaterMesh(Part, Path, ReferencedAssets, Uploads, Errors, Props);
+			}
+			else if (const UStaticMeshComponent* Mesh = Cast<UStaticMeshComponent>(Part.Component))
 			{
 				ExporterReadMeshComponent(Mesh, Path, ReferencedAssets, Uploads, Errors, Props, Part.MirroredMesh);
 			}
@@ -3154,6 +3210,38 @@ void FMantlePlaceExporter::CollectPrefabParts(
 			}
 		}
 
+		// GhzGarage/mantle#818: a Water plugin body is its water mesh, drawn with its water material (FMantleWaterBody); one with no mesh to
+		// carry (a river or ocean, which the water mesh system draws at run time) is left out and said so.
+		if (Scene && FMantleWaterBody::IsWaterBody(Scene) && !Scene->IsEditorOnly() && !Scene->HasAnyFlags(RF_Transient))
+		{
+			const FMantleWaterBodyMesh Water = FMantleWaterBody::Resolve(Scene);
+			// A Custom body's mesh is also a static mesh component of the actor (the plugin makes it), which publishes on its own.
+			const bool bDrawnAlready = Water.Mesh && Components.ContainsByPredicate([&Water](const UActorComponent* Other)
+			{
+				EMantleEntityType OtherType;
+				const UStaticMeshComponent* OtherMesh = Cast<UStaticMeshComponent>(Other);
+				return OtherMesh && OtherMesh->GetStaticMesh() == Water.Mesh && MantlePlaceExporterPrefab::PartType(OtherMesh, OtherType);
+			});
+			if (Water.Mesh && !bDrawnAlready)
+			{
+				FMantlePrefabPart& WaterPart = OutParts.AddDefaulted_GetRef();
+				WaterPart.Component = Scene;
+				WaterPart.Type = EMantleEntityType::StaticMesh;
+				WaterPart.Transform = Scene == Root ? FTransform::Identity : Scene->GetComponentTransform().GetRelativeTransform(RootWorld);
+				WaterPart.WaterMesh = Water.Mesh;
+				WaterPart.WaterMaterial = Water.Material;
+			}
+			else if (!Water.Mesh && OutUnsupported)
+			{
+				OutUnsupported->Add(FMantleUnpublishedPart{
+					FString::Printf(TEXT("has a %s water body ('%s') that Mantle leaves out: %s; the rest of the actor publishes."),
+						*Water.Kind, *Scene->GetName(), *Water.Why),
+					TEXT("Put a mesh of the water in the body's Water Mesh Override, or build the water from a static mesh with a water material."),
+					/*bBlocksPublish*/ false, MantleCoverageCategory::Water });
+			}
+			continue;
+		}
+
 		// #63: a sky dome mesh of a sky Blueprint (BP_Sky_Sphere, a Fab map's own) is left out: Mantle supplies its own sky.
 		if (const UStaticMeshComponent* SkyMesh = Scene && MantlePlaceExporterPrefab::PartType(Scene, Type) && Type == EMantleEntityType::StaticMesh
 				? Cast<UStaticMeshComponent>(Scene) : nullptr;
@@ -3800,6 +3888,12 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 						Result.Coverage.Add(MantleCoverageCategory::StaticMeshes, EMantleCoverageOutcome::Approximated,
 							FString::Printf(TEXT("%s (%s)"), *ExporterLabelOf(Actor), *Part.Component->GetName()),
 							TEXT("baked a mirrored copy of its mesh (a negative scale), placed at the positive scale."));
+					}
+					if (Part.WaterMesh)
+					{
+						Result.Coverage.Add(MantleCoverageCategory::Water, EMantleCoverageOutcome::Approximated,
+							FString::Printf(TEXT("%s (%s)"), *ExporterLabelOf(Actor), *Part.Component->GetName()),
+							TEXT("drawn with Mantle's water: the body's mesh (or its outline filled flat) with its water material, without waves, flow or depth shading."));
 					}
 					const FString Base = PrefabPartEntityId(ActorId, Part.Component, Part.EffectIndex);
 					FString Id = Base;
