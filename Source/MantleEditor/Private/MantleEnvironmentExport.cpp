@@ -850,7 +850,7 @@ namespace MantleEnvironmentExportPrivate
 					CarriedProperties.Add(FName(TEXT("FogInscatteringLuminance")));
 					if (bClamped)
 					{
-						Notes.Add(TEXT("Fog Inscattering Luminance (past the place's range, so clamped to it)"));
+						Notes.Add(TEXT("Fog Inscattering Color (past the place's range, so clamped to it)"));
 					}
 				}
 				if (DiffersFromDefault(Component->StartDistance, Default->StartDistance))
