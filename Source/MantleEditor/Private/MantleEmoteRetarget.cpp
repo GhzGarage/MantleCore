@@ -14,8 +14,10 @@
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "ContentBrowserModule.h"
 #include "Engine/SkeletalMesh.h"
 #include "HAL/PlatformTime.h"
+#include "IContentBrowserSingleton.h"
 #include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
 #include "Modules/ModuleManager.h"
@@ -481,6 +483,14 @@ bool FMantleEmoteRetarget::RetargetThrough(UAnimSequence* Sequence, USkeletalMes
 		return false;
 	}
 
+	// IK Rig's batch retarget points the Content Browser at what it made (SyncBrowserToAssets): a copy that is gone a moment
+	// later, so the creator's browser would jump to the transient folder and keep a deleted asset selected. It goes back to
+	// what was selected, else to the folder it was showing, once the copy is gone.
+	IContentBrowserSingleton& Browser = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser")).Get();
+	TArray<FAssetData> WasSelected;
+	Browser.GetSelectedAssets(WasSelected);
+	const FString WasFolder = Browser.GetCurrentPath(EContentBrowserPathType::Internal);
+
 	TArray<FAssetData> Created;
 	{
 		// The batch retarget makes TargetMesh the copy's retarget source, which UAnimSequence refuses for a transient mesh
@@ -517,6 +527,15 @@ bool FMantleEmoteRetarget::RetargetThrough(UAnimSequence* Sequence, USkeletalMes
 			MantleEmoteRetargetPrivate::DiscardTemporary(Asset, Folder);
 		}
 		MantleEmoteRetargetPrivate::RemoveFolderIfEmpty(Folder);
+		if (WasSelected.Num() > 0)
+		{
+			Browser.SyncBrowserToAssets(WasSelected, /*bAllowLockedBrowsers*/ false, /*bFocusContentBrowser*/ false);
+		}
+		else
+		{
+			Browser.SyncBrowserToFolders({ WasFolder.IsEmpty() || WasFolder.StartsWith(Folder) ? FString(TEXT("/Game")) : WasFolder },
+				/*bAllowLockedBrowsers*/ false, /*bFocusContentBrowser*/ false);
+		}
 	};
 	if (Made.Num() != 1 || !Retargeted || !Retargeted->GetPackage()->GetName().StartsWith(Folder + TEXT("/"), ESearchCase::CaseSensitive))
 	{

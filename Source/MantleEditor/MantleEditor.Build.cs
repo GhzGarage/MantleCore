@@ -53,6 +53,8 @@ public class MantleEditor : ModuleRules
 			"PropertyEditor",
 			"AssetTools",
 			"AssetRegistry",
+			// An emote's retarget puts the Content Browser back where the creator had it (IK Rig's batch retarget moves it).
+			"ContentBrowser",
 			// S1.20: graph runtime errors are emitted by MantleScript as neutral data; the editor
 			// projects those into clickable Message Log rows without creating a reverse dependency.
 			"MessageLog",
