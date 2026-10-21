@@ -4,7 +4,7 @@
 // Fits an Outfit onto the standard bodies exactly as CheckCosmetic does (FMantleEditorActions::MakeCosmeticDraft, then
 // FMantleParametricOutfit::Prepare per fit body) and renders each fit as the catalog thumbnail does (FMantleCosmeticThumbnail,
 // GarmentSubject: the engine's thumbnail scene, reference pose, framed on the garment, on that size's own body and face), from
-// the front and from the back, into <Directory>/<Outfit>_<size id>_{front,back}.png. Nothing is saved or uploaded. Logs
+// the front, a quarter turn, the side and the back, into <Directory>/<Outfit>_<size id>_{front,quarter,side,back}.png. Nothing is saved or uploaded. Logs
 // MANTLE_RENDER_FITS lines.
 // With an accessory slot it makes the rigid piece as CheckCosmetic does (FMantleParametricOutfit::PrepareRigid) and renders
 // the catalog thumbnail itself (AccessorySubject, <Outfit>_<slot>_thumbnail.png, and from behind, _thumbnail_back.png) and the piece worn on the body it was made on,
@@ -38,6 +38,13 @@ DEFINE_LOG_CATEGORY_STATIC(LogMantleRenderOutfitFits, Log, All);
 // Named, not anonymous: MantleEditor builds as a unity build.
 namespace MantleDevRenderOutfitFitsPrivate
 {
+	/** A garment fit's views: name and turn from the front (degrees). */
+	const TArray<TPair<const TCHAR*, float>>& FitViews()
+	{
+		static const TArray<TPair<const TCHAR*, float>> Views = { { TEXT("front"), 0.0f }, { TEXT("quarter"), 35.0f }, { TEXT("side"), 90.0f }, { TEXT("back"), 180.0f } };
+		return Views;
+	}
+
 	bool Save(const FMantleThumbnailSubject& Shot, int32 Size, const FString& File, FString& OutError)
 	{
 		TArray<FColor> Pixels;
@@ -198,10 +205,11 @@ namespace MantleDevRenderOutfitFitsPrivate
 				const bool bOriginal = FCString::Strcmp(Stage, TEXT("original")) == 0;
 				const FMantleThumbnailSubject Subject = bOriginal ? FMantleCosmeticThumbnail::GarmentSubject(Cast<USkeletalMesh>(Outfit), Body, nullptr)
 					: FMantleCosmeticThumbnail::GarmentSubject(Authored, Twin, nullptr);
-				for (const TCHAR* View : { TEXT("front"), TEXT("back") })
+				for (const TPair<const TCHAR*, float>& FitView : FitViews())
 				{
+					const TCHAR* View = FitView.Key;
 					FMantleThumbnailSubject Shot = Subject;
-					if (FCString::Strcmp(View, TEXT("back")) == 0) { Shot.View.Yaw += 180.0f; }
+					Shot.View.Yaw += FitView.Value;
 					const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), Stage, View));
 					const bool bWritten = Save(Shot, Size, File, Why);
 					UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s %s %s"), Stage, View, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Why);
@@ -230,13 +238,11 @@ namespace MantleDevRenderOutfitFitsPrivate
 			}
 			// The catalog thumbnail's subject: the garment on this size's own body and face.
 			FMantleThumbnailSubject Subject = FMantleCosmeticThumbnail::GarmentSubject(Garment, Target.Body.Get(), Target.Face.Get());
-			for (const TCHAR* View : { TEXT("front"), TEXT("back") })
+			for (const TPair<const TCHAR*, float>& FitView : FitViews())
 			{
+				const TCHAR* View = FitView.Key;
 				FMantleThumbnailSubject Shot = Subject;
-				if (FCString::Strcmp(View, TEXT("back")) == 0)
-				{
-					Shot.View.Yaw += 180.0f;
-				}
+				Shot.View.Yaw += FitView.Value;
 				TArray<FColor> Pixels;
 				const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), *Target.Id, View));
 				const bool bWritten = FMantleCosmeticThumbnail::Capture(Shot, Size, Pixels, Error)
