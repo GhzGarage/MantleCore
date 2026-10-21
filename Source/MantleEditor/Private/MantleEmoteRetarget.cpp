@@ -953,7 +953,28 @@ bool FMantleEmoteRetarget::MatchWristsInPlace(UObject* Retargeter, const FRefere
 		const FVector Forearm = Axis;
 		const FVector Palm = TwistTurn.RotateVector((TargetPose[TM].GetLocation() - TargetPose[TH].GetLocation()).GetSafeNormal());
 		const FVector BendAxis = (Forearm ^ Palm).GetSafeNormal();
-		const FQuat BendTurn = BendAxis.IsNearlyZero() ? FQuat::Identity : FQuat(BendAxis, FMath::DegreesToRadians(-BendGap));
+		// The bend is an unsigned angle, so which way to turn is read from the result: the turn (either way) that leaves the
+		// two retarget poses' wrists nearest each other from their reference poses.
+		const double SourceBendShift = Bend(SourcePose, SL, SH, SM) - Bend(SourceRef, SL, SH, SM);
+		const double TargetRefBend = Bend(TargetRef, TL, TH, TM);
+		FQuat BendTurn = FQuat::Identity;
+		double BestLeft = FMath::Abs(BendGap);
+		double BendDegrees = 0.0;
+		if (!BendAxis.IsNearlyZero())
+		{
+			for (const double Sign : { -1.0, 1.0 })
+			{
+				const double Degrees = Sign * FMath::Abs(BendGap);
+				const FVector Turned = FQuat(BendAxis, FMath::DegreesToRadians(Degrees)).RotateVector(Palm);
+				const double Left = FMath::Abs(FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Forearm | Turned, -1.0, 1.0))) - TargetRefBend - SourceBendShift);
+				if (Left < BestLeft)
+				{
+					BestLeft = Left;
+					BendDegrees = Degrees;
+					BendTurn = FQuat(BendAxis, FMath::DegreesToRadians(Degrees));
+				}
+			}
+		}
 		const FQuat Turn = BendTurn * TwistTurn;
 		const int32 Parent = Target.GetRawParentIndex(TH);
 		const FQuat ParentGlobal = Parent == INDEX_NONE ? FQuat::Identity : TargetPose[Parent].GetRotation();
@@ -961,7 +982,7 @@ bool FMantleEmoteRetarget::MatchWristsInPlace(UObject* Retargeter, const FRefere
 		const FName Hand = Target.GetBoneName(TH);
 		const FQuat NewOffset = (Target.GetRawRefBonePose()[TH].GetRotation().Inverse() * NewLocal).GetNormalized();
 		Asset.SetTargetOffset(Hand, NewOffset);
-		OutNote += FString::Printf(TEXT("%shand_%s turned %.1f degrees about the forearm and %.1f degrees at the wrist"), OutNote.IsEmpty() ? TEXT("") : TEXT("; "), Side, -TwistGap, -BendGap);
+		OutNote += FString::Printf(TEXT("%shand_%s turned %.1f degrees about the forearm and %.1f degrees at the wrist"), OutNote.IsEmpty() ? TEXT("") : TEXT("; "), Side, -TwistGap, BendDegrees);
 	}
 	if (OutNote.IsEmpty())
 	{
