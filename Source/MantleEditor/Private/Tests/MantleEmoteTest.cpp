@@ -154,7 +154,8 @@ bool FMantleEmoteValidateTest::RunTest(const FString& Parameters)
 	}), TEXT("is not a bone of the")));
 	TestTrue(TEXT("two tracks on one bone are refused"), HasError(ValidateWith(K, [](FMantleAnimClipData& Clip)
 	{
-		Clip.Tracks.Add(Clip.Tracks[0]);
+		const FMantleAnimClipTrackData Again = Clip.Tracks[0];
+		Clip.Tracks.Add(Again);
 	}), TEXT("has two tracks")));
 	TestTrue(TEXT("a clip without a pelvis track is refused"), HasError(ValidateWith(K, [](FMantleAnimClipData& Clip)
 	{
@@ -182,9 +183,10 @@ bool FMantleEmoteValidateTest::RunTest(const FString& Parameters)
 	}), TEXT("outside the clip")));
 	TestTrue(TEXT("more events than the limit are refused"), HasError(ValidateWith(K, [&K](FMantleAnimClipData& Clip)
 	{
+		const FMantleAnimClipEventData Again = Clip.Events[0];
 		for (int32 Index = 0; Index < K.EmoteMaxEvents; ++Index)
 		{
-			Clip.Events.Add(Clip.Events[0]);
+			Clip.Events.Add(Again);
 		}
 	}), TEXT("events, the limit")));
 	return true;

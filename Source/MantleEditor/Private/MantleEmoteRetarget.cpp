@@ -387,7 +387,21 @@ bool FMantleEmoteRetarget::RetargetThrough(UAnimSequence* Sequence, USkeletalMes
 	}
 
 	TArray<FAssetData> Created;
-	RunBatch(Call, Sequence, SourceMesh, TargetMesh, Retargeter, TransientFolder, Created);
+	{
+		// The batch retarget makes TargetMesh the copy's retarget source, which UAnimSequence refuses for a transient mesh
+		// with an error and an ensure: the plugin's built-in UEFN mannequin is one (made in memory). It lives in the transient
+		// package all the same, so it is never saved; the flag is back as soon as the retarget is done.
+		const bool bTransientTarget = TargetMesh->HasAnyFlags(RF_Transient);
+		TargetMesh->ClearFlags(RF_Transient);
+		ON_SCOPE_EXIT
+		{
+			if (bTransientTarget)
+			{
+				TargetMesh->SetFlags(RF_Transient);
+			}
+		};
+		RunBatch(Call, Sequence, SourceMesh, TargetMesh, Retargeter, TransientFolder, Created);
+	}
 
 	// Whatever it made is dropped, whatever happens next.
 	TArray<UObject*> Made;
