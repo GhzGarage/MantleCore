@@ -78,6 +78,13 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 */
 	static const FName MadeFromGarmentKey;
 
+	/**
+	 * Package metadata key with the version of Make that wrote the Outfit (MadeVersion). An Outfit made earlier from the same
+	 * garment is reused only when it is this version, so a fit fix remakes the Outfits made before it.
+	 */
+	static const FName MadeVersionKey;
+	static const TCHAR* const MadeVersion;
+
 	/** A garment vertex further than this from every MetaHuman skin vertex is counted as far (FarVertices). */
 	static constexpr double NearCm = 10.0;
 
@@ -107,6 +114,20 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * Body has no skin.
 	 */
 	static bool TransferWeights(FMantleGlbMesh& Garment, const FMantleGlbMesh& Body, int32& OutFar, double& OutMeanCm, FString& OutError);
+
+	/** Skin moves are smoothed this many passes over the original body's edges, so a fold of the closest-point map is not printed on the garment. */
+	static constexpr int32 CarrySmoothIters = 3;
+
+	/**
+	 * Pure (tested): Garment carried the way its skin moves from the original body From to the MetaHuman To, so it keeps
+	 * the clearance it had: each point of From moves onto its closest point of To (FMantleGarmentClearance; points with
+	 * none within its search take their neighbours' moves), smoothed CarrySmoothIters passes; a garment point takes the
+	 * moves of the corners of its closest From triangle by its barycentrics, or the inverse-distance blend of its nearest
+	 * From points' when none is within the search. Where the MetaHuman is smaller than the original body (a fuller bust,
+	 * a rounder seat) the garment comes in with it instead of floating; where it is bigger, the garment goes out with it.
+	 * OutMeanMoveCm: the average garment move. False with why on bad surfaces.
+	 */
+	static bool CarryWithSkin(TArray<FVector3f>& Garment, const FMantleSkinnedMeshLOD& From, const FMantleSkinnedMeshLOD& To, double& OutMeanMoveCm, FString& OutError);
 
 	/** Pure (tested): Mesh as one point per position (render copies welded), their normals summed, its triangles; OutPointOf maps each vertex to its point. */
 	static void WeldedSurface(const FMantleGlbMesh& Mesh, FMantleSkinnedMeshLOD& Out, TArray<int32>& OutPointOf);

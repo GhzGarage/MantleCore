@@ -1012,7 +1012,7 @@ UChaosOutfitAsset* FMantleParametricOutfit::MakeOutfitBeside(const FMantleCosmet
 	USkeletalMesh* Body = FindBodyBeside(Garment);
 	if (!Body) { OutWhy = TEXT("no whole bare character body was found next to it"); return nullptr; }
 	if (Draft.KeepSlots.IsSet()) { OutWhy = TEXT("Make Outfit from garment takes the whole mesh, not chosen sections"); return nullptr; }
-	// Made once: an Outfit saved earlier from this garment is reused.
+	// Made once: an Outfit saved earlier from this garment by this version of Make is reused.
 	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 	FARFilter Filter;
 	Filter.PackagePaths.Add(FName(*(FPackageName::GetLongPackagePath(Body->GetOutermost()->GetName()) / TEXT("Converted"))));
@@ -1024,7 +1024,8 @@ UChaosOutfitAsset* FMantleParametricOutfit::MakeOutfitBeside(const FMantleCosmet
 	{
 		UChaosOutfitAsset* Outfit = Cast<UChaosOutfitAsset>(Data.GetAsset());
 		const FString* MadeFrom = Outfit ? Outfit->GetPackage()->GetMetaData().FindValue(Outfit, FMantleGarmentOutfit::MadeFromGarmentKey) : nullptr;
-		if (MadeFrom && *MadeFrom == Garment->GetPathName())
+		const FString* Version = Outfit ? Outfit->GetPackage()->GetMetaData().FindValue(Outfit, FMantleGarmentOutfit::MadeVersionKey) : nullptr;
+		if (MadeFrom && *MadeFrom == Garment->GetPathName() && Version && *Version == FMantleGarmentOutfit::MadeVersion)
 		{
 			KeepAlive.Emplace(Outfit);
 			return Outfit;

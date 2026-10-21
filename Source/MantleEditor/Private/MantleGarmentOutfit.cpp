@@ -359,6 +359,9 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 }
 
 const FName FMantleGarmentOutfit::MadeFromGarmentKey(TEXT("MantleMadeFromGarment"));
+const FName FMantleGarmentOutfit::MadeVersionKey(TEXT("MantleMadeFromGarmentVersion"));
+// 2: the garment is carried with the skin onto the MetaHuman (CarryWithSkin).
+const TCHAR* const FMantleGarmentOutfit::MadeVersion = TEXT("2");
 
 const TArray<TPair<FName, FName>>& FMantleGarmentOutfit::Limbs()
 {
@@ -677,6 +680,124 @@ void FMantleGarmentOutfit::WeldedSurface(const FMantleGlbMesh& Mesh, FMantleSkin
 			Out.Indices.Add(static_cast<uint32>(OutPointOf[Primitive.FirstVertex + static_cast<int32>(Index)]));
 		}
 	}
+}
+
+bool FMantleGarmentOutfit::CarryWithSkin(TArray<FVector3f>& Garment, const FMantleSkinnedMeshLOD& From, const FMantleSkinnedMeshLOD& To, double& OutMeanMoveCm, FString& OutError)
+{
+	using namespace MantleGarmentOutfitPrivate;
+	OutMeanMoveCm = 0.0;
+	if (Garment.IsEmpty())
+	{
+		return true;
+	}
+	// Each original skin point onto its closest point of the MetaHuman's skin.
+	FMantleGarmentClearance SkinOnTo;
+	if (!FMantleGarmentClearance::Compute(From.Positions, To, SkinOnTo, FMantleGarmentClearance::DefaultSearchCm, &OutError))
+	{
+		return false;
+	}
+	const int32 NumPoints = From.Positions.Num();
+	TArray<FVector3f> Move;
+	TArray<bool> Known;
+	Move.Init(FVector3f::ZeroVector, NumPoints);
+	Known.Init(false, NumPoints);
+	for (int32 Point = 0; Point < NumPoints; ++Point)
+	{
+		if (!SkinOnTo.IsTracked(Point))
+		{
+			continue;
+		}
+		const int32 Triangle = SkinOnTo.Triangle[Point];
+		const FVector3f& Bary = SkinOnTo.Barycentrics[Point];
+		const FVector3f Closest = To.Positions[To.Indices[Triangle * 3]] * Bary.X + To.Positions[To.Indices[Triangle * 3 + 1]] * Bary.Y
+			+ To.Positions[To.Indices[Triangle * 3 + 2]] * Bary.Z;
+		Move[Point] = Closest - From.Positions[Point];
+		Known[Point] = true;
+	}
+	// Smoothed over the skin's edges: half its own move, half its neighbours' mean; a point with no move takes its known neighbours'.
+	TArray<TArray<int32>> Neighbours;
+	Neighbours.SetNum(NumPoints);
+	for (int32 First = 0; First + 2 < From.Indices.Num(); First += 3)
+	{
+		for (int32 Corner = 0; Corner < 3; ++Corner)
+		{
+			const int32 A = static_cast<int32>(From.Indices[First + Corner]);
+			const int32 B = static_cast<int32>(From.Indices[First + (Corner + 1) % 3]);
+			Neighbours[A].AddUnique(B);
+			Neighbours[B].AddUnique(A);
+		}
+	}
+	for (int32 Pass = 0; Pass < CarrySmoothIters; ++Pass)
+	{
+		TArray<FVector3f> Next = Move;
+		TArray<bool> NextKnown = Known;
+		for (int32 Point = 0; Point < NumPoints; ++Point)
+		{
+			FVector3f Sum = FVector3f::ZeroVector;
+			int32 Count = 0;
+			for (const int32 Neighbour : Neighbours[Point])
+			{
+				if (Known[Neighbour])
+				{
+					Sum += Move[Neighbour];
+					++Count;
+				}
+			}
+			if (Count == 0)
+			{
+				continue;
+			}
+			Next[Point] = Known[Point] ? 0.5f * Move[Point] + 0.5f * Sum / Count : Sum / Count;
+			NextKnown[Point] = true;
+		}
+		Move = MoveTemp(Next);
+		Known = MoveTemp(NextKnown);
+	}
+	// Each garment point takes the move of the skin under it.
+	FMantleGarmentClearance GarmentOnFrom;
+	if (!FMantleGarmentClearance::Compute(Garment, From, GarmentOnFrom, FMantleGarmentClearance::DefaultSearchCm, &OutError))
+	{
+		return false;
+	}
+	TArray<FVector3f> KnownPoints;
+	TArray<int32> KnownIndex;
+	for (int32 Point = 0; Point < NumPoints; ++Point)
+	{
+		if (Known[Point])
+		{
+			KnownPoints.Add(From.Positions[Point]);
+			KnownIndex.Add(Point);
+		}
+	}
+	const FGarmentPointGrid Grid(KnownPoints, 2.0);
+	TArray<TPair<double, int32>> Found;
+	double Total = 0.0;
+	for (int32 Vertex = 0; Vertex < Garment.Num(); ++Vertex)
+	{
+		FVector3f Shift = FVector3f::ZeroVector;
+		if (GarmentOnFrom.IsTracked(Vertex))
+		{
+			const int32 Triangle = GarmentOnFrom.Triangle[Vertex];
+			const FVector3f& Bary = GarmentOnFrom.Barycentrics[Vertex];
+			Shift = Move[From.Indices[Triangle * 3]] * Bary.X + Move[From.Indices[Triangle * 3 + 1]] * Bary.Y + Move[From.Indices[Triangle * 3 + 2]] * Bary.Z;
+		}
+		else
+		{
+			Grid.Nearest(Garment[Vertex], TransferNeighbours, 200.0, Found);
+			double Weights = 0.0;
+			for (const TPair<double, int32>& Near : Found)
+			{
+				const double Share = 1.0 / (Near.Key + 0.5);
+				Shift += Move[KnownIndex[Near.Value]] * static_cast<float>(Share);
+				Weights += Share;
+			}
+			Shift = Weights > 0.0 ? Shift / static_cast<float>(Weights) : FVector3f::ZeroVector;
+		}
+		Garment[Vertex] += Shift;
+		Total += Shift.Size();
+	}
+	OutMeanMoveCm = Total / Garment.Num();
+	return true;
 }
 
 FString FMantleGarmentOutfit::DescribeClearance(TConstArrayView<FVector3f> Points, const FMantleSkinnedMeshLOD& Surface)
@@ -1062,6 +1183,15 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		}
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the original body: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, OriginalSurface));
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman as posed: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, TwinSurface));
+		// The MetaHuman is the body's shape only roughly (a fuller bust, a rounder seat): the garment follows its skin onto it.
+		double CarriedCm = 0.0;
+		if (!CarryWithSkin(Geometry->Positions, OriginalSurface, TwinSurface, CarriedCm, Error))
+		{
+			Piece.Error = Error;
+			continue;
+		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s carried with the skin (%.2f cm on average): %s"), *Garment->GetName(), CarriedCm,
+			*DescribeClearance(Geometry->Positions, TwinSurface));
 		if (!TransferWeights(*Geometry, MetaHumanSkin, Piece.FarVertices, Piece.MeanSkinCm, Error))
 		{
 			Piece.Error = Error;
@@ -1101,6 +1231,7 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		}
 		FAssetRegistryModule::AssetCreated(Outfit);
 		Package->GetMetaData().SetValue(Outfit, MadeFromGarmentKey, *Garment->GetPathName());
+		Package->GetMetaData().SetValue(Outfit, MadeVersionKey, MadeVersion);
 		if (!GarmentSave(Outfit))
 		{
 			Piece.Error = FString::Printf(TEXT("the Outfit was made but %s could not be saved"), *PackageName);
