@@ -21,6 +21,7 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "IDesktopPlatform.h"
+#include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Templates/UnrealTemplate.h"
 #include "Misc/PackageName.h"
@@ -325,7 +326,8 @@ bool FMantleTestLocally::EnsureClient(FMantlePreviewClientInfo& OutClient, FStri
 {
 	// A client that was found and is still on disk is reused for the editor session, until Choose client or an
 	// edit of the Preview Client Executable setting in Project Settings.
-	const FString Setting = UMantleSettings::Get()->PreviewClientExecutable.FilePath;
+	const FString Setting = UMantleSettings::Get()->PreviewClientExecutable.FilePath + TEXT("|")
+		+ MantlePreviewClient::ProjectOverride(FCommandLine::Get(), UMantleSettings::Get()->PreviewClientProject.FilePath);
 	if (bHasClient && Setting == ClientSetting && IFileManager::Get().FileExists(*Client.Executable))
 	{
 		OutClient = Client;

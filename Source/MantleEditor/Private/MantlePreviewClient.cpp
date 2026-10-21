@@ -9,8 +9,10 @@
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
+#include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -325,7 +327,7 @@ namespace MantlePreviewClientPrivate
 	}
 
 	/** Fills Executable, PrefixArgs, CookTool and Source for Exe. False, with OutError, when it cannot be used. */
-	bool ClientDescribe(const FString& ExeIn, const FString& SourceIn, FMantlePreviewClientInfo& OutInfo, FString& OutError)
+	bool ClientDescribe(const FString& ExeIn, const FString& SourceIn, const FString& ProjectOverride, FMantlePreviewClientInfo& OutInfo, FString& OutError)
 	{
 		OutInfo = FMantlePreviewClientInfo();
 		FString Exe = FPaths::ConvertRelativePathToFull(ExeIn);
@@ -333,15 +335,10 @@ namespace MantlePreviewClientPrivate
 
 		if (ClientIsDevEditorExe(Exe))
 		{
-			const FString Project = FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath());
-			if (FPaths::GetProjectFilePath().IsEmpty() || !IFileManager::Get().FileExists(*Project))
+			if (!MantlePreviewClient::DescribeDevEditor(Exe, ProjectOverride, OutInfo, OutError))
 			{
-				OutError = TEXT("The Preview Client Executable is UnrealEditor.exe, which runs this project with -game, but this editor has no project file to run.");
 				return false;
 			}
-			OutInfo.Executable = MantlePreviewShared::PlatformPath(Exe);
-			OutInfo.PrefixArgs = { MantlePreviewShared::PlatformPath(Project), TEXT("-game") };
-			OutInfo.Source = TEXT("dev-editor");
 			OutInfo.CookTool = ClientFindDevCookTool();
 			if (OutInfo.CookTool.IsEmpty())
 			{
@@ -574,6 +571,75 @@ void MantlePreviewClient::ReadCapabilities(const TSharedPtr<FJsonObject>& Answer
 	}
 }
 
+FString MantlePreviewClient::ProjectOverride(const TCHAR* CommandLine, const FString& SettingValue)
+{
+	FString Value;
+	if (CommandLine && FParse::Value(CommandLine, TEXT("-MantlePreviewProject="), Value, false) && !Value.TrimStartAndEnd().IsEmpty())
+	{
+		return Value.TrimStartAndEnd();
+	}
+	return SettingValue.TrimStartAndEnd();
+}
+
+bool MantlePreviewClient::ResolveExecutable(const FString& Configured, const FString& Project, FString& OutExe, FString& OutError)
+{
+	OutError.Reset();
+	if (Project.IsEmpty())
+	{
+		OutExe = Configured;
+		return true;
+	}
+	if (Configured.IsEmpty())
+	{
+		OutExe = FPaths::ConvertRelativePathToFull(FPaths::EngineDir() / TEXT("Binaries/Win64/UnrealEditor.exe"));
+		return true;
+	}
+	if (!MantlePreviewClientPrivate::ClientIsDevEditorExe(Configured))
+	{
+		OutError = FString::Printf(TEXT("A Preview Client Project (%s) is set, but the Preview Client Executable is %s, which cannot run another project. Clear the Preview Client Executable (or set it to UnrealEditor.exe), or clear the Preview Client Project / -MantlePreviewProject."),
+			*MantlePreviewShared::PlatformPath(Project), *MantlePreviewShared::PlatformPath(Configured));
+		return false;
+	}
+	OutExe = Configured;
+	return true;
+}
+
+bool MantlePreviewClient::DescribeDevEditor(const FString& Exe, const FString& ProjectOverride, FMantlePreviewClientInfo& OutInfo, FString& OutError)
+{
+	OutError.Reset();
+	FString Project;
+	if (ProjectOverride.IsEmpty())
+	{
+		Project = FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath());
+		if (FPaths::GetProjectFilePath().IsEmpty() || !IFileManager::Get().FileExists(*Project))
+		{
+			OutError = TEXT("The Preview Client Executable is UnrealEditor.exe, which runs this project with -game, but this editor has no project file to run.");
+			return false;
+		}
+	}
+	else
+	{
+		Project = FPaths::IsRelative(ProjectOverride) ? FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), ProjectOverride) : FPaths::ConvertRelativePathToFull(ProjectOverride);
+		if (!IFileManager::Get().FileExists(*Project))
+		{
+			OutError = FString::Printf(TEXT("The Preview Client Project does not exist: %s. Choose the Mantle client's .uproject (such as mantle/client/Mantle.uproject), or clear it."),
+				*MantlePreviewShared::PlatformPath(Project));
+			return false;
+		}
+		if (!FPaths::GetExtension(Project).Equals(TEXT("uproject"), ESearchCase::IgnoreCase))
+		{
+			OutError = FString::Printf(TEXT("The Preview Client Project must be a .uproject file: %s"), *MantlePreviewShared::PlatformPath(Project));
+			return false;
+		}
+	}
+	OutInfo = FMantlePreviewClientInfo();
+	OutInfo.Executable = MantlePreviewShared::PlatformPath(FPaths::ConvertRelativePathToFull(Exe));
+	OutInfo.Project = MantlePreviewShared::PlatformPath(Project);
+	OutInfo.PrefixArgs = { OutInfo.Project, TEXT("-game") };
+	OutInfo.Source = TEXT("dev-editor");
+	return true;
+}
+
 bool MantlePreviewClient::Find(FMantlePreviewClientInfo& OutClient, FString& OutError)
 {
 	using namespace MantlePreviewClientPrivate;
@@ -591,7 +657,18 @@ bool MantlePreviewClient::Find(FMantlePreviewClientInfo& OutClient, FString& Out
 		}
 	};
 
+	const FString ProjectChoice = ProjectOverride(FCommandLine::Get(), UMantleSettings::Get()->PreviewClientProject.FilePath);
 	FString Configured = UMantleSettings::Get()->PreviewClientExecutable.FilePath.TrimStartAndEnd();
+	if (!ProjectChoice.IsEmpty())
+	{
+		// A client project means the engine's editor runs it: an empty executable is this editor's own UnrealEditor.exe.
+		FString Resolved;
+		if (!ResolveExecutable(Configured, ProjectChoice, Resolved, OutError))
+		{
+			return false;
+		}
+		Configured = Resolved;
+	}
 	if (Configured.IsEmpty())
 	{
 		Looked.Add(TEXT("the Preview Client Executable setting (not set)"));
@@ -638,7 +715,7 @@ bool MantlePreviewClient::Find(FMantlePreviewClientInfo& OutClient, FString& Out
 	{
 		FMantlePreviewClientInfo Info;
 		FString Error;
-		if (ClientDescribe(Candidate.Exe, Candidate.Source, Info, Error) && ClientQueryCapabilities(Info, Error))
+		if (ClientDescribe(Candidate.Exe, Candidate.Source, ProjectChoice, Info, Error) && ClientQueryCapabilities(Info, Error))
 		{
 			OutClient = Info;
 			UE_LOG(LogMantle, Display, TEXT("MANTLE_PREVIEW_CLIENT %s %s protocol=%d scriptApi=%d.%d version=%s"), *Info.Source, *Info.Executable,
@@ -648,6 +725,12 @@ bool MantlePreviewClient::Find(FMantlePreviewClientInfo& OutClient, FString& Out
 		if (Candidate.Source.Equals(TEXT("setting"), ESearchCase::CaseSensitive))
 		{
 			// The creator's own choice failed: report why instead of falling back to Steam or Epic.
+			if (!ProjectChoice.IsEmpty())
+			{
+				OutError = Error + FString::Printf(TEXT(" (This is the Preview Client Project %s, from Project Settings > Plugins > Mantle or -MantlePreviewProject. It must be a Mantle client project that answers -MantlePreviewCapabilities, such as mantle/client/Mantle.uproject; choose another, or clear it.)"),
+					*MantlePreviewShared::PlatformPath(ProjectChoice));
+				return false;
+			}
 			OutError = Error + TEXT(" (This is the Preview Client Executable chosen in Project Settings > Plugins > Mantle; choose another, or clear it to use the Steam or Epic install.)");
 			return false;
 		}
