@@ -1627,6 +1627,11 @@ FMantleBuildResult FMantlePlaceBuilder::Build(
 				Actor = BuildText(World, Entity, *Props);
 			}
 			break;
+
+		case EMantleEntityType::WaterBody:
+			// The parser reads and checks it (GhzGarage/mantle#997); the water is built by the runtime stage after this one,
+			// so nothing stands for the entity yet and it is not an error.
+			continue;
 		}
 
 		if (Actor)

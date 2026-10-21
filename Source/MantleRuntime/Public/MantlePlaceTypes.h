@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "MantleEffectTypes.h"
+#include "MantlePlaceLimits.h"
 #include "MantleScatter.h"
 #include "MantleSurface.h"
 #include "MantleWeather.h"
@@ -97,7 +98,35 @@ enum class EMantleEntityType : uint8
 	 * Text drawn in the world (GhzGarage/mantle#724): a UTextRenderComponent in Mantle's built-in font. Client-only
 	 * content; a server keeps the entity. Added without a schema version bump, gated by the worldText client feature.
 	 */
-	Text
+	Text,
+	/**
+	 * A body of the Water plugin (GhzGarage/mantle#997): a lake, river, ocean or custom-mesh body, with the place's Water Zone in
+	 * settings.water. Added without a schema version bump, gated by the waterBodies client feature.
+	 */
+	WaterBody
+};
+
+/** A WaterBody's kind (#997), the place file's properties.bodyType: the Water plugin's lake, river, ocean or custom-mesh body. */
+enum class EMantleWaterBodyType : uint8
+{
+	/** A closed spline loop, still water. */
+	Lake,
+	/** An open spline with a width and a flow at each point. */
+	River,
+	/** A closed spline loop that reaches out to OceanExtent. */
+	Ocean,
+	/** A static mesh stands for the surface; no spline. */
+	Custom
+};
+
+/** How a water spline runs out of one of its points (#997), the place file's point interp: the engine's ESplinePointType. */
+enum class EMantleWaterSplinePointType : uint8
+{
+	Curve,
+	Linear,
+	Constant,
+	CurveClamped,
+	CurveCustomTangent
 };
 
 /** A Text entity's horizontal alignment (#724), the place file's properties.horizontalAlignment. */
@@ -288,6 +317,12 @@ MANTLERUNTIME_API const TCHAR* MantleTextHorizontalAlignmentToString(EMantleText
 MANTLERUNTIME_API bool MantleParseTextHorizontalAlignment(const FString& In, EMantleTextHorizontalAlignment& Out);
 MANTLERUNTIME_API const TCHAR* MantleTextVerticalAlignmentToString(EMantleTextVerticalAlignment Alignment);
 MANTLERUNTIME_API bool MantleParseTextVerticalAlignment(const FString& In, EMantleTextVerticalAlignment& Out);
+/** "lake", "river", "ocean", "custom" (#997); parsing is case-exact, as the schema's enum is. */
+MANTLERUNTIME_API const TCHAR* MantleWaterBodyTypeToString(EMantleWaterBodyType Type);
+MANTLERUNTIME_API bool MantleParseWaterBodyType(const FString& In, EMantleWaterBodyType& Out);
+/** "curve", "linear", "constant", "curveClamped", "curveCustomTangent" (#997); parsing is case-exact. */
+MANTLERUNTIME_API const TCHAR* MantleWaterSplinePointTypeToString(EMantleWaterSplinePointType Type);
+MANTLERUNTIME_API bool MantleParseWaterSplinePointType(const FString& In, EMantleWaterSplinePointType& Out);
 
 struct FMantleRevision
 {
@@ -432,6 +467,8 @@ struct FMantleSettings
 	bool bCarjacking = true;
 	/** The place's default look (#532). Empty when the file has no settings.environment. */
 	FMantleEnvironmentSettings Environment;
+	/** The place's Water Zone (#997). Unset when the file has no settings.water. */
+	TOptional<FMantleWaterZone> Water;
 };
 
 /**
@@ -1224,6 +1261,71 @@ struct FMantleTextProps
 	double YScale = 1.0;
 };
 
+/** One point of a WaterBody's spline (#997), in the body's own space, cm. */
+struct FMantleWaterSplinePoint
+{
+	FVector Location = FVector::ZeroVector;
+	FVector ArriveTangent = FVector::ZeroVector;
+	FVector LeaveTangent = FVector::ZeroVector;
+	EMantleWaterSplinePointType Interp = EMantleWaterSplinePointType::Curve;
+	/** FMantlePlaceLimits::MinWaterSplineDepth to MaxWaterSplineDepth; every body type has it. */
+	double Depth = 0.0;
+	/** A river's only: FMantlePlaceLimits::MinWaterRiverWidth to MaxWaterRiverWidth. */
+	double Width = 0.0;
+	/** A river's only: 0 to FMantlePlaceLimits::MaxWaterRiverVelocity, cm/s. */
+	double Velocity = 0.0;
+};
+
+/** One final Gerstner wave of a WaterBody (#997): as generated, not generator settings. */
+struct FMantleWaterWave
+{
+	/** FMantlePlaceLimits::MinWaterWavelength to MaxWaterWavelength, cm. */
+	double Wavelength = 0.0;
+	/** 0 to FMantlePlaceLimits::MaxWaterAmplitude, cm. */
+	double Amplitude = 0.0;
+	/** 0 to 1. */
+	double Steepness = 0.0;
+	/** Travel direction in world space, -180 to 180 degrees. */
+	double DirectionDeg = 0.0;
+	double PhaseOffset = 0.0;
+};
+
+/**
+ * A body of the Water plugin (GhzGarage/mantle#997). The entity's transform is the body actor's; lengths are cm.
+ * Lake, River and Ocean carry Spline (a lake's and an ocean's a closed loop, a river's open); Custom carries MeshId.
+ */
+struct FMantleWaterBodyProps
+{
+	EMantleWaterBodyType BodyType = EMantleWaterBodyType::Lake;
+	/** Lake, River and Ocean: the spline's points, in the body's own space. Empty for Custom. */
+	TArray<FMantleWaterSplinePoint> SplinePoints;
+	/** Custom: the uploaded StaticMesh asset standing for the surface. Empty otherwise. */
+	FString MeshId;
+	/** The final Gerstner waves, direction in world space; empty means flat water. Never on a river. */
+	TArray<FMantleWaterWave> Waves;
+	/** Linear RGB; each is set only when the file gives it, else the plugin's default stands. */
+	TOptional<FLinearColor> Albedo;
+	TOptional<FLinearColor> Scattering;
+	TOptional<FLinearColor> Absorption;
+	bool bCollision = true;
+	/** FMantlePlaceLimits::MaxWaterCollisionShift either way, cm; set only when the file gives it. */
+	TOptional<double> CollisionHeightOffset;
+	/** Ocean only, each axis FMantlePlaceLimits::MinWaterExtent to MaxWaterExtent cm; set only when the file gives them. */
+	TOptional<FVector> CollisionExtent;
+	TOptional<FVector2D> OceanExtent;
+	TOptional<bool> CenterOnZone;
+};
+
+/** The place's Water Zone (#997), the place file's settings.water: the area the Water plugin simulates and draws water in. */
+struct FMantleWaterZone
+{
+	/** The zone's full size, cm, each axis FMantlePlaceLimits::MinWaterExtent to MaxWaterExtent. */
+	FVector2D ZoneExtent = FVector2D(FMantlePlaceLimits::DefaultWaterZoneExtent, FMantlePlaceLimits::DefaultWaterZoneExtent);
+	FVector ZoneLocation = FVector::ZeroVector;
+	/** -180 to 180 degrees. */
+	double ZoneYawDeg = 0.0;
+};
+
 using FMantleEntityProps = TVariant<
 	FMantleStaticMeshProps,
 	FMantleEmptyProps,
@@ -1245,7 +1347,8 @@ using FMantleEntityProps = TVariant<
 	FMantleReflectionProbeProps,
 	FMantleWeaponSpawnProps,
 	FMantleScriptPointProps,
-	FMantleTextProps>;
+	FMantleTextProps,
+	FMantleWaterBodyProps>;
 
 /** What happens to an interaction option once it has been used (the schema's afterUse). */
 enum class EMantleInteractableAfterUse : uint8

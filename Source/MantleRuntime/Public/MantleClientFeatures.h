@@ -70,6 +70,11 @@ namespace MantleClientFeatures
 	inline const TCHAR* const WeaponDocument = TEXT("weaponDocument");
 	/** Text entities (GhzGarage/mantle#724): world text drawn in Mantle's built-in font. */
 	inline const TCHAR* const WorldText = TEXT("worldText");
+	/**
+	 * WaterBody entities and settings.water (GhzGarage/mantle#997): lakes, rivers, oceans and custom-mesh bodies of
+	 * the Water plugin. Listed because the place parser reads them; nothing builds them until #997's runtime stage.
+	 */
+	inline const TCHAR* const WaterBodies = TEXT("waterBodies");
 
 	/** Every feature this build reads, in the order above. */
 	inline TArray<FString> All()
@@ -78,7 +83,7 @@ namespace MantleClientFeatures
 			InstancedMesh, CrowdSpawner, CrowdPointsOfInterest, SkeletalMesh, RectLight, Decal, LightShape, Terrain, TerrainGrass,
 			Vehicle, VehicleLinkage, VehicleParts, VehicleCarInteraction, VehicleContactPoints, VehicleHiddenSeat, VehicleFliers, VehicleHover, VehicleSeatKind, VehicleWeaponArc, Effect, EffectSprites, Constraint, Scatter, ReflectionProbes, Storage,
 			UIDocuments, EnvironmentDefaults, EnvironmentLighting, AvatarHeight, SoundEmitterAutoplay, StaticMeshPhysics, PhysicsMaterial, Surface, DrawDistance, CarPaint,
-			MaterialFidelity, MaterialAdditive, WeaponDocument, WorldText
+			MaterialFidelity, MaterialAdditive, WeaponDocument, WorldText, WaterBodies
 		};
 	}
 }

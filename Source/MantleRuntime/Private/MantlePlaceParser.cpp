@@ -1996,6 +1996,353 @@ namespace
 		}
 	}
 
+
+	/** An optional [x, y] extent, each axis in [FMantlePlaceLimits::MinWaterExtent, MaxWaterExtent] (a WaterBody's oceanExtent, the Water Zone's zoneExtent). */
+	void ReadWaterExtent2(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key, const FString& Path, TOptional<FVector2D>& Out)
+	{
+		if (!Obj->HasField(Key))
+		{
+			return;
+		}
+		TArray<double> Values;
+		if (!ReadNumberArray(Ctx, Obj, Key, 2, Path, Values))
+		{
+			return;
+		}
+		const int32 ErrorsBefore = Ctx.Errors.Num();
+		for (int32 Axis = 0; Axis < 2; ++Axis)
+		{
+			RangeCheck(Ctx, Values[Axis], FMantlePlaceLimits::MinWaterExtent, FMantlePlaceLimits::MaxWaterExtent, Index(Join(Path, Key), Axis));
+		}
+		if (Ctx.Errors.Num() == ErrorsBefore)
+		{
+			Out = FVector2D(Values[0], Values[1]);
+		}
+	}
+
+	/** A required [x, y, z] of any numbers (a spline point's location or tangent). */
+	void ReadWaterVector(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key, const FString& Path, FVector& Out)
+	{
+		TArray<double> Values;
+		if (ReadNumberArray(Ctx, Obj, Key, 3, Path, Values))
+		{
+			Out = FVector(Values[0], Values[1], Values[2]);
+		}
+	}
+
+	/** An optional linear RGB colour (a WaterBody's look): a colour left out is left unset. */
+	void ReadWaterLookColor(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Look, const TCHAR* Key, const FString& Path, TOptional<FLinearColor>& Out)
+	{
+		if (!Look->HasField(Key))
+		{
+			return;
+		}
+		FLinearColor Color;
+		if (ReadColor(Ctx, Look, Key, Path, Color))
+		{
+			Out = Color;
+		}
+	}
+
+	/** One spline point of a WaterBody: width and velocity are a river's, and a river's width is required. */
+	void ParseWaterSplinePoint(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Point, const FString& Path, bool bTypeKnown,
+		EMantleWaterBodyType Type, FMantleWaterSplinePoint& P)
+	{
+		RequireNoUnknownKeys(Ctx, Point,
+			{ TEXT("location"), TEXT("arriveTangent"), TEXT("leaveTangent"), TEXT("depth"), TEXT("width"), TEXT("velocity"), TEXT("interp") },
+			Path);
+		ReadWaterVector(Ctx, Point, TEXT("location"), Path, P.Location);
+		ReadWaterVector(Ctx, Point, TEXT("arriveTangent"), Path, P.ArriveTangent);
+		ReadWaterVector(Ctx, Point, TEXT("leaveTangent"), Path, P.LeaveTangent);
+		if (RequireNumber(Ctx, Point, TEXT("depth"), Path, P.Depth))
+		{
+			RangeCheck(Ctx, P.Depth, FMantlePlaceLimits::MinWaterSplineDepth, FMantlePlaceLimits::MaxWaterSplineDepth, Join(Path, TEXT("depth")));
+		}
+		const bool bRiver = bTypeKnown && Type == EMantleWaterBodyType::River;
+		if (bTypeKnown && !bRiver)
+		{
+			for (const TCHAR* Key : { TEXT("width"), TEXT("velocity") })
+			{
+				if (Point->HasField(Key))
+				{
+					Ctx.Fail(Join(Path, Key), FString::Printf(TEXT("is not used by a %s body"), MantleWaterBodyTypeToString(Type)));
+				}
+			}
+		}
+		else
+		{
+			if (bRiver)
+			{
+				if (!Point->HasField(TEXT("width")))
+				{
+					Ctx.Fail(Join(Path, TEXT("width")), TEXT("is required by a river body"));
+				}
+			}
+			ReadProbeNumber(Ctx, Point, TEXT("width"), Path, FMantlePlaceLimits::MinWaterRiverWidth, FMantlePlaceLimits::MaxWaterRiverWidth, P.Width);
+			ReadProbeNumber(Ctx, Point, TEXT("velocity"), Path, 0.0, FMantlePlaceLimits::MaxWaterRiverVelocity, P.Velocity);
+		}
+		FString Interp;
+		if (Point->HasField(TEXT("interp")))
+		{
+			if (!Point->TryGetStringField(TEXT("interp"), Interp) || !MantleParseWaterSplinePointType(Interp, P.Interp))
+			{
+				Ctx.Fail(Join(Path, TEXT("interp")), TEXT("is not curve, linear, constant, curveClamped or curveCustomTangent"));
+			}
+		}
+	}
+
+	/**
+	 * A WaterBody's properties (GhzGarage/mantle#997): the schema's branch and its `if`/`not`, each failure reported at the
+	 * key as the backend does. bodyType decides which keys apply: lake, river and ocean take a spline and refuse a mesh,
+	 * custom takes a mesh and refuses a spline; width and velocity are a river point's; waves are never a river's;
+	 * collisionExtent, oceanExtent and centerOnZone are an ocean's. A key left out keeps FMantleWaterBodyProps' default.
+	 */
+	void ParseWaterBody(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Props, const FString& Path, FMantleWaterBodyProps& P)
+	{
+		RequireNoUnknownKeys(Ctx, Props,
+			{ TEXT("bodyType"), TEXT("spline"), TEXT("mesh"), TEXT("waves"), TEXT("look"), TEXT("collision"),
+			  TEXT("collisionHeightOffset"), TEXT("collisionExtent"), TEXT("oceanExtent"), TEXT("centerOnZone") },
+			Path);
+
+		bool bTypeKnown = false;
+		FString BodyType;
+		if (RequireString(Ctx, Props, TEXT("bodyType"), Path, BodyType))
+		{
+			bTypeKnown = MantleParseWaterBodyType(BodyType, P.BodyType);
+			if (!bTypeKnown)
+			{
+				Ctx.Fail(Join(Path, TEXT("bodyType")), FString::Printf(TEXT("'%s' is not a water body type (lake, river, ocean or custom)"), *BodyType));
+			}
+		}
+		if (bTypeKnown)
+		{
+			const bool bCustom = P.BodyType == EMantleWaterBodyType::Custom;
+			const TCHAR* const Name = MantleWaterBodyTypeToString(P.BodyType);
+			if (!Props->HasField(bCustom ? TEXT("mesh") : TEXT("spline")))
+			{
+				Ctx.Fail(Join(Path, bCustom ? TEXT("mesh") : TEXT("spline")), FString::Printf(TEXT("is required by a %s body"), Name));
+			}
+			if (Props->HasField(bCustom ? TEXT("spline") : TEXT("mesh")))
+			{
+				Ctx.Fail(Join(Path, bCustom ? TEXT("spline") : TEXT("mesh")), FString::Printf(TEXT("is not used by a %s body"), Name));
+			}
+			if (P.BodyType == EMantleWaterBodyType::River && Props->HasField(TEXT("waves")))
+			{
+				Ctx.Fail(Join(Path, TEXT("waves")), TEXT("is not used by a river body"));
+			}
+			if (P.BodyType != EMantleWaterBodyType::Ocean)
+			{
+				for (const TCHAR* Key : { TEXT("collisionExtent"), TEXT("oceanExtent"), TEXT("centerOnZone") })
+				{
+					if (Props->HasField(Key))
+					{
+						Ctx.Fail(Join(Path, Key), FString::Printf(TEXT("is not used by a %s body"), Name));
+					}
+				}
+			}
+		}
+
+		if (Props->HasField(TEXT("spline")))
+		{
+			const FString SplinePath = Join(Path, TEXT("spline"));
+			const TSharedPtr<FJsonObject>* Spline = nullptr;
+			const TArray<TSharedPtr<FJsonValue>>* Points = nullptr;
+			if (!Props->TryGetObjectField(TEXT("spline"), Spline))
+			{
+				Ctx.Fail(SplinePath, TEXT("must be an object"));
+			}
+			else
+			{
+				RequireNoUnknownKeys(Ctx, *Spline, { TEXT("points") }, SplinePath);
+				const FString PointsPath = Join(SplinePath, TEXT("points"));
+				if (!(*Spline)->TryGetArrayField(TEXT("points"), Points))
+				{
+					Ctx.Fail(PointsPath, TEXT("required array is missing or not an array"));
+				}
+				else
+				{
+					const bool bLoop = bTypeKnown && (P.BodyType == EMantleWaterBodyType::Lake || P.BodyType == EMantleWaterBodyType::Ocean);
+					const int32 MinPoints = bLoop ? FMantlePlaceLimits::MinWaterLoopPoints : FMantlePlaceLimits::MinWaterRiverPoints;
+					if (Points->Num() < MinPoints)
+					{
+						Ctx.Fail(PointsPath, FString::Printf(TEXT("has %d points; a %s needs at least %d"), Points->Num(),
+							bTypeKnown ? *(FString(MantleWaterBodyTypeToString(P.BodyType)) + TEXT(" spline")) : TEXT("spline"), MinPoints));
+					}
+					if (Points->Num() > FMantlePlaceLimits::MaxWaterSplinePointsPerBody)
+					{
+						Ctx.Fail(PointsPath, FString::Printf(TEXT("has %d points; a body may have at most %d"), Points->Num(),
+							FMantlePlaceLimits::MaxWaterSplinePointsPerBody));
+					}
+					for (int32 i = 0; i < Points->Num(); ++i)
+					{
+						const TSharedPtr<FJsonObject>* Point = nullptr;
+						if (!(*Points)[i]->TryGetObject(Point))
+						{
+							Ctx.Fail(Index(PointsPath, i), TEXT("must be an object"));
+							continue;
+						}
+						FMantleWaterSplinePoint Parsed;
+						ParseWaterSplinePoint(Ctx, *Point, Index(PointsPath, i), bTypeKnown, P.BodyType, Parsed);
+						P.SplinePoints.Add(Parsed);
+					}
+				}
+			}
+		}
+
+		if (Props->HasField(TEXT("mesh")))
+		{
+			if (RequireString(Ctx, Props, TEXT("mesh"), Path, P.MeshId) && P.MeshId.IsEmpty())
+			{
+				Ctx.Fail(Join(Path, TEXT("mesh")), TEXT("must name an asset"));
+			}
+		}
+
+		if (Props->HasField(TEXT("waves")))
+		{
+			const FString WavesPath = Join(Path, TEXT("waves"));
+			const TSharedPtr<FJsonObject>* Waves = nullptr;
+			const TArray<TSharedPtr<FJsonValue>>* List = nullptr;
+			if (!Props->TryGetObjectField(TEXT("waves"), Waves))
+			{
+				Ctx.Fail(WavesPath, TEXT("must be an object"));
+			}
+			else
+			{
+				RequireNoUnknownKeys(Ctx, *Waves, { TEXT("list") }, WavesPath);
+				const FString ListPath = Join(WavesPath, TEXT("list"));
+				if (!(*Waves)->TryGetArrayField(TEXT("list"), List))
+				{
+					Ctx.Fail(ListPath, TEXT("required array is missing or not an array"));
+				}
+				else
+				{
+					if (List->Num() < 1 || List->Num() > FMantlePlaceLimits::MaxWaterWavesPerBody)
+					{
+						Ctx.Fail(ListPath, FString::Printf(TEXT("has %d waves; expected 1 to %d"), List->Num(), FMantlePlaceLimits::MaxWaterWavesPerBody));
+					}
+					for (int32 i = 0; i < List->Num(); ++i)
+					{
+						const FString WavePath = Index(ListPath, i);
+						const TSharedPtr<FJsonObject>* Wave = nullptr;
+						if (!(*List)[i]->TryGetObject(Wave))
+						{
+							Ctx.Fail(WavePath, TEXT("must be an object"));
+							continue;
+						}
+						RequireNoUnknownKeys(Ctx, *Wave,
+							{ TEXT("wavelength"), TEXT("amplitude"), TEXT("steepness"), TEXT("directionDeg"), TEXT("phaseOffset") }, WavePath);
+						FMantleWaterWave Parsed;
+						if (RequireNumber(Ctx, *Wave, TEXT("wavelength"), WavePath, Parsed.Wavelength))
+						{
+							RangeCheck(Ctx, Parsed.Wavelength, FMantlePlaceLimits::MinWaterWavelength, FMantlePlaceLimits::MaxWaterWavelength,
+								Join(WavePath, TEXT("wavelength")));
+						}
+						if (RequireNumber(Ctx, *Wave, TEXT("amplitude"), WavePath, Parsed.Amplitude))
+						{
+							RangeCheck(Ctx, Parsed.Amplitude, 0.0, FMantlePlaceLimits::MaxWaterAmplitude, Join(WavePath, TEXT("amplitude")));
+						}
+						if (RequireNumber(Ctx, *Wave, TEXT("steepness"), WavePath, Parsed.Steepness))
+						{
+							RangeCheck(Ctx, Parsed.Steepness, 0.0, 1.0, Join(WavePath, TEXT("steepness")));
+						}
+						if (RequireNumber(Ctx, *Wave, TEXT("directionDeg"), WavePath, Parsed.DirectionDeg))
+						{
+							RangeCheck(Ctx, Parsed.DirectionDeg, -180.0, 180.0, Join(WavePath, TEXT("directionDeg")));
+						}
+						ReadProbeNumber(Ctx, *Wave, TEXT("phaseOffset"), WavePath,
+							-FMantlePlaceLimits::MaxWaterPhaseOffset, FMantlePlaceLimits::MaxWaterPhaseOffset, Parsed.PhaseOffset);
+						P.Waves.Add(Parsed);
+					}
+				}
+			}
+		}
+
+		if (Props->HasField(TEXT("look")))
+		{
+			const FString LookPath = Join(Path, TEXT("look"));
+			const TSharedPtr<FJsonObject>* Look = nullptr;
+			if (!Props->TryGetObjectField(TEXT("look"), Look))
+			{
+				Ctx.Fail(LookPath, TEXT("must be an object"));
+			}
+			else
+			{
+				RequireNoUnknownKeys(Ctx, *Look, { TEXT("albedo"), TEXT("scattering"), TEXT("absorption") }, LookPath);
+				ReadWaterLookColor(Ctx, *Look, TEXT("albedo"), LookPath, P.Albedo);
+				ReadWaterLookColor(Ctx, *Look, TEXT("scattering"), LookPath, P.Scattering);
+				ReadWaterLookColor(Ctx, *Look, TEXT("absorption"), LookPath, P.Absorption);
+			}
+		}
+
+		ReadStrictOptionalBool(Ctx, Props, TEXT("collision"), Path, P.bCollision);
+		if (Props->HasField(TEXT("collisionHeightOffset")))
+		{
+			double Offset = 0.0;
+			ReadProbeNumber(Ctx, Props, TEXT("collisionHeightOffset"), Path,
+				-FMantlePlaceLimits::MaxWaterCollisionShift, FMantlePlaceLimits::MaxWaterCollisionShift, Offset);
+			if (Offset >= -FMantlePlaceLimits::MaxWaterCollisionShift && Offset <= FMantlePlaceLimits::MaxWaterCollisionShift)
+			{
+				P.CollisionHeightOffset = Offset;
+			}
+		}
+		if (Props->HasField(TEXT("collisionExtent")))
+		{
+			TArray<double> Values;
+			if (ReadNumberArray(Ctx, Props, TEXT("collisionExtent"), 3, Path, Values))
+			{
+				const int32 ErrorsBefore = Ctx.Errors.Num();
+				for (int32 Axis = 0; Axis < 3; ++Axis)
+				{
+					RangeCheck(Ctx, Values[Axis], FMantlePlaceLimits::MinWaterExtent, FMantlePlaceLimits::MaxWaterExtent,
+						Index(Join(Path, TEXT("collisionExtent")), Axis));
+				}
+				if (Ctx.Errors.Num() == ErrorsBefore)
+				{
+					P.CollisionExtent = FVector(Values[0], Values[1], Values[2]);
+				}
+			}
+		}
+		TOptional<FVector2D> OceanExtent;
+		ReadWaterExtent2(Ctx, Props, TEXT("oceanExtent"), Path, OceanExtent);
+		P.OceanExtent = OceanExtent;
+		if (Props->HasField(TEXT("centerOnZone")))
+		{
+			bool bCenter = false;
+			ReadStrictOptionalBool(Ctx, Props, TEXT("centerOnZone"), Path, bCenter);
+			P.CenterOnZone = bCenter;
+		}
+	}
+
+	/** settings.water, the place's Water Zone (GhzGarage/mantle#997): every key optional. */
+	void ReadWaterZone(FParseContext& Ctx, const TSharedPtr<FJsonObject>& Settings, const FString& Path, TOptional<FMantleWaterZone>& Out)
+	{
+		if (!Settings->HasField(TEXT("water")))
+		{
+			return;
+		}
+		const FString WaterPath = Join(Path, TEXT("water"));
+		const TSharedPtr<FJsonObject>* Water = nullptr;
+		if (!Settings->TryGetObjectField(TEXT("water"), Water))
+		{
+			Ctx.Fail(WaterPath, TEXT("must be an object"));
+			return;
+		}
+		RequireNoUnknownKeys(Ctx, *Water, { TEXT("zoneExtent"), TEXT("zoneLocation"), TEXT("zoneYawDeg") }, WaterPath);
+		FMantleWaterZone Zone;
+		TOptional<FVector2D> Extent;
+		ReadWaterExtent2(Ctx, *Water, TEXT("zoneExtent"), WaterPath, Extent);
+		if (Extent.IsSet())
+		{
+			Zone.ZoneExtent = Extent.GetValue();
+		}
+		if ((*Water)->HasField(TEXT("zoneLocation")))
+		{
+			ReadWaterVector(Ctx, *Water, TEXT("zoneLocation"), WaterPath, Zone.ZoneLocation);
+		}
+		ReadProbeNumber(Ctx, *Water, TEXT("zoneYawDeg"), WaterPath, -180.0, 180.0, Zone.ZoneYawDeg);
+		Out = Zone;
+	}
+
 	// An entity's interactable block (the schema's interactable). Colours are linear RGB arrays like every other
 	// colour of the place; entity references are checked for existence once every entity is read (ParseFromString).
 
@@ -2831,6 +3178,15 @@ namespace
 			Entity.Props.Set<FMantleTextProps>(MoveTemp(P));
 			break;
 		}
+
+		case EMantleEntityType::WaterBody:
+		{
+			// A Water plugin body, built on each client once the place stands (GhzGarage/mantle#997).
+			FMantleWaterBodyProps P;
+			ParseWaterBody(Ctx, Props, Path, P);
+			Entity.Props.Set<FMantleWaterBodyProps>(MoveTemp(P));
+			break;
+		}
 		}
 	}
 
@@ -3055,7 +3411,7 @@ FMantleParseResult FMantlePlaceParser::ParseFromString(const FString& Json, cons
 			Ctx, *SettingsObj,
 			{ TEXT("maxPlayers"), TEXT("gravity"), TEXT("skybox"), TEXT("ambientLight"),
 			  TEXT("respawnMode"), TEXT("streamingDistance"), TEXT("allowCommunityServers"),
-			  TEXT("allowPrivateServers"), TEXT("avatarHeight"), TEXT("environment"), TEXT("carjacking") },
+			  TEXT("allowPrivateServers"), TEXT("avatarHeight"), TEXT("environment"), TEXT("carjacking"), TEXT("water") },
 			TEXT("/settings"));
 
 		double MaxPlayers = Place.Settings.MaxPlayers;
@@ -3090,6 +3446,7 @@ FMantleParseResult FMantlePlaceParser::ParseFromString(const FString& Json, cons
 		// Typed, so a string such as "off" is refused rather than read as a boolean.
 		ReadStrictOptionalBool(Ctx, *SettingsObj, TEXT("carjacking"), TEXT("/settings"), Place.Settings.bCarjacking);
 		ReadEnvironmentSettings(Ctx, *SettingsObj, TEXT("/settings"), Place.Settings.Environment);
+		ReadWaterZone(Ctx, *SettingsObj, TEXT("/settings"), Place.Settings.Water);
 
 		// Deprecated: still accepted, so existing place files parse, but nothing reads it
 		// at runtime and the exporter no longer writes it.
@@ -4057,6 +4414,35 @@ FMantleParseResult FMantlePlaceParser::ParseFromString(const FString& Json, cons
 			Ctx.Fail(
 				Join(Index(TEXT("/entities"), i), TEXT("type")),
 				FString::Printf(TEXT("is Text number %d; a place may have at most %d"), Texts, FMantlePlaceLimits::MaxTextsPerPlace));
+		}
+	}
+
+	// The WaterBody budgets (GhzGarage/mantle#997), stated in the schema's prose and reported the same way as the Effect's: the
+	// body that crosses the count, and the body that takes the spline points past their total, each at its type.
+	int32 WaterBodies = 0;
+	int32 WaterSplinePoints = 0;
+	bool bWaterPointsReported = false;
+	for (int32 i = 0; i < Place.Entities.Num(); ++i)
+	{
+		const FMantleWaterBodyProps* Water = Place.Entities[i].Props.TryGet<FMantleWaterBodyProps>();
+		if (!Water)
+		{
+			continue;
+		}
+		if (++WaterBodies == FMantlePlaceLimits::MaxWaterBodiesPerPlace + 1)
+		{
+			Ctx.Fail(
+				Join(Index(TEXT("/entities"), i), TEXT("type")),
+				FString::Printf(TEXT("is WaterBody number %d; a place may have at most %d"), WaterBodies, FMantlePlaceLimits::MaxWaterBodiesPerPlace));
+		}
+		WaterSplinePoints += Water->SplinePoints.Num();
+		if (WaterSplinePoints > FMantlePlaceLimits::MaxWaterSplinePointsPerPlace && !bWaterPointsReported)
+		{
+			bWaterPointsReported = true;
+			Ctx.Fail(
+				Join(Index(TEXT("/entities"), i), TEXT("type")),
+				FString::Printf(TEXT("takes the place's water spline points to %d; a place may have at most %d"),
+					WaterSplinePoints, FMantlePlaceLimits::MaxWaterSplinePointsPerPlace));
 		}
 	}
 

@@ -39,9 +39,25 @@ namespace
 		TEXT("ReflectionProbe"),
 		TEXT("WeaponSpawn"),
 		TEXT("ScriptPoint"),
-		TEXT("Text")
+		TEXT("Text"),
+		TEXT("WaterBody")
 	};
-	static_assert(UE_ARRAY_COUNT(GEntityTypeNames) == static_cast<SIZE_T>(EMantleEntityType::Text) + 1, "one name per EMantleEntityType");
+	static_assert(UE_ARRAY_COUNT(GEntityTypeNames) == static_cast<SIZE_T>(EMantleEntityType::WaterBody) + 1, "one name per EMantleEntityType");
+
+	// In EMantleWaterBodyType and EMantleWaterSplinePointType order; a WaterBody's type and its spline points' interp (#997).
+	const TCHAR* const GWaterBodyTypeNames[] = {
+		TEXT("lake"),
+		TEXT("river"),
+		TEXT("ocean"),
+		TEXT("custom")
+	};
+	const TCHAR* const GWaterSplinePointTypeNames[] = {
+		TEXT("curve"),
+		TEXT("linear"),
+		TEXT("constant"),
+		TEXT("curveClamped"),
+		TEXT("curveCustomTangent")
+	};
 
 	// In EMantleTextHorizontalAlignment and EMantleTextVerticalAlignment order; a Text entity's alignments (#724).
 	const TCHAR* const GTextHorizontalAlignmentNames[] = {
@@ -321,4 +337,26 @@ const TCHAR* MantleTextVerticalAlignmentToString(EMantleTextVerticalAlignment Al
 bool MantleParseTextVerticalAlignment(const FString& In, EMantleTextVerticalAlignment& Out)
 {
 	return ParseEnum(In, GTextVerticalAlignmentNames, Out);
+}
+
+const TCHAR* MantleWaterBodyTypeToString(EMantleWaterBodyType Type)
+{
+	const int32 Index = static_cast<int32>(Type);
+	return (Index >= 0 && Index < UE_ARRAY_COUNT(GWaterBodyTypeNames)) ? GWaterBodyTypeNames[Index] : TEXT("lake");
+}
+
+bool MantleParseWaterBodyType(const FString& In, EMantleWaterBodyType& Out)
+{
+	return ParseEnum(In, GWaterBodyTypeNames, Out);
+}
+
+const TCHAR* MantleWaterSplinePointTypeToString(EMantleWaterSplinePointType Type)
+{
+	const int32 Index = static_cast<int32>(Type);
+	return (Index >= 0 && Index < UE_ARRAY_COUNT(GWaterSplinePointTypeNames)) ? GWaterSplinePointTypeNames[Index] : TEXT("curve");
+}
+
+bool MantleParseWaterSplinePointType(const FString& In, EMantleWaterSplinePointType& Out)
+{
+	return ParseEnum(In, GWaterSplinePointTypeNames, Out);
 }
