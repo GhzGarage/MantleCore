@@ -38,6 +38,8 @@
 #include "MantleWeaponBuilderPanel.h"
 #include "MantleWeaponSpawnPoint.h"
 #include "MantleScriptPoint.h"
+#include "MantlePlaceSecretsDetails.h"
+#include "MantleTestLocally.h"
 #include "MantleScriptPointDetails.h"
 #include "MantleRuntime.h"
 #include "Graph/MantleScriptGraphModule.h"
@@ -712,6 +714,8 @@ void FMantleEditorModule::StartupModule()
 	SMantlePublishPanel::RegisterTab();
 	// #838: a Script Point's Details panel: its package from the place's storage and Packages/, its parameters with the package's hints.
 	FMantleScriptPointDetails::Register();
+	// #1011: Place Settings > Secrets.
+	FMantlePlaceSecretsDetails::Register();
 	// #610: the avatar converter's third-party rig fixer (Mixamo, Character Creator, Daz, guided mapping).
 	RegisterMantleAvatarRigMapFixer();
 	// #610: the avatar converter's Repose step (reference pose to the skeleton's A-pose).
@@ -767,6 +771,7 @@ void FMantleEditorModule::ShutdownModule()
 {
 	// #563: an unload without an editor exit would otherwise leave the preview running with nothing to stop it.
 	MantlePreviewClient::Stop();
+	FMantleTestLocally::Get().Stop();
 	FCoreDelegates::GetOnPostEngineInit().Remove(AgentToolsHandle);
 	SMantleCosmeticPanel::UnregisterTab();
 	SMantleVehicleBuilder::UnregisterTab();
@@ -775,6 +780,7 @@ void FMantleEditorModule::ShutdownModule()
 	SMantlePreviewPanel::UnregisterTab();
 	SMantlePublishPanel::UnregisterTab();
 	FMantleScriptPointDetails::Unregister();
+	FMantlePlaceSecretsDetails::Unregister();
 	FMantleScriptGraphModule::Shutdown();
 	FMantleScriptsPanelController::Shutdown();
 
