@@ -5,13 +5,12 @@
 #include "MantleWeaponSource.h"
 #include "SMantleWeaponBuilder.h"
 #include "AssetRegistry/AssetRegistryModule.h"
-#include "Editor.h"
 #include "Engine/StaticMesh.h"
 #include "HAL/FileManager.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
-#include "PackageTools.h"
 #include "UObject/Package.h"
+#include "UObject/GarbageCollection.h"
 #include "UObject/SavePackage.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
@@ -23,16 +22,33 @@
 namespace
 {
 	/**
-	 * UnloadPackages clears the editor selection first; with stale elements left in it by earlier tests in a -nullrhi run, the
-	 * engine ensures "Element type ID '0' has not been registered". Empty the selection so the unload gets a clean one.
+	 * Unloads packages without UPackageTools::UnloadPackages, whose editor-selection step ensures "Element type ID '0' has not been
+	 * registered" in a -nullrhi full-suite run. Their objects are moved aside and collected, so a reload reads the file.
 	 */
 	bool UnloadPackagesClean(const TArray<UPackage*>& Packages, FText& OutError)
 	{
-		if (GEditor)
+		for (UPackage* Package : Packages)
 		{
-			GEditor->SelectNone(false, true, false);
+			if (!Package)
+			{
+				continue;
+			}
+			TArray<UObject*> Contained;
+			GetObjectsWithPackage(Package, Contained, false);
+			for (UObject* Object : Contained)
+			{
+				Object->ClearFlags(RF_Public | RF_Standalone);
+				Object->Rename(*MakeUniqueObjectName(GetTransientPackage(), Object->GetClass(), Object->GetFName()).ToString(),
+					GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+				Object->MarkAsGarbage();
+			}
+			ResetLoaders(Package);
+			Package->ClearFlags(RF_Public | RF_Standalone);
+			Package->MarkAsGarbage();
 		}
-		return UPackageTools::UnloadPackages(Packages, OutError, true);
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+		OutError = FText::GetEmpty();
+		return true;
 	}
 }
 
