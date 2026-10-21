@@ -942,22 +942,30 @@ USkeletalMesh* FMantleParametricOutfit::FindBodyBeside(USkeletalMesh* Garment)
 		{
 			if (Data.PackageName == Garment->GetPackage()->GetFName()) { continue; }
 			USkeletalMesh* Body = Cast<USkeletalMesh>(Data.GetAsset());
-			if (!Body || Body == Garment || !FMantleGarmentOutfit::WornClothing(*Body).IsEmpty()) { continue; }
+			if (!Body || Body == Garment) { continue; }
+			const FString Worn = FMantleGarmentOutfit::WornClothing(*Body);
+			if (!Worn.IsEmpty()) { UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: wears %s"), *Body->GetName(), *Worn); continue; }
 			// A bare body: every section skin, and not a head (the Convert list's own test for a body).
 			TArray<int32> Slots;
 			const TArray<FMantleOutfitSection> Sections = FMantleCosmeticExport::ReadOutfitSections(Body, 0, Slots);
 			bool bAllSkin = Sections.Num() > 0;
 			for (const FMantleOutfitSection& Section : Sections) { bAllSkin &= FMantleOutfitSections::Classify(Section) == EMantleOutfitPiece::Skin; }
 			const TArray<FString> Words = FMantleOutfitSections::Words(Body->GetName());
-			if (!bAllSkin || Words.Contains(TEXT("head")) || Words.Contains(TEXT("face"))) { continue; }
+			if (!bAllSkin || Words.Contains(TEXT("head")) || Words.Contains(TEXT("face")))
+			{
+				UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: not a bare body (all skin %d)"), *Body->GetName(), bAllSkin ? 1 : 0);
+				continue;
+			}
 			// The body names this garment among its separate clothing (the Convert list's own matching).
 			TArray<FMantleConvertGarment> Garments;
 			TArray<FString> NotOffered;
 			FMantleGarmentOutfit::FindGarments(*Body, Garments, NotOffered);
 			if (Garments.ContainsByPredicate([Garment](const FMantleConvertGarment& Entry) { return Entry.Mesh.Get() == Garment && Entry.Why.IsEmpty(); }))
 			{
+				UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s is the body of %s"), *Body->GetName(), *Garment->GetName());
 				return Body;
 			}
+			UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s does not list %s"), *Body->GetName(), *Garment->GetName());
 		}
 	}
 	return nullptr;
