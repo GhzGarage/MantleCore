@@ -890,23 +890,7 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 	Subject.Frame = StandingFrame(BodyMesh);
 	Subject.bFloor = true;
 	const TArray<float> Times = Moments(Clip.GetDuration(), SheetMoments);
-	// TRIAL (#108 follow-up E6, removed before merge): MANTLE_EMOTE_BODY_MATCH=hands,legs,spine,arms poses the body through a
-	// copy of the client's retargeter with those bones rest-matched to the UEFN mannequin; MANTLE_EMOTE_BODY_FINGERS=OneToOne.
-	UObject* BodyMatched = nullptr;
-	const FString BodySets = FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_BODY_MATCH"));
-	if (!BodySets.IsEmpty())
-	{
-		FString MatchNote;
-		FString MatchError;
-		BodyMatched = FMantleEmoteRetarget::MakeRestHandsCopy(Inputs.Retargeter, Driver->GetRefSkeleton(), BodyMesh->GetRefSkeleton(), MatchNote, MatchError,
-			FMantleEmoteRetarget::BodyBones(BodySets), FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_BODY_FINGERS")));
-		Say(FString::Printf(TEXT("TRIAL body retarget %s: %s"), *BodySets, BodyMatched ? *MatchNote : *MatchError));
-	}
-	ON_SCOPE_EXIT
-	{
-		FMantleEmoteRetarget::ReleaseRestHandsCopy(BodyMatched);
-	};
-	UObject* const Retargeter = BodyMatched ? BodyMatched : Inputs.Retargeter;
+	UObject* const Retargeter = Inputs.Retargeter;
 
 	// Second step: what players see, the body posed from the UEFN mannequin through the client's retargeter, every frame.
 	if (HandsSource && SourcePoses.Num() > 0)

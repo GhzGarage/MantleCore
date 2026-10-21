@@ -454,65 +454,6 @@ TArray<FName> FMantleEmoteRetarget::HandBones()
 	return Out;
 }
 
-TArray<FName> FMantleEmoteRetarget::BodyBones(const FString& Sets)
-{
-	TArray<FString> Names;
-	Sets.ParseIntoArray(Names, TEXT(","));
-	TArray<FName> Out;
-	for (const FString& Set : Names)
-	{
-		if (Set == TEXT("hands"))
-		{
-			Out.Append(HandBones());
-			continue;
-		}
-		if (Set == TEXT("upper"))
-		{
-			for (const TCHAR* Bone : { TEXT("spine_01"), TEXT("spine_02"), TEXT("spine_03"), TEXT("spine_04"), TEXT("spine_05"), TEXT("neck_01"), TEXT("neck_02"),
-				TEXT("head") })
-			{
-				Out.Add(FName(Bone));
-			}
-			continue;
-		}
-		if (Set == TEXT("feet"))
-		{
-			for (const TCHAR* Bone : { TEXT("foot_l"), TEXT("ball_l"), TEXT("foot_r"), TEXT("ball_r") })
-			{
-				Out.Add(FName(Bone));
-			}
-			continue;
-		}
-		if (Set == TEXT("spine"))
-		{
-			for (const TCHAR* Bone : { TEXT("pelvis"), TEXT("spine_01"), TEXT("spine_02"), TEXT("spine_03"), TEXT("spine_04"), TEXT("spine_05"), TEXT("neck_01"),
-				TEXT("neck_02"), TEXT("head") })
-			{
-				Out.Add(FName(Bone));
-			}
-			continue;
-		}
-		for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
-		{
-			if (Set == TEXT("arms"))
-			{
-				for (const TCHAR* Bone : { TEXT("clavicle"), TEXT("upperarm"), TEXT("lowerarm") })
-				{
-					Out.Add(FName(FString::Printf(TEXT("%s_%s"), Bone, Side)));
-				}
-			}
-			else if (Set == TEXT("legs"))
-			{
-				for (const TCHAR* Bone : { TEXT("thigh"), TEXT("calf"), TEXT("foot"), TEXT("ball") })
-				{
-					Out.Add(FName(FString::Printf(TEXT("%s_%s"), Bone, Side)));
-				}
-			}
-		}
-	}
-	return Out;
-}
-
 TMap<FName, FQuat> FMantleEmoteRetarget::MatchRestRotations(const FReferenceSkeleton& Source, const TMap<FName, FQuat>& SourceOffsets,
 	const FReferenceSkeleton& Target, const TMap<FName, FQuat>& TargetOffsets, TConstArrayView<FName> Bones, double* OutLargestDegrees)
 {
@@ -833,7 +774,7 @@ USkeletalMesh* FMantleEmoteRetarget::FindSourceMesh(USkeleton* Skeleton)
 }
 
 UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote,
-	FString& OutError, TConstArrayView<FName> Bones, const FString& FingerRotationMode)
+	FString& OutError)
 {
 	using namespace MantleEmoteRetargetPrivate;
 	FRetargeterCopy Copy;
@@ -843,20 +784,20 @@ UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FRef
 	}
 	double Largest = 0.0;
 	const TMap<FName, FQuat> Offsets = MatchRestRotations(Source, Copy.OffsetsOf(Source, FRetargeterCopy::Source), Target,
-		Copy.OffsetsOf(Target, FRetargeterCopy::Target), Bones.Num() > 0 ? Bones : TConstArrayView<FName>(HandBones()), &Largest);
+		Copy.OffsetsOf(Target, FRetargeterCopy::Target), HandBones(), &Largest);
 	for (const TPair<FName, FQuat>& Offset : Offsets)
 	{
 		Copy.SetTargetOffset(Offset.Key, Offset.Value);
 	}
-	OutNote = FString::Printf(TEXT("%d %s bones of the target retarget pose given the source's rest shape (largest change %.1f degrees)"),
-		Offsets.Num(), Bones.Num() > 0 ? TEXT("chosen") : TEXT("hand and finger"), Largest);
+	OutNote = FString::Printf(TEXT("%d hand and finger bones of the target retarget pose given the source's rest shape (largest change %.1f degrees)"),
+		Offsets.Num(), Largest);
 	// The finger chains joint for joint (the default, Interpolated, samples the source finger by length, so each joint of
 	// a finger with other proportions gets a mix of two joints' bend). A source without metacarpals (the UE4 Mannequin)
 	// gives the target's metacarpal chains nothing to follow: the shipped retargeters map them to the whole finger, and a
 	// one-bone chain takes the fingertip's bend, which folds the palm (40 degrees and more in the trials). They hold the
 	// matched rest pose instead.
 	const bool bSourceMetacarpals = Source.FindRawBoneIndex(FName(TEXT("index_metacarpal_l"))) != INDEX_NONE;
-	const FString Mode = FingerRotationMode.IsEmpty() ? FString(TEXT("OneToOne")) : FingerRotationMode;
+	const FString Mode(TEXT("OneToOne"));
 	int32 Fingers = 0;
 	int32 Held = 0;
 	Copy.EditFKChains([](const FName Chain)
@@ -884,7 +825,7 @@ UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FRef
 			++Fingers;
 		}
 	});
-	OutNote += FString::Printf(TEXT("; %d finger chains retargeted joint for joint (%s)%s"), Fingers, *Mode,
+	OutNote += FString::Printf(TEXT("; %d finger chains retargeted joint for joint%s"), Fingers,
 		Held > 0 ? *FString::Printf(TEXT(", %d metacarpal chains held at the rest pose (the source has no metacarpals)"), Held) : TEXT(""));
 	return Copy.Detach();
 }
@@ -953,15 +894,10 @@ bool FMantleEmoteRetarget::RetargetAndSample(UAnimSequence* Sequence, const FStr
 	}
 	// mantle #840 step 1, rest-pose match: Unreal's auto-align writes no offsets for fingers, so the FK finger chains would
 	// carry the difference between the two rest hands into every frame (a constant 17 to 35 degree under-curl). This
-	// retarget runs through a copy whose UEFN pose has the source's rest arms, hands and fingers.
+	// retarget runs through a copy whose UEFN pose has the source's rest hands and fingers.
 	FString MatchError;
 	FString MatchNote;
-	// TRIAL (#108 follow-up, removed before merge): MANTLE_EMOTE_REST=hands,legs,spine,arms picks the matched bone sets;
-	// MANTLE_EMOTE_FINGERS=OneToOne the finger chains' rotation mode.
-	const FString RestSets = FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_REST"));
-	const TArray<FName> RestBones = RestSets.IsEmpty() ? TArray<FName>() : BodyBones(RestSets);
-	UObject* const Matched = MakeRestHandsCopy(Retargeter, SourceMesh->GetRefSkeleton(), TargetMesh->GetRefSkeleton(), MatchNote, MatchError, RestBones,
-		FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_FINGERS")));
+	UObject* const Matched = MakeRestHandsCopy(Retargeter, SourceMesh->GetRefSkeleton(), TargetMesh->GetRefSkeleton(), MatchNote, MatchError);
 	if (!Matched)
 	{
 		OutError = FString::Printf(TEXT("the retargeter's rest hands could not be matched (%s): enable the IK Rig plugin and restart the editor."), *MatchError);
