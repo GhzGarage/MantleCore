@@ -879,6 +879,19 @@ public:
 	static bool RepairLODScreenSizes(TArray<float>& InOutSizes);
 
 	/**
+	 * #628: a translucent material's refraction (its glTF KHR_materials_ior), drawn as the closest look a place material has:
+	 * Mantle's translucent surface has no refraction and no specular key, so the glass is as reflective as the default (an
+	 * index of 1.5, F0 0.04). The reflectance the source's index implies, F0 = ((n - 1) / (n + 1))^2, is made up for in the
+	 * opacity: the part that reflects instead of passing the scene through, F0 minus 0.04, is added to it. A glass thinner than
+	 * MinGlassOpacity is raised to it so thick glass still reads as glass. Tint (baseColorFactor) and roughness are kept.
+	 * Returns the opacity to publish.
+	 */
+	static double GlassOpacityFromIor(double Ior, double Opacity);
+
+	/** The least opacity a refractive glass publishes with. */
+	static constexpr double MinGlassOpacity = 0.1;
+
+	/**
 	 * Maps materials[Index] of a flattened GLB to the material document, preparing its textures
 	 * (added to OutSet) and reporting what did not carry over. MaterialName names the Unreal
 	 * material in messages. bSourceTexturesReported: the material's oversized source textures

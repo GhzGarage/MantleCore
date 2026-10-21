@@ -3122,7 +3122,7 @@ FString FMantlePlaceAssets::DescribeLoss(EMantleMaterialLoss Loss, const FMantle
 	case EMantleMaterialLoss::WorldAligned:
 		return TEXT("world-aligned or triplanar mapping is baked onto the mesh's own UVs, so its pattern will not line up across neighbouring meshes (only the engine's WorldAlignedTexture and WorldAlignedNormal straight into an opaque material's outputs, with constant sizes, are kept).");
 	case EMantleMaterialLoss::Refraction:
-		return TEXT("refraction is dropped; it renders as plain see-through.");
+		return TEXT("refraction is approximated: it publishes as smooth, tinted glass that is a little more reflective and opaque (by its index of refraction), but the scene behind it is not bent.");
 	case EMantleMaterialLoss::Subsurface:
 		return TEXT("subsurface scattering is dropped, so skin, wax and leaves look flatter.");
 	case EMantleMaterialLoss::Parallax:
