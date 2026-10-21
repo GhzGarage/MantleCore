@@ -18,7 +18,9 @@
 #include "MantleFitBodies.h"
 #include "MantlePng.h"
 
+#include "Animation/AnimData/IAnimationDataModel.h"
 #include "Animation/AnimSequence.h"
+#include "AnimationRuntime.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
@@ -229,6 +231,76 @@ namespace MantleEmoteCheckPrivate
 		}
 	}
 
+	/** A close-up of Bone's place on the posed mesh (Components[0]), 13 cm each way. */
+	FBox HandFrame(TConstArrayView<USkeletalMeshComponent*> Components, const FName Bone)
+	{
+		const USkeletalMeshComponent* Component = Components.IsValidIndex(0) ? Components[0] : nullptr;
+		const FVector Center = Component && Component->GetBoneIndex(Bone) != INDEX_NONE ? Component->GetBoneLocation(Bone) : FVector::ZeroVector;
+		return FBox(Center - FVector(13.0), Center + FVector(13.0));
+	}
+
+	/** A sequence's bone keys, read once, sampled at any time as the emote writer does (slerp and lerp between keys). */
+	class FSequenceSampler
+	{
+	public:
+		FSequenceSampler(const UAnimSequence* Sequence, const FReferenceSkeleton& InSkeleton)
+			: Skeleton(InSkeleton)
+		{
+			const IAnimationDataModel* Model = Sequence ? Sequence->GetDataModel() : nullptr;
+			Keys.SetNum(Skeleton.GetRawBoneNum());
+			if (!Model)
+			{
+				return;
+			}
+			Rate = Model->GetFrameRate();
+			for (int32 Bone = 0; Bone < Skeleton.GetRawBoneNum(); ++Bone)
+			{
+				if (Model->IsValidBoneTrackName(Skeleton.GetBoneName(Bone)))
+				{
+					Model->GetBoneTrackTransforms(Skeleton.GetBoneName(Bone), Keys[Bone]);
+				}
+			}
+		}
+
+		TArray<FTransform> ComponentPoseAt(const double Time) const
+		{
+			const FFrameTime At = Rate.AsFrameTime(Time);
+			return FMantleEmoteCheck::ComponentPose(Skeleton, [this, &At](const int32 Bone)
+			{
+				const TArray<FTransform>& Track = Keys[Bone];
+				if (Track.Num() == 0)
+				{
+					return Skeleton.GetRawRefBonePose()[Bone];
+				}
+				const int32 Key0 = FMath::Clamp(At.GetFrame().Value, 0, Track.Num() - 1);
+				const int32 Key1 = FMath::Min(Key0 + 1, Track.Num() - 1);
+				const double Alpha = Key0 == Key1 ? 0.0 : FMath::Clamp(static_cast<double>(At.GetSubFrame()), 0.0, 1.0);
+				return FTransform(FQuat::Slerp(Track[Key0].GetRotation(), Track[Key1].GetRotation(), Alpha).GetNormalized(),
+					FMath::Lerp(Track[Key0].GetTranslation(), Track[Key1].GetTranslation(), Alpha));
+			});
+		}
+
+	private:
+		const FReferenceSkeleton& Skeleton;
+		FFrameRate Rate;
+		TArray<TArray<FTransform>> Keys;
+	};
+
+	/** The MAN1 clip's pose at Time on Skeleton (the driver), the root held at its reference as players' clients hold it. */
+	TArray<FTransform> ClipComponentPose(const FMantleAnimClip& Clip, const FReferenceSkeleton& Skeleton, const float Time)
+	{
+		TMap<FName, int32> TrackOf;
+		for (int32 Track = 0; Track < Clip.Tracks.Num(); ++Track)
+		{
+			TrackOf.Add(Clip.Tracks[Track].Bone, Track);
+		}
+		return FMantleEmoteCheck::ComponentPose(Skeleton, [&](const int32 Bone)
+		{
+			const int32* Track = Bone > 0 ? TrackOf.Find(Skeleton.GetBoneName(Bone)) : nullptr;
+			return LocalAt(Clip, Track ? *Track : INDEX_NONE, Skeleton.GetRawRefBonePose()[Bone], Time);
+		});
+	}
+
 	/** One capture of Subject per time (SetPose sets its Pose), tiled into File. Problems: one clause per moment that could not be drawn. */
 	bool DrawSheet(FMantleThumbnailSubject Subject, const TArray<float>& Times, TFunctionRef<void(FMantleThumbnailSubject&, float)> SetPose, const int32 TileSize,
 		const FString& File, FString& OutProblems)
@@ -314,6 +386,130 @@ FMantleEmoteMotion FMantleEmoteCheck::Measure(const FMantleAnimClip& Clip, const
 			Out.PelvisDriftCm = FMath::Max(Out.PelvisDriftCm, FVector::Dist2D(Pelvis, Pelvis0));
 		}
 	}
+	return Out;
+}
+
+TArray<FTransform> FMantleEmoteCheck::ComponentPose(const FReferenceSkeleton& Skeleton, TFunctionRef<FTransform(int32 Bone)> LocalOf)
+{
+	TArray<FTransform> Out;
+	Out.Reserve(Skeleton.GetRawBoneNum());
+	for (int32 Bone = 0; Bone < Skeleton.GetRawBoneNum(); ++Bone)
+	{
+		const int32 Parent = Skeleton.GetRawParentIndex(Bone);
+		const FTransform Local = LocalOf(Bone);
+		Out.Add(Parent == INDEX_NONE ? Local : Local * Out[Parent]);
+	}
+	return Out;
+}
+
+FMantleHandMatch FMantleEmoteCheck::CompareHands(TConstArrayView<TArray<FTransform>> SourcePoses, const FReferenceSkeleton& Source,
+	TConstArrayView<TArray<FTransform>> ConvertedPoses, const FReferenceSkeleton& Converted)
+{
+	FMantleHandMatch Out;
+	const int32 Frames = FMath::Min(SourcePoses.Num(), ConvertedPoses.Num());
+	auto Bone = [](const FReferenceSkeleton& Skeleton, const FString& Name) { return Skeleton.FindRawBoneIndex(FName(*Name)); };
+
+	// Each finger's first two joints: the bend between hand-to-01 and 01-to-02, and between 01-to-02 and 02-to-03. Angles
+	// between segments, so neither skeleton's bone axes matter.
+	struct FJoint
+	{
+		int32 SourceBones[3];
+		int32 ConvertedBones[3];
+		FName Name;
+	};
+	TArray<FJoint> Joints;
+	for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
+	{
+		for (const TCHAR* Finger : { TEXT("thumb"), TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky") })
+		{
+			const FString Names[4] = { FString::Printf(TEXT("hand_%s"), Side), FString::Printf(TEXT("%s_01_%s"), Finger, Side),
+				FString::Printf(TEXT("%s_02_%s"), Finger, Side), FString::Printf(TEXT("%s_03_%s"), Finger, Side) };
+			for (int32 First = 0; First < 2; ++First)
+			{
+				FJoint Joint;
+				bool bAll = true;
+				for (int32 Index = 0; Index < 3; ++Index)
+				{
+					Joint.SourceBones[Index] = Bone(Source, Names[First + Index]);
+					Joint.ConvertedBones[Index] = Bone(Converted, Names[First + Index]);
+					bAll = bAll && Joint.SourceBones[Index] != INDEX_NONE && Joint.ConvertedBones[Index] != INDEX_NONE;
+				}
+				Joint.Name = FName(*Names[First + 1]);
+				if (bAll)
+				{
+					Joints.Add(Joint);
+				}
+			}
+		}
+	}
+	auto BendAt = [](const TArray<FTransform>& Pose, const int32 (&Bones)[3])
+	{
+		const FVector A = (Pose[Bones[1]].GetLocation() - Pose[Bones[0]].GetLocation()).GetSafeNormal();
+		const FVector B = (Pose[Bones[2]].GetLocation() - Pose[Bones[1]].GetLocation()).GetSafeNormal();
+		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(A | B, -1.0, 1.0)));
+	};
+
+	// Wrists from the head, in the head's frame; the source's scaled to the converted body's head height.
+	const int32 SourceHead = Bone(Source, TEXT("head"));
+	const int32 ConvertedHead = Bone(Converted, TEXT("head"));
+	double Scale = 1.0;
+	if (SourceHead != INDEX_NONE && ConvertedHead != INDEX_NONE)
+	{
+		const double SourceHeight = FAnimationRuntime::GetComponentSpaceTransformRefPose(Source, SourceHead).GetLocation().Z;
+		const double ConvertedHeight = FAnimationRuntime::GetComponentSpaceTransformRefPose(Converted, ConvertedHead).GetLocation().Z;
+		Scale = SourceHeight > 1.0 ? ConvertedHeight / SourceHeight : 1.0;
+	}
+	TArray<TPair<int32, int32>> Wrists;
+	for (const TCHAR* Hand : { TEXT("hand_l"), TEXT("hand_r") })
+	{
+		if (Bone(Source, Hand) != INDEX_NONE && Bone(Converted, Hand) != INDEX_NONE && SourceHead != INDEX_NONE && ConvertedHead != INDEX_NONE)
+		{
+			Wrists.Emplace(Bone(Source, Hand), Bone(Converted, Hand));
+		}
+	}
+
+	TArray<double> PerJoint;
+	PerJoint.Init(0.0, Joints.Num());
+	double Bias = 0.0;
+	double Error = 0.0;
+	double WristError = 0.0;
+	double WristCloser = 0.0;
+	for (int32 Frame = 0; Frame < Frames; ++Frame)
+	{
+		const TArray<FTransform>& S = SourcePoses[Frame];
+		const TArray<FTransform>& C = ConvertedPoses[Frame];
+		for (int32 Index = 0; Index < Joints.Num(); ++Index)
+		{
+			const double Difference = BendAt(C, Joints[Index].ConvertedBones) - BendAt(S, Joints[Index].SourceBones);
+			Bias += Difference;
+			Error += FMath::Abs(Difference);
+			PerJoint[Index] += FMath::Abs(Difference);
+		}
+		for (const TPair<int32, int32>& Wrist : Wrists)
+		{
+			const FVector SourceVector = S[SourceHead].GetRotation().UnrotateVector(S[Wrist.Key].GetLocation() - S[SourceHead].GetLocation()) * Scale;
+			const FVector ConvertedVector = C[ConvertedHead].GetRotation().UnrotateVector(C[Wrist.Value].GetLocation() - C[ConvertedHead].GetLocation());
+			WristError += FVector::Dist(SourceVector, ConvertedVector);
+			WristCloser += ConvertedVector.Size() - SourceVector.Size();
+		}
+	}
+	Out.Frames = Frames;
+	Out.Joints = Joints.Num();
+	const double Samples = static_cast<double>(FMath::Max(1, Frames * Joints.Num()));
+	Out.BendBiasDegrees = Bias / Samples;
+	Out.BendErrorDegrees = Error / Samples;
+	for (int32 Index = 0; Index < Joints.Num(); ++Index)
+	{
+		const double Mean = PerJoint[Index] / FMath::Max(1, Frames);
+		if (Mean > Out.BendWorstDegrees)
+		{
+			Out.BendWorstDegrees = Mean;
+			Out.BendWorstJoint = Joints[Index].Name;
+		}
+	}
+	const double WristSamples = static_cast<double>(FMath::Max(1, Frames * Wrists.Num()));
+	Out.WristErrorCm = WristError / WristSamples;
+	Out.WristCloserCm = WristCloser / WristSamples;
 	return Out;
 }
 
@@ -417,6 +613,25 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 	Say(FString::Printf(TEXT("Motion: the root travels %.1f cm and turns %.1f degrees (players' clients hold the root still); the pelvis drifts %.1f cm across the floor"),
 		Motion.RootTravelCm, Motion.RootTurnDegrees, Motion.PelvisDriftCm));
 
+	// The hands against the source's, frame by frame (mantle #840: fingers that keep the rest hands' difference curl less).
+	if (USkeletalMesh* HandsSource = FMantleEmoteRetarget::ChooseSourceMesh(Sequence, nullptr))
+	{
+		const FSequenceSampler Sampler(Sequence, HandsSource->GetRefSkeleton());
+		const FReferenceSkeleton& DriverBones = Driver->GetRefSkeleton();
+		TArray<TArray<FTransform>> SourcePoses;
+		TArray<TArray<FTransform>> ConvertedPoses;
+		for (int32 Frame = 0; Frame < Clip.FrameCount; ++Frame)
+		{
+			const float Time = Frame / Clip.FrameRate;
+			SourcePoses.Add(Sampler.ComponentPoseAt(FMath::Min(static_cast<double>(Time), static_cast<double>(Sequence->GetPlayLength()))));
+			ConvertedPoses.Add(ClipComponentPose(Clip, DriverBones, Time));
+		}
+		const FMantleHandMatch Hands = CompareHands(SourcePoses, HandsSource->GetRefSkeleton(), ConvertedPoses, DriverBones);
+		Say(FString::Printf(TEXT("Hands: finger bend %+.1f degrees on average against the source (negative: straighter), %.1f degrees mean error over %d joints and %d frames, worst joint %s %.1f degrees; wrists %.1f cm from the source's place relative to the head, %+.1f cm farther from it (negative: closer)"),
+			Hands.BendBiasDegrees, Hands.BendErrorDegrees, Hands.Joints, Hands.Frames, *Hands.BendWorstJoint.ToString(), Hands.BendWorstDegrees,
+			Hands.WristErrorCm, Hands.WristCloserCm));
+	}
+
 	// The sheet: the clip on a standard body, posed as the client poses it.
 	FString WhyNot;
 	if (!FMantleCosmeticThumbnail::CanCapture(&WhyNot))
@@ -455,7 +670,7 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 	FString Problems;
 	const bool bWritten = DrawSheet(Subject, Times, [Driver, Retargeter, Played](FMantleThumbnailSubject& Shot, const float Time)
 	{
-		Shot.Pose = [Driver, Retargeter, Played, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components)
+		Shot.Pose = [Driver, Retargeter, Played, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox&)
 		{
 			PoseOnBody(Scene, Components, Driver, Retargeter, Played, Time);
 		};
@@ -473,13 +688,57 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 		FString SourceProblems;
 		const bool bSourceWritten = DrawSheet(Source, Times, [Sequence](FMantleThumbnailSubject& Shot, const float Time)
 		{
-			Shot.Pose = [Sequence, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components)
+			Shot.Pose = [Sequence, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox&)
 			{
 				PoseSource(Scene, Components, Sequence, Time);
 			};
 		}, TileSize, SourceFile, SourceProblems);
 		Say(FString::Printf(TEXT("Source: %s, the original clip on %s (root motion and all), same moments%s"), bSourceWritten ? *SourceFile : TEXT("NOT WRITTEN"),
 			*SourceMesh->GetPathName(), *SourceProblems));
+
+		// Hand close-ups, the source's and the converted side by side: right hand, then left, at three moments.
+		const TArray<float> HandTimes = { Clip.GetDuration() * 0.25f, Clip.GetDuration() * 0.5f, Clip.GetDuration() * 0.75f };
+		TArray<TArray<FColor>> Tiles;
+		const int32 HandSize = FMath::Max(256, TileSize * 3 / 4);
+		for (const float Time : HandTimes)
+		{
+			for (const TCHAR* Hand : { TEXT("hand_r"), TEXT("hand_l") })
+			{
+				for (const bool bConverted : { false, true })
+				{
+					FMantleThumbnailSubject Shot = bConverted ? Subject : Source;
+					const FName HandBone(Hand);
+					if (bConverted)
+					{
+						Shot.Pose = [Driver, Retargeter, Played, Time, HandBone](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
+						{
+							PoseOnBody(Scene, Components, Driver, Retargeter, Played, Time);
+							Frame = HandFrame(Components, HandBone);
+						};
+					}
+					else
+					{
+						Shot.Pose = [Sequence, Time, HandBone](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
+						{
+							PoseSource(Scene, Components, Sequence, Time);
+							Frame = HandFrame(Components, HandBone);
+						};
+					}
+					TArray<FColor> Pixels;
+					FString Error;
+					FMantleCosmeticThumbnail::Capture(Shot, HandSize, Pixels, Error);
+					Tiles.Add(MoveTemp(Pixels));
+					CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+				}
+			}
+		}
+		int32 Width = 0;
+		int32 Height = 0;
+		const TArray<FColor> HandSheet = Tile(Tiles, HandSize, 4, Width, Height);
+		const FString HandsFile = FPaths::Combine(Directory, Label + TEXT("_hands.png"));
+		const bool bHandsWritten = FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Width, Height, HandSheet), *HandsFile);
+		Say(FString::Printf(TEXT("Hand close-ups: %s, each row one moment (%s), columns: source right, converted right, source left, converted left"),
+			bHandsWritten ? *HandsFile : TEXT("NOT WRITTEN"), *DescribeTimes(HandTimes)));
 	}
 	return true;
 }

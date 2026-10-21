@@ -205,6 +205,311 @@ namespace MantleEmoteRetargetPrivate
 			Registry.RemovePath(Folder);
 		}
 	}
+
+	/**
+	 * The plugin's retargeter's retarget poses, edited through IK Rig's UIKRetargeterController by reflection (MantleEditor
+	 * links no IK Rig module). Begin copies the current target pose into a pose of its own and makes that current; End makes
+	 * the creator's pose current again, removes the copy and leaves the asset as clean as it was. Game thread.
+	 */
+	class FRetargetPoseEdit
+	{
+	public:
+		static constexpr uint8 Source = 0;
+		static constexpr uint8 Target = 1;
+
+		bool Begin(UObject* InRetargeter, FString& OutError)
+		{
+			Retargeter = InRetargeter;
+			UClass* Class = FindObject<UClass>(nullptr, TEXT("/Script/IKRigEditor.IKRetargeterController"));
+			UFunction* Get = Class ? Class->FindFunctionByName(TEXT("GetController")) : nullptr;
+			if (!Get)
+			{
+				OutError = TEXT("IK Rig's retargeter controller is not loaded");
+				return false;
+			}
+			Call(Class->GetDefaultObject(), Get, [this](UFunction* Function, uint8* Params)
+			{
+				CastField<FObjectPropertyBase>(Function->FindPropertyByName(TEXT("InRetargeterAsset")))->SetObjectPropertyValue_InContainer(Params, Retargeter);
+			}, [this](UFunction* Function, uint8* Params)
+			{
+				Controller = CastField<FObjectPropertyBase>(Function->GetReturnProperty())->GetObjectPropertyValue_InContainer(Params);
+			});
+			if (!Controller)
+			{
+				OutError = TEXT("IK Rig gave no controller for the retargeter");
+				return false;
+			}
+			bWasDirty = Retargeter->GetPackage()->IsDirty();
+			WasCurrent = CallName(TEXT("GetCurrentRetargetPoseName"), NAME_None, NAME_None, Target);
+			const FName Copy = CallName(TEXT("DuplicateRetargetPose"), WasCurrent, FName(TEXT("MantleEmoteRestMatch")), Target);
+			if (Copy.IsNone() || !CallBool(TEXT("SetCurrentRetargetPose"), Copy, Target))
+			{
+				OutError = FString::Printf(TEXT("the retargeter's target pose %s could not be copied"), *WasCurrent.ToString());
+				End();
+				return false;
+			}
+			Made = Copy;
+			return true;
+		}
+
+		/** The current pose's local rotation offset of Bone (identity when it has none). */
+		FQuat GetOffset(const FName Bone, const uint8 Side)
+		{
+			FQuat Out = FQuat::Identity;
+			Call(Controller, Find(TEXT("GetRotationOffsetForRetargetPoseBone")), [&](UFunction* Function, uint8* Params)
+			{
+				SetName(Function, Params, TEXT("BoneName"), Bone);
+				SetSide(Function, Params, TEXT("SourceOrTarget"), Side);
+			}, [&](UFunction* Function, uint8* Params)
+			{
+				Out = *Function->GetReturnProperty()->ContainerPtrToValuePtr<FQuat>(Params);
+			});
+			return Out;
+		}
+
+		void SetTargetOffset(const FName Bone, const FQuat& Offset)
+		{
+			Call(Controller, Find(TEXT("SetRotationOffsetForRetargetPoseBone")), [&](UFunction* Function, uint8* Params)
+			{
+				SetName(Function, Params, TEXT("BoneName"), Bone);
+				*Function->FindPropertyByName(TEXT("RotationOffset"))->ContainerPtrToValuePtr<FQuat>(Params) = Offset;
+				SetSide(Function, Params, TEXT("SkeletonMode"), Target);
+			}, [](UFunction*, uint8*) {});
+		}
+
+		void End()
+		{
+			if (Controller && !WasCurrent.IsNone())
+			{
+				CallBool(TEXT("SetCurrentRetargetPose"), WasCurrent, Target);
+			}
+			if (Controller && !Made.IsNone())
+			{
+				CallBool(TEXT("RemoveRetargetPose"), Made, Target);
+			}
+			if (Retargeter && !bWasDirty)
+			{
+				Retargeter->GetPackage()->SetDirtyFlag(false);
+			}
+			Controller = nullptr;
+			Made = NAME_None;
+		}
+
+		~FRetargetPoseEdit()
+		{
+			End();
+		}
+
+	private:
+		UObject* Retargeter = nullptr;
+		UObject* Controller = nullptr;
+		FName WasCurrent;
+		FName Made;
+		bool bWasDirty = false;
+
+		UFunction* Find(const TCHAR* Name) const
+		{
+			return Controller ? Controller->GetClass()->FindFunctionByName(Name) : nullptr;
+		}
+
+		static void Call(UObject* Target, UFunction* Function, TFunctionRef<void(UFunction*, uint8*)> Set, TFunctionRef<void(UFunction*, uint8*)> Read)
+		{
+			if (!Target || !Function)
+			{
+				return;
+			}
+			uint8* Params = static_cast<uint8*>(FMemory::Malloc(FMath::Max<int32>(1, Function->ParmsSize), Function->GetMinAlignment()));
+			FMemory::Memzero(Params, FMath::Max<int32>(1, Function->ParmsSize));
+			for (TFieldIterator<FProperty> It(Function); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
+			{
+				It->InitializeValue_InContainer(Params);
+			}
+			Set(Function, Params);
+			Target->ProcessEvent(Function, Params);
+			Read(Function, Params);
+			for (TFieldIterator<FProperty> It(Function); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
+			{
+				It->DestroyValue_InContainer(Params);
+			}
+			FMemory::Free(Params);
+		}
+
+		static void SetName(UFunction* Function, uint8* Params, const TCHAR* Name, const FName Value)
+		{
+			if (FNameProperty* Property = CastField<FNameProperty>(Function->FindPropertyByName(Name)))
+			{
+				Property->SetPropertyValue_InContainer(Params, Value);
+			}
+		}
+
+		static void SetSide(UFunction* Function, uint8* Params, const TCHAR* Name, const uint8 Side)
+		{
+			FProperty* Property = Function->FindPropertyByName(Name);
+			if (FEnumProperty* Enum = CastField<FEnumProperty>(Property))
+			{
+				Enum->GetUnderlyingProperty()->SetIntPropertyValue(Enum->ContainerPtrToValuePtr<void>(Params), static_cast<int64>(Side));
+			}
+			else if (FByteProperty* Byte = CastField<FByteProperty>(Property))
+			{
+				Byte->SetPropertyValue_InContainer(Params, Side);
+			}
+		}
+
+		/** A controller function returning a name, with up to two name inputs (the first named ones in order) and the side. */
+		FName CallName(const TCHAR* Name, const FName First, const FName Second, const uint8 Side)
+		{
+			FName Out;
+			Call(Controller, Find(Name), [&](UFunction* Function, uint8* Params)
+			{
+				int32 Index = 0;
+				for (TFieldIterator<FProperty> It(Function); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
+				{
+					if (It->HasAnyPropertyFlags(CPF_ReturnParm))
+					{
+						continue;
+					}
+					if (FNameProperty* NameProperty = CastField<FNameProperty>(*It))
+					{
+						NameProperty->SetPropertyValue_InContainer(Params, Index++ == 0 ? First : Second);
+					}
+					else
+					{
+						SetSide(Function, Params, *It->GetName(), Side);
+					}
+				}
+			}, [&](UFunction* Function, uint8* Params)
+			{
+				if (FNameProperty* Return = CastField<FNameProperty>(Function->GetReturnProperty()))
+				{
+					Out = Return->GetPropertyValue_InContainer(Params);
+				}
+			});
+			return Out;
+		}
+
+		bool CallBool(const TCHAR* Name, const FName Pose, const uint8 Side)
+		{
+			bool bOut = false;
+			Call(Controller, Find(Name), [&](UFunction* Function, uint8* Params)
+			{
+				for (TFieldIterator<FProperty> It(Function); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
+				{
+					if (FNameProperty* NameProperty = CastField<FNameProperty>(*It))
+					{
+						NameProperty->SetPropertyValue_InContainer(Params, Pose);
+					}
+					else if (!It->HasAnyPropertyFlags(CPF_ReturnParm))
+					{
+						SetSide(Function, Params, *It->GetName(), Side);
+					}
+				}
+			}, [&](UFunction* Function, uint8* Params)
+			{
+				if (FBoolProperty* Return = CastField<FBoolProperty>(Function->GetReturnProperty()))
+				{
+					bOut = Return->GetPropertyValue_InContainer(Params);
+				}
+			});
+			return bOut;
+		}
+	};
+
+	/** TEMPORARY (trials): MANTLE_EMOTE_MATCH = none, hands or arms (default). */
+	FString MatchMode()
+	{
+		static const FString Mode = FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_MATCH"));
+		return Mode;
+	}
+
+	/** Every bone's current retarget-pose offset on one side (bones without one are left out). */
+	TMap<FName, FQuat> OffsetsOf(FRetargetPoseEdit& Edit, const FReferenceSkeleton& Skeleton, const uint8 Side)
+	{
+		TMap<FName, FQuat> Out;
+		for (int32 Bone = 0; Bone < Skeleton.GetRawBoneNum(); ++Bone)
+		{
+			const FQuat Offset = Edit.GetOffset(Skeleton.GetBoneName(Bone), Side);
+			if (!Offset.Equals(FQuat::Identity, 1e-6))
+			{
+				Out.Add(Skeleton.GetBoneName(Bone), Offset);
+			}
+		}
+		return Out;
+	}
+}
+
+TArray<FName> FMantleEmoteRetarget::HandBones(const bool bArms)
+{
+	TArray<FName> Out;
+	for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
+	{
+		if (bArms)
+		{
+			for (const TCHAR* Arm : { TEXT("clavicle"), TEXT("upperarm"), TEXT("lowerarm") })
+			{
+				Out.Add(FName(FString::Printf(TEXT("%s_%s"), Arm, Side)));
+			}
+		}
+		Out.Add(FName(FString::Printf(TEXT("hand_%s"), Side)));
+		for (const TCHAR* Finger : { TEXT("thumb"), TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky") })
+		{
+			for (const TCHAR* Joint : { TEXT("metacarpal"), TEXT("01"), TEXT("02"), TEXT("03") })
+			{
+				Out.Add(FName(FString::Printf(TEXT("%s_%s_%s"), Finger, Joint, Side)));
+			}
+		}
+	}
+	return Out;
+}
+
+TMap<FName, FQuat> FMantleEmoteRetarget::MatchRestRotations(const FReferenceSkeleton& Source, const TMap<FName, FQuat>& SourceOffsets,
+	const FReferenceSkeleton& Target, const TMap<FName, FQuat>& TargetOffsets, TConstArrayView<FName> Bones, double* OutLargestDegrees)
+{
+	// Each skeleton's retarget pose in component space (rotations only): reference local * offset, parent first.
+	auto Globals = [](const FReferenceSkeleton& Skeleton, const TMap<FName, FQuat>& Offsets)
+	{
+		TArray<FQuat> Out;
+		for (int32 Bone = 0; Bone < Skeleton.GetRawBoneNum(); ++Bone)
+		{
+			const FQuat* Offset = Offsets.Find(Skeleton.GetBoneName(Bone));
+			const FQuat Local = Skeleton.GetRawRefBonePose()[Bone].GetRotation() * (Offset ? *Offset : FQuat::Identity);
+			const int32 Parent = Skeleton.GetRawParentIndex(Bone);
+			Out.Add((Parent == INDEX_NONE ? Local : Out[Parent] * Local).GetNormalized());
+		}
+		return Out;
+	};
+	const TArray<FQuat> SourceGlobal = Globals(Source, SourceOffsets);
+	TArray<FQuat> TargetGlobal = Globals(Target, TargetOffsets);
+	TMap<FName, FQuat> Out;
+	double Largest = 0.0;
+	for (int32 Bone = 0; Bone < Target.GetRawBoneNum(); ++Bone)
+	{
+		const FName Name = Target.GetBoneName(Bone);
+		const int32 SourceBone = Source.FindRawBoneIndex(Name);
+		const int32 Parent = Target.GetRawParentIndex(Bone);
+		const FQuat ParentGlobal = Parent == INDEX_NONE ? FQuat::Identity : TargetGlobal[Parent];
+		if (Bones.Contains(Name) && SourceBone != INDEX_NONE)
+		{
+			// The source's rotation in component space, as this bone's offset from its reference local rotation.
+			const FQuat Local = ParentGlobal.Inverse() * SourceGlobal[SourceBone];
+			const FQuat Offset = (Target.GetRawRefBonePose()[Bone].GetRotation().Inverse() * Local).GetNormalized();
+			const FQuat* Was = TargetOffsets.Find(Name);
+			Largest = FMath::Max(Largest, FMath::RadiansToDegrees(Offset.AngularDistance(Was ? *Was : FQuat::Identity)));
+			Out.Add(Name, Offset);
+			TargetGlobal[Bone] = SourceGlobal[SourceBone];
+		}
+		else
+		{
+			// Unchanged locally; its rotation follows its parent's new one.
+			const FQuat* Offset = TargetOffsets.Find(Name);
+			const FQuat Local = Target.GetRawRefBonePose()[Bone].GetRotation() * (Offset ? *Offset : FQuat::Identity);
+			TargetGlobal[Bone] = (ParentGlobal * Local).GetNormalized();
+		}
+	}
+	if (OutLargestDegrees)
+	{
+		*OutLargestDegrees = Largest;
+	}
+	return Out;
 }
 
 // Under /Game, a writable mount: IK Rig's batch retarget duplicates through the asset tools, which refuse to create an
@@ -395,7 +700,7 @@ USkeletalMesh* FMantleEmoteRetarget::FindSourceMesh(USkeleton* Skeleton)
 }
 
 bool FMantleEmoteRetarget::RetargetAndSample(UAnimSequence* Sequence, const FString& SkeletonId, USkeletalMesh* SourceMesh, USkeletalMesh* TargetMesh,
-	const FMantleAvatarContract& Contract, FMantleAnimClipData& OutClip, FString& OutError)
+	const FMantleAvatarContract& Contract, FMantleAnimClipData& OutClip, FString& OutError, FString* OutHandsNote)
 {
 	using namespace MantleEmoteRetargetPrivate;
 	OutClip = FMantleAnimClipData();
@@ -446,6 +751,32 @@ bool FMantleEmoteRetarget::RetargetAndSample(UAnimSequence* Sequence, const FStr
 	{
 		OutError = FString::Printf(TEXT("the Mantle plugin's retargeter %s is missing or not an IK retargeter: reinstall the Mantle plugin."), RetargeterPath);
 		return false;
+	}
+	// mantle #840 step 1: the target's rest hands take the source's shape for this retarget only (a pose of its own,
+	// removed again), so the FK finger and arm chains carry the source's curl instead of the difference of two rest hands.
+	FRetargetPoseEdit Edit;
+	FString EditError;
+	const bool bMatchArms = MatchMode() != TEXT("hands");
+	if (MatchMode() != TEXT("none") && !Edit.Begin(Retargeter, EditError))
+	{
+		OutError = FString::Printf(TEXT("the retargeter's rest hands could not be matched (%s): enable the IK Rig plugin and restart the editor."), *EditError);
+		return false;
+	}
+	if (MatchMode() != TEXT("none"))
+	{
+		const TArray<FName> Bones = HandBones(bMatchArms);
+		double Largest = 0.0;
+		const TMap<FName, FQuat> Offsets = MatchRestRotations(SourceMesh->GetRefSkeleton(), OffsetsOf(Edit, SourceMesh->GetRefSkeleton(), FRetargetPoseEdit::Source),
+			TargetMesh->GetRefSkeleton(), OffsetsOf(Edit, TargetMesh->GetRefSkeleton(), FRetargetPoseEdit::Target), Bones, &Largest);
+		for (const TPair<FName, FQuat>& Offset : Offsets)
+		{
+			Edit.SetTargetOffset(Offset.Key, Offset.Value);
+		}
+		if (OutHandsNote)
+		{
+			*OutHandsNote = FString::Printf(TEXT("Emote rest hands: %d %s bones of the UEFN retarget pose given the source's rest shape (largest change %.1f degrees)"),
+				Offsets.Num(), bMatchArms ? TEXT("arm, hand and finger") : TEXT("hand and finger"), Largest);
+		}
 	}
 	const double Frame = Contract.EmoteFrameRate > 0.0f ? 1.0 / Contract.EmoteFrameRate : 1.0 / 30.0;
 	return RetargetThrough(Sequence, SourceMesh, TargetMesh, Retargeter, Frame,
@@ -607,7 +938,8 @@ bool FMantleEmoteRetarget::Sample(UAnimSequence* Sequence, const FString& Skelet
 	USkeletalMesh* Source = ChooseSourceMesh(Sequence, PickedBody, &SourceFrom);
 	USkeletalMesh* Target = FMantleBuiltInMannequin::UEFNMannequin(Contract);
 	const double Start = FPlatformTime::Seconds();
-	if (!RetargetAndSample(Sequence, SkeletonId, Source, Target, Contract, OutClip, OutError))
+	FString HandsNote;
+	if (!RetargetAndSample(Sequence, SkeletonId, Source, Target, Contract, OutClip, OutError, &HandsNote))
 	{
 		UE_LOG(LogMantle, Warning, TEXT("MANTLE_EMOTE_RETARGET failed %s skeleton=%s: %s"), Sequence ? *Sequence->GetPathName() : TEXT("(none)"), *SkeletonId, *OutError);
 		return false;
@@ -615,6 +947,10 @@ bool FMantleEmoteRetarget::Sample(UAnimSequence* Sequence, const FString& Skelet
 	const double Seconds = FPlatformTime::Seconds() - Start;
 	OutNote = FString::Printf(TEXT("Emote retargeted from the %s skeleton (played on %s, %s) onto %s through %s in %.1f s"), *SkeletonId, *Source->GetName(),
 		*SourceFrom, *Target->GetName(), *FPackageName::ObjectPathToObjectName(FString(RetargeterPathFor(SkeletonId))), Seconds);
+	if (!HandsNote.IsEmpty())
+	{
+		OutNote += TEXT(". ") + HandsNote;
+	}
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_EMOTE_RETARGET %s skeleton=%s source=%s (%s) target=%s frames=%d tracks=%d seconds=%.2f"), *Sequence->GetPathName(),
 		*SkeletonId, *Source->GetPathName(), *SourceFrom, *Target->GetPathName(), OutClip.FrameCount, OutClip.Tracks.Num(), Seconds);
 	return true;
