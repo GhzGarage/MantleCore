@@ -94,8 +94,8 @@ public:
 	static constexpr double HeadDepthCm = 18.0;
 	/** ... and a candidate may put at most this share of the scored points there. */
 	static constexpr double MaxDeepInsideFraction = 0.03;
-	/** Candidates scoring within this share of the best are equal; the closest roots win among them. */
-	static constexpr double RankTolerance = 0.03;
+	/** Candidates scoring within this share of the best are equal; the closest roots win among them. Bigger hair touches a few more cubes, so this is wide. */
+	static constexpr double RankTolerance = 0.10;
 	/** The most points and cards that score a candidate (an even stride over the piece). */
 	static constexpr int32 MaxFitPoints = 2000;
 	static constexpr int32 MaxFitCards = 1500;

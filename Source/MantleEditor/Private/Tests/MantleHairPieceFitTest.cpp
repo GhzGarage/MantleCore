@@ -52,8 +52,8 @@ namespace MantleHairPieceFitTestPrivate
 
 	/**
 	 * Hair cards in the head's frame (the sphere above: centre (0, 0, 160), radius 9). Each card is a strip 0.8 cm wide
-	 * rooted 1 mm off the skin at a polar angle of 10 to 55 degrees, combed down over the sphere 1.5 mm off it to the equator.
-	 * Short hair stops there. Long hair then falls 30 cm and flares out to 16 cm from the axis, so it is 32 cm wide at the
+	 * rooted 1 mm off the skin at a polar angle of 10 to 55 degrees, combed down over the sphere to the equator. Short hair
+	 * stops there, its tip lifted 1.65 cm off the skin; long hair stays 1.5 mm off it to the equator. Long hair then falls 30 cm and flares out to 16 cm from the axis, so it is 32 cm wide at the
 	 * bottom, far wider than at the scalp (as bought long hair is). Each card's first two vertices are its root end.
 	 */
 	void PieceFitCards(bool bLong, TArray<FVector3f>& P, TArray<uint32>& I)
@@ -72,7 +72,8 @@ namespace MantleHairPieceFitTestPrivate
 				for (int32 K = 0; K <= Over; ++K)
 				{
 					const double Theta = FMath::DegreesToRadians(ThetaDeg + (90.0 - ThetaDeg) * K / Over);
-					const double R = K == 0 ? 9.1 : 9.15;
+					// The root sits 1 mm off the skin; the card lifts off it towards its tip, as a real card does.
+					const double R = K == 0 ? 9.1 : 9.15 + (bLong ? 0.0 : 1.5 * K / Over);
 					Spine.Add(Centre + R * (Out * FMath::Sin(Theta) + FVector(0.0, 0.0, FMath::Cos(Theta))));
 				}
 				if (bLong)
@@ -218,7 +219,8 @@ bool FMantleHairPieceFitLongHairTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("fit runs"), FMantleHairPieceFit::Fit(Head, Vendor, Ends, Fit, Error))) { AddError(Error); return false; }
 	TestTrue(TEXT("keeps out of the head"), Fit.bKeepsOutOfHead);
 	TestTrue(TEXT("the searched scale is well past the old 1.425 limit"), Fit.Scale > 1.6);
-	TestTrue(TEXT("total scale within 3% of the vendor's"), FMath::Abs(Fit.TotalScale() * 2.5 - 1.0) < 0.03);
+	TestTrue(FString::Printf(TEXT("total scale within 3%% of the vendor's (%.4f for 0.4, offsets %.2f, %.2f, seated %.2f, coverage %.2f)"),
+		Fit.TotalScale(), Fit.OffsetY, Fit.OffsetZ, Fit.SeatedFraction, Fit.ScalpCoverage), FMath::Abs(Fit.TotalScale() * 2.5 - 1.0) < 0.03);
 	TestTrue(TEXT("most roots are seated on the scalp"), Fit.SeatedFraction > 0.8);
 	double Median = 0.0, Worst = 0.0;
 	PieceFitRootError(Fit, Vendor, Fitted, true, Median, Worst);
@@ -246,7 +248,8 @@ bool FMantleHairPieceFitShortHairTest::RunTest(const FString& Parameters)
 	FMantleHairPieceFit::FResult Fit;
 	if (!TestTrue(TEXT("fit runs"), FMantleHairPieceFit::Fit(Head, Fitted, Ends, Fit, Error))) { AddError(Error); return false; }
 	TestTrue(TEXT("keeps out of the head"), Fit.bKeepsOutOfHead);
-	TestTrue(FString::Printf(TEXT("total scale stays within 3%% of 1 (%.3f)"), Fit.TotalScale()), FMath::Abs(Fit.TotalScale() - 1.0) < 0.03);
+	TestTrue(FString::Printf(TEXT("total scale stays within 3%% of 1 (%.4f, offsets %.2f, %.2f, seated %.2f, coverage %.2f)"),
+		Fit.TotalScale(), Fit.OffsetY, Fit.OffsetZ, Fit.SeatedFraction, Fit.ScalpCoverage), FMath::Abs(Fit.TotalScale() - 1.0) < 0.03);
 	double Median = 0.0, Worst = 0.0;
 	PieceFitRootError(Fit, Fitted, Fitted, false, Median, Worst);
 	TestTrue(FString::Printf(TEXT("roots stay put (median %.2f cm, worst %.2f cm)"), Median, Worst), Median < 0.5 && Worst < 1.0);
