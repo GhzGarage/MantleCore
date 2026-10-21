@@ -719,6 +719,13 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 		const TArray<float> HandTimes = { Clip.GetDuration() * 0.25f, Clip.GetDuration() * 0.5f, Clip.GetDuration() * 0.75f };
 		TArray<TArray<FColor>> Tiles;
 		FString HandProblems;
+		// The posed meshes' bones at each close-up, in capture order: what players see, both retargets in.
+		TArray<TArray<FTransform>> ShownSource;
+		TArray<TArray<FTransform>> ShownConverted;
+		auto Keep = [](TConstArrayView<USkeletalMeshComponent*> Components, TArray<TArray<FTransform>>& Into)
+		{
+			Into.Add(Components.IsValidIndex(0) && Components[0] ? TArray<FTransform>(Components[0]->GetComponentSpaceTransforms()) : TArray<FTransform>());
+		};
 		const int32 HandSize = FMath::Max(256, TileSize * 3 / 4);
 		for (const float Time : HandTimes)
 		{
@@ -730,18 +737,20 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 					const FName HandBone(Hand);
 					if (bConverted)
 					{
-						Shot.Pose = [Driver, Retargeter, Played, Time, HandBone](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
+						Shot.Pose = [Driver, Retargeter, Played, Time, HandBone, &Keep, &ShownConverted](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
 						{
 							PoseOnBody(Scene, Components, Driver, Retargeter, Played, Time);
 							Frame = HandFrame(Components, HandBone);
+							Keep(Components, ShownConverted);
 						};
 					}
 					else
 					{
-						Shot.Pose = [Sequence, Time, HandBone](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
+						Shot.Pose = [Sequence, Time, HandBone, &Keep, &ShownSource](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
 						{
 							PoseSource(Scene, Components, Sequence, Time);
 							Frame = HandFrame(Components, HandBone);
+							Keep(Components, ShownSource);
 						};
 					}
 					TArray<FColor> Pixels;
@@ -762,6 +771,21 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 		const bool bHandsWritten = FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Width, Height, HandSheet), *HandsFile);
 		Say(FString::Printf(TEXT("Hand close-ups: %s, each row one moment (%s), columns: source right, converted right, source left, converted left%s"),
 			bHandsWritten ? *HandsFile : TEXT("NOT WRITTEN"), *DescribeTimes(HandTimes), *HandProblems));
+		ShownSource.SetNum(FMath::Min(ShownSource.Num(), ShownConverted.Num()));
+		ShownConverted.SetNum(ShownSource.Num());
+		bool bComplete = ShownSource.Num() > 0;
+		for (int32 Index = 0; Index < ShownSource.Num(); ++Index)
+		{
+			bComplete = bComplete && ShownSource[Index].Num() == SourceMesh->GetRefSkeleton().GetRawBoneNum()
+				&& ShownConverted[Index].Num() == BodyMesh->GetRefSkeleton().GetRawBoneNum();
+		}
+		if (bComplete)
+		{
+			const FMantleHandMatch Shown = CompareHands(ShownSource, SourceMesh->GetRefSkeleton(), ShownConverted, BodyMesh->GetRefSkeleton());
+			Say(FString::Printf(TEXT("Hands as shown (the close-ups' bodies, the client's retarget onto %s included): finger bend %+.1f degrees on average against the source, %.1f degrees mean error over %d joints, worst joint %s %.1f degrees; wrists %.1f cm from the source's place relative to the chest, %+.1f cm farther from the head"),
+				*BodyMesh->GetName(), Shown.BendBiasDegrees, Shown.BendErrorDegrees, Shown.Joints, *Shown.BendWorstJoint.ToString(), Shown.BendWorstDegrees,
+				Shown.WristErrorCm, Shown.WristCloserCm));
+		}
 	}
 	return true;
 }
