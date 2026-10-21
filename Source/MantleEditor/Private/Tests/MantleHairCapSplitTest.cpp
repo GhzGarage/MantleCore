@@ -62,16 +62,28 @@ namespace MantleHairCapSplitTestPrivate
 			I.Append({At(Ring, Seg), At(Ring + 1, Seg), At(Ring + 1, Seg + 1), At(Ring, Seg), At(Ring + 1, Seg + 1), At(Ring, Seg + 1)});
 	}
 
-	/** Count cards 0.8 cm wide hanging 6 cm straight down from points round a circle of radius R at height 0, two triangles each. */
-	void CapTestHangingCards(int32 Count, float R, TArray<FVector3f>& P, TArray<uint32>& I)
+	/**
+	 * Cards 0.8 cm wide rooted on a dome of radius R (polar angles 15 to 60 degrees, 12 round each), each combed down over
+	 * the dome to its rim, its tip lifting 1.5 cm off: the cards of a capped pack.
+	 */
+	void CapTestCombedCards(float R, TArray<FVector3f>& P, TArray<uint32>& I)
 	{
-		for (int32 C = 0; C < Count; ++C)
+		for (const float ThetaDeg : {15.f, 30.f, 45.f, 60.f})
 		{
-			const float Theta = 2.f * UE_PI * C / Count;
-			const FVector3f Out(FMath::Cos(Theta), FMath::Sin(Theta), 0.f), Side(-0.4f * FMath::Sin(Theta), 0.4f * FMath::Cos(Theta), 0.f);
-			const uint32 B = P.Num();
-			P.Add(Out * R - Side); P.Add(Out * R + Side); P.Add(Out * R + Side - FVector3f(0.f, 0.f, 6.f)); P.Add(Out * R - Side - FVector3f(0.f, 0.f, 6.f));
-			I.Append({B, B + 1, B + 2, B, B + 2, B + 3});
+			for (int32 J = 0; J < 12; ++J)
+			{
+				const float Phi = 2.f * UE_PI * (J + ThetaDeg / 60.f) / 12.f;
+				const FVector3f Out(FMath::Cos(Phi), FMath::Sin(Phi), 0.f), Side(-0.4f * FMath::Sin(Phi), 0.4f * FMath::Cos(Phi), 0.f);
+				const uint32 B = P.Num();
+				const int32 Steps = 4;
+				for (int32 K = 0; K <= Steps; ++K)
+				{
+					const float Theta = FMath::DegreesToRadians(ThetaDeg + (90.f - ThetaDeg) * K / Steps);
+					const FVector3f S = (R + 0.1f + 1.5f * K / Steps) * (Out * FMath::Sin(Theta) + FVector3f(0.f, 0.f, FMath::Cos(Theta)));
+					P.Add(S - Side); P.Add(S + Side);
+				}
+				for (int32 K = 0; K < Steps; ++K) I.Append({B + 2 * K, B + 2 * K + 1, B + 2 * K + 3, B + 2 * K, B + 2 * K + 3, B + 2 * K + 2});
+			}
 		}
 	}
 
@@ -248,10 +260,10 @@ bool FMantleHairCardsFitRunTest::RunTest(const FString& Parameters)
 	TArray<FVector3f> HeadP; TArray<uint32> HeadI;
 	CapTestSphere(9.f, 16, 24, HeadP, HeadI);
 
-	// Hair: 30 cards hanging from the rim of a cap (section 0) and the cap, a dome over the head (section 1); the same
-	// again with a huge built-in head (section 2).
+	// Hair: 48 cards combed over a cap (section 0) and the cap, a dome over the head (section 1); the same again with a
+	// huge built-in head (section 2).
 	TArray<FVector3f> P; TArray<uint32> I; TArray<int32> Sections;
-	CapTestHangingCards(30, 9.3f, P, I);
+	CapTestCombedCards(9.3f, P, I);
 	for (int32 T = 0; T < I.Num() / 3; ++T) Sections.Add(0);
 	CapTestDome(9.3f, P, I);
 	while (Sections.Num() < I.Num() / 3) Sections.Add(1);
