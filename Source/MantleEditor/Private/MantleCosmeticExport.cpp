@@ -2859,6 +2859,42 @@ namespace MantleCosmeticExportPrivate
 		return RenderThumbnail(Source, Size, true, OutNote);
 	}
 
+	/**
+	 * What sampling an emote changed or left out (FMantleAnimClipData's RootMotion, DroppedNotifies, DroppedCurves and
+	 * LoopSeam*), as notes, and as warnings for what the creator will see differently on players' screens.
+	 */
+	void AddEmoteSamplingNotes(const FMantleAnimClipData& Clip, const FMantleAvatarContract& Contract, FMantleCosmeticPackage& Package,
+		TArray<FMantleCosmeticIssue>& Issues)
+	{
+		const FMantleAnimClipData::FRootMotion& Root = Clip.RootMotion;
+		if (Root.bInPlace)
+		{
+			Issues.Add(FMantleCosmeticChecks::Warning(FString::Printf(
+				TEXT("the animation travels %.0f cm across the floor; emotes play in place (at most %g cm), so it plays on the spot and its feet may slide."),
+				Root.TravelCm, Contract.EmoteMaxRootCm),
+				TEXT("For a cleaner result, remove the travel from the root in the source animation and upload again.")));
+		}
+		if (Root.bMoved)
+		{
+			Package.Notes.Add(FString::Printf(TEXT("Emote root motion moved onto the pelvis, as players' clients hold the root still: %.1f cm across the floor%s, %.1f cm up and down, %.1f degrees of turn, starting %.1f cm and %.1f degrees off the root's reference"),
+				Root.TravelCm, Root.bInPlace ? TEXT(" (taken out: in place)") : TEXT(""), Root.RiseCm, Root.TurnDegrees, Root.OffsetCm, Root.OffsetDegrees));
+		}
+		if (Clip.DroppedNotifies.Num() > 0)
+		{
+			Issues.Add(FMantleCosmeticChecks::Warning(FString::Printf(TEXT("%d notify name(s) will not play: %s. Emotes carry only the events %s; sounds and effects on notifies are left out."),
+				Clip.DroppedNotifies.Num(), *FString::Join(Clip.DroppedNotifies, TEXT(", ")), *FString::Join(Contract.EmoteEvents, TEXT(", ")))));
+		}
+		if (Clip.DroppedCurves > 0)
+		{
+			Package.Notes.Add(FString::Printf(TEXT("Emote: %d animation curve(s) left out (emotes carry bone motion only)"), Clip.DroppedCurves));
+		}
+		if (Clip.LoopSeamDegrees > 0.5 || Clip.LoopSeamCm > 0.5)
+		{
+			Package.Notes.Add(FString::Printf(TEXT("Emote loop: the end was %.1f degrees and %.1f cm from the loop_start pose, and now blends into it over its last frames, so the loop does not jump"),
+				Clip.LoopSeamDegrees, Clip.LoopSeamCm));
+		}
+	}
+
 	/** Length of the common prefix of two names, case-insensitive. */
 	int32 CommonPrefix(const FString& A, const FString& B)
 	{
@@ -6480,7 +6516,9 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 			FMantleAnimClipData Clip;
 			// A clip on the MetaHuman, UE5 or UE4 Mannequin skeleton is retargeted onto the UEFN mannequin first; one on
 			// any other skeleton is sampled as it is, and Validate names its first foreign bone.
-			const FString SourceSkeleton = Sequence ? FMantleEmoteRetarget::IdentifySkeleton(Sequence->GetSkeleton(), Contract) : FString();
+			FString SkeletonWhy;
+			const FString SourceSkeleton = Sequence ? FMantleEmoteRetarget::IdentifySkeleton(Sequence->GetSkeleton(), Contract, &SkeletonWhy) : FString();
+			const FMantleContractSkeleton* EmoteFixture = Contract.FindSkeleton(Contract.EmoteSkeleton);
 			if (Sequence && FMantleEmoteRetarget::RetargeterPathFor(SourceSkeleton))
 			{
 				FString Note;
@@ -6496,6 +6534,29 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 				Issues.Add(FMantleCosmeticChecks::Error(Sequence ? Error : FString(TEXT("an emote uploads an animation sequence."))));
 				return Package;
 			}
+			if (!SkeletonWhy.IsEmpty() && !SourceSkeleton.IsEmpty())
+			{
+				Package.Notes.Add(FString::Printf(TEXT("Emote skeleton %s: %s"), *Sequence->GetSkeleton()->GetName(), *SkeletonWhy));
+			}
+			if (SourceSkeleton == Contract.EmoteSkeleton && EmoteFixture)
+			{
+				// A UEFN mannequin with bones of its own: those bones' tracks stay behind (the driver has no such bones).
+				const int32 Before = Clip.Tracks.Num();
+				Clip.Tracks.RemoveAll([EmoteFixture](const FMantleAnimClipTrackData& Track) { return EmoteFixture->Find(Track.Bone) == INDEX_NONE; });
+				if (Clip.Tracks.Num() < Before)
+				{
+					Package.Notes.Add(FString::Printf(TEXT("Emote: %d track(s) of bones the UEFN mannequin does not have were left out"), Before - Clip.Tracks.Num()));
+				}
+			}
+			else if (SourceSkeleton.IsEmpty() && EmoteFixture && Clip.Tracks.ContainsByPredicate([EmoteFixture](const FMantleAnimClipTrackData& Track) { return EmoteFixture->Find(Track.Bone) == INDEX_NONE; }))
+			{
+				// A skeleton of its own: say which, and why it is none Mantle retargets from, once, instead of a foreign bone.
+				Issues.Add(FMantleCosmeticChecks::Error(FString::Printf(TEXT("%s is on the skeleton %s, which Mantle cannot retarget emotes from: %s."),
+					*Sequence->GetName(), Sequence->GetSkeleton() ? *Sequence->GetSkeleton()->GetName() : TEXT("(none)"), *SkeletonWhy),
+					TEXT("Emotes are made on the UEFN mannequin, a MetaHuman, the UE5 Mannequin or the UE4 Mannequin. Retarget the animation onto SK_UEFN_Mannequin in Unreal (right-click it > Retarget Animations) and upload the retargeted copy.")));
+				return Package;
+			}
+			AddEmoteSamplingNotes(Clip, Contract, Package, Issues);
 			FMantleAnimClipWriter::Validate(Clip, Contract, Issues);
 			if (FMantleCosmeticChecks::HasErrors(Issues))
 			{

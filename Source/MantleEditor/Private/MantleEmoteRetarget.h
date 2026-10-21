@@ -9,7 +9,9 @@ class UObject;
 class UAnimSequence;
 class USkeletalMesh;
 class USkeleton;
+struct FReferenceSkeleton;
 struct FMantleAnimClipData;
+struct FMantleSkinJointName;
 
 /**
  * #535: an emote made on a MetaHuman, UE5 Mannequin or (#593) UE4 Mannequin body, retargeted onto the UEFN mannequin
@@ -44,9 +46,49 @@ struct FMantleEmoteRetarget
 
 	/**
 	 * Which contract skeleton Skeleton is, by its bones and their parents (FMantleCosmeticChecks::MatchSkeleton): the
-	 * emote skeleton (uefn: no retarget) first, then metahuman, ue5mannequin and ue4mannequin. Empty when it is none of them.
+	 * emote skeleton (uefn: no retarget) first, then metahuman, ue5mannequin and ue4mannequin. Then, for a skeleton
+	 * with bones of its own (extra twist, prop or IK bones), the one whose every body bone (IsBodyBone) it carries under
+	 * the same parent, the most specific first; its own bones are left out. Empty when it is none of them. OutWhy: how it
+	 * was read when it has bones of its own, or, when it is none, the nearest skeleton and the first difference.
 	 */
-	static FString IdentifySkeleton(const USkeleton* Skeleton, const FMantleAvatarContract& Contract);
+	static FString IdentifySkeleton(const USkeleton* Skeleton, const FMantleAvatarContract& Contract, FString* OutWhy = nullptr);
+
+	/** IdentifySkeleton on a joint table (FMantleCosmeticChecks::JointsOf). Pure. */
+	static FString IdentifyJoints(TConstArrayView<FMantleSkinJointName> Joints, const FMantleAvatarContract& Contract, FString* OutWhy = nullptr);
+
+	/** A bone of the body itself: not an IK, virtual, corrective, prop or helper bone (interaction, center_of_mass, attach, poi). */
+	static bool IsBodyBone(FName Bone);
+
+	/**
+	 * mantle #840 step 1, rest-pose match: the bones whose rest shape the target's retarget pose copies from the source's,
+	 * each hand and its fingers (metacarpals and 01 to 03 of the thumb, index, middle, ring and pinky). Unreal's auto-align
+	 * writes no offsets for fingers, so the FK finger chains otherwise carry the difference between the two rest hands into
+	 * every frame (a constant 17 to 35 degree under-curl). The arms are left to the retargeter: matching them too put the
+	 * wrists further from the source's in the trials.
+	 */
+	static TArray<FName> HandBones();
+
+	/**
+	 * The target retarget pose's local rotation offsets (IK Rig's: retarget local = reference local * offset) that give
+	 * each of Bones the source retarget pose's component-space rotation, parent-first, so the two rest hands have the same
+	 * shape. Every Epic skeleton Mantle retargets from (UE4 and UE5 Mannequin, MetaHuman) shares the UEFN mannequin's bone
+	 * axes; a bone with one matched child is turned the little more that points it at that child as the source's points,
+	 * since the skeletons place a finger's next joint a little differently. Offsets are each skeleton's current ones by bone
+	 * name (absent: identity); a bone missing on either skeleton is left alone. OutLargestDegrees: the largest change from
+	 * the target's current offset. Pure.
+	 */
+	static TMap<FName, FQuat> MatchRestRotations(const FReferenceSkeleton& Source, const TMap<FName, FQuat>& SourceOffsets,
+		const FReferenceSkeleton& Target, const TMap<FName, FQuat>& TargetOffsets, TConstArrayView<FName> Bones, double* OutLargestDegrees = nullptr);
+
+	/**
+	 * A copy of Retargeter (an IK retargeter) in the transient package whose target retarget pose gives the hands and
+	 * fingers (HandBones()) the source's rest shape (MatchRestRotations), its finger chains retargeted joint for joint (OneToOne), and
+	 * its metacarpal chains held at that rest pose when Source has no metacarpals, so FK finger chains carry the source's curl.
+	 * Source and Target: the meshes' reference skeletons the retarget runs between. Rooted until ReleaseRestHandsCopy; the
+	 * shipped asset is never touched. Null with OutError when IK Rig's controller cannot edit it. Game thread.
+	 */
+	static UObject* MakeRestHandsCopy(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError);
+	static void ReleaseRestHandsCopy(UObject* Copy);
 
 	/**
 	 * A mesh on Skeleton to retarget from (its proportions): the skeleton's preview mesh, else a skeletal mesh in the
@@ -56,12 +98,13 @@ struct FMantleEmoteRetarget
 
 	/**
 	 * Retargets Sequence (on SkeletonId's skeleton, played on SourceMesh) onto TargetMesh (a UEFN mannequin) through
-	 * RetargeterPathFor(SkeletonId), samples the copy with FMantleAnimClipWriter::Sample, and deletes the copy. False with
+	 * RetargeterPathFor(SkeletonId) (a MakeRestHandsCopy of it, so the fingers keep the source's curl; OutHandsNote says what
+	 * that changed), samples the copy with FMantleAnimClipWriter::Sample, and deletes the copy. False with
 	 * a sentence for the creator when anything is missing or the retarget does not give one animation on the target's
 	 * skeleton with Sequence's length (within a frame).
 	 */
 	static bool RetargetAndSample(UAnimSequence* Sequence, const FString& SkeletonId, USkeletalMesh* SourceMesh, USkeletalMesh* TargetMesh,
-		const FMantleAvatarContract& Contract, FMantleAnimClipData& OutClip, FString& OutError);
+		const FMantleAvatarContract& Contract, FMantleAnimClipData& OutClip, FString& OutError, FString* OutHandsNote = nullptr);
 
 	/**
 	 * The retarget itself, through any retargeter: IK Rig's batch retarget of Sequence (played on SourceMesh) onto

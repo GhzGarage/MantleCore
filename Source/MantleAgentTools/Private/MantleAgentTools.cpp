@@ -27,6 +27,7 @@
 #include "MantleRuntime.h"
 #include "MantleScriptApiUsage.h"
 
+#include "Animation/AnimSequence.h"
 #include "Containers/Ticker.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -197,6 +198,7 @@ namespace MantleAgentToolsPrivate
 		case EMantleCosmeticClass::Garment: return TEXT("garment");
 		case EMantleCosmeticClass::Hair:    return TEXT("hair");
 		case EMantleCosmeticClass::Avatar:  return TEXT("avatar");
+		case EMantleCosmeticClass::Emote:   return TEXT("emote");
 		default:                            return LexToString(Class);
 		}
 	}
@@ -727,6 +729,31 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 			TEXT("There is no asset at \"%s\". Give its path as the Content Browser shows it, e.g. /Game/Clothing/SKM_Jacket."), *AssetPath));
 		return false;
 	}
+	// An animation sequence uploads as an emote, in the emote slot, exactly as the panel's Emote class exports it (retargeted
+	// onto the UEFN mannequin from the MetaHuman, UE5 or UE4 Mannequin skeleton).
+	if (Cast<UAnimSequence>(Asset))
+	{
+		const TArray<FString> EmoteSlots = CosmeticSlotOptions(*Contract, EMantleCosmeticClass::Emote);
+		const FString EmoteSlot = Slot.TrimStartAndEnd().IsEmpty() && EmoteSlots.Num() > 0 ? EmoteSlots[0] : Slot.TrimStartAndEnd();
+		if (!EmoteSlots.Contains(EmoteSlot))
+		{
+			OutRefusal = Refusal(TEXT("animation_not_emote"), FString::Printf(
+				TEXT("%s is an animation, which uploads as an emote. Use the slot %s, or \"\"."), *Asset->GetName(), *FString::Join(EmoteSlots, TEXT(", "))));
+			return false;
+		}
+		FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Emote, Asset, EmoteSlot, Name, *Contract, Sex);
+		Draft.PublishIntoItemId = ItemId.TrimStartAndEnd();
+		if (!Draft.PublishIntoItemId.IsEmpty() && !Draft.PublishIntoItemId.StartsWith(TEXT("itm_")))
+		{
+			OutRefusal = Refusal(TEXT("bad_item_id"), FString::Printf(
+				TEXT("\"%s\" is not an item id. Pass the id of the item to update (itm_...), or \"\" to create a new item."), *ItemId));
+			return false;
+		}
+		OutObjectPath = Asset->GetPathName();
+		OutPackage = FMantleCosmeticExport::Build(Draft, *Contract);
+		return true;
+	}
+
 	// A MetaHuman Outfit Asset (a parametric .mhpkg outfit) is clothing too: the panel exports it the same way.
 	const bool bOutfit = FMantleParametricOutfit::IsSource(Asset);
 	// A Chaos cloth asset (not an Outfit) is clothing too: it is wrapped as an Outfit for its sizes (FMantleParametricOutfit::WrapGarment).
@@ -736,7 +763,7 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 	if (!Cast<USkeletalMesh>(Asset) && !bOutfit && !bClothAsset && !bHairCardsSource)
 	{
 		OutRefusal = Refusal(TEXT("not_skeletal_mesh"), FString::Printf(
-			TEXT("%s is a %s, not a skeletal mesh, a Chaos cloth asset, a MetaHuman Outfit, a Groom or a hair cards static mesh. These tools check and upload clothing, hair and avatars made from skeletal meshes, clothing from MetaHuman Outfits, and hair from Grooms and cards meshes; use Tools > Mantle > Cosmetics... for the rest."),
+			TEXT("%s is a %s, not a skeletal mesh, a Chaos cloth asset, a MetaHuman Outfit, a Groom, a hair cards static mesh or an animation sequence. These tools check and upload clothing, hair and avatars made from skeletal meshes, clothing from MetaHuman Outfits, hair from Grooms and cards meshes, and emotes from animation sequences; use Tools > Mantle > Cosmetics... for the rest."),
 			*Asset->GetName(), *Asset->GetClass()->GetName()));
 		return false;
 	}

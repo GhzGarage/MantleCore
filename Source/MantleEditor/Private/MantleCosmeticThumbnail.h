@@ -2,9 +2,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/Function.h"
 #include "UObject/StrongObjectPtr.h"
 
+class FPreviewScene;
 class USkeletalMesh;
+class USkeletalMeshComponent;
 class UStaticMesh;
 
 /** What a cosmetic thumbnail shows, and how the camera frames it. */
@@ -43,6 +46,15 @@ struct FMantleThumbnailSubject
 
 	/** For the note and the log: "SKM_Ada with SKM_Ada_Face, headshot". */
 	FString Describe;
+
+	/**
+	 * Unset (every catalog thumbnail): the skeletal meshes hold their reference pose. Set (Mantle.Dev.CheckEmote's picture
+	 * sheet): called once the skeletal meshes are in the capture scene, one component per SkeletalMeshes entry in order
+	 * (null for a null entry), before anything is drawn; it poses them, and may add what poses them (a hidden driver) to
+	 * Scene, which drops it with the scene. It may move InOutFrame (starting as Frame) onto the posed meshes: a close-up
+	 * of a hand where the pose puts it.
+	 */
+	TFunction<void(FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& InOutFrame)> Pose;
 
 	bool IsEmpty() const { return SkeletalMeshes.Num() == 0 && !StaticMesh; }
 };

@@ -8,8 +8,12 @@ class FMantleAvatarContract;
 class UAnimSequence;
 class USkeletalMesh;
 
-/** One bone's keys in an emote: local transforms in Unreal's frame and units. */
-struct MANTLEEDITOR_API FMantleAnimClipTrack
+/**
+ * One bone's keys in an emote: local transforms in Unreal's frame and units. Named apart from MantleRuntime's reader types
+ * (MantleAnimClip.h's FMantleAnimClipTrack and FMantleAnimClipEvent), so the writer and the reader can meet in one
+ * translation unit (MantleEditor builds as a unity build; the emote check decodes what it encodes).
+ */
+struct MANTLEEDITOR_API FMantleAnimClipTrackData
 {
 	FName Bone;
 
@@ -20,7 +24,7 @@ struct MANTLEEDITOR_API FMantleAnimClipTrack
 	TArray<FVector3f> Translations;
 };
 
-struct MANTLEEDITOR_API FMantleAnimClipEvent
+struct MANTLEEDITOR_API FMantleAnimClipEventData
 {
 	float TimeSeconds = 0.0f;
 	FString Name;
@@ -31,8 +35,8 @@ struct MANTLEEDITOR_API FMantleAnimClipData
 {
 	float FrameRate = 30.0f;
 	int32 FrameCount = 0;
-	TArray<FMantleAnimClipTrack> Tracks;
-	TArray<FMantleAnimClipEvent> Events;
+	TArray<FMantleAnimClipTrackData> Tracks;
+	TArray<FMantleAnimClipEventData> Events;
 
 	/**
 	 * A place clip's skeleton (#469, MAN1 flag bit 0): the bone table of the mesh it was sampled over, parent-first,
@@ -41,6 +45,29 @@ struct MANTLEEDITOR_API FMantleAnimClipData
 	FString SkeletonHash;
 	TArray<FName> SkeletonBones;
 	TArray<int32> SkeletonParents;
+
+	/**
+	 * What FMantleAnimClipWriter::Sample did that the bytes do not show, for the export's notes and warnings (not encoded).
+	 * RootMotion: the root's motion it moved onto the root's children (FMantleAnimClipWriter::MoveRootOntoChildren).
+	 * DroppedNotifies: the names of the sequence's notifies outside the event allowlist, which no event carries.
+	 * DroppedCurves: how many float curves the sequence has (MAN1 carries bones only). LoopSeamDegrees and LoopSeamCm:
+	 * how far apart the last frame and the loop_start frame were before CloseLoopSeam joined them (0 without loop_start).
+	 */
+	struct FRootMotion
+	{
+		double TravelCm = 0.0;
+		double RiseCm = 0.0;
+		double TurnDegrees = 0.0;
+		/** How far the root's first key is from its reference pose (cm, degrees): an offset the client would also drop. */
+		double OffsetCm = 0.0;
+		double OffsetDegrees = 0.0;
+		bool bMoved = false;
+		bool bInPlace = false;
+	} RootMotion;
+	TArray<FString> DroppedNotifies;
+	int32 DroppedCurves = 0;
+	double LoopSeamDegrees = 0.0;
+	double LoopSeamCm = 0.0;
 
 	/** (FrameCount - 1) / FrameRate. */
 	double DurationSeconds() const;
@@ -85,9 +112,32 @@ struct MANTLEEDITOR_API FMantleAnimClipWriter
 	 * Samples Sequence at the contract's frame rate: every bone track, interpolated between the
 	 * source's keys; a translation track is dropped when it never leaves the bone's reference
 	 * translation (0.01 cm), which the node keeps anyway; notifies named in the event allowlist
-	 * become events. False with OutError when the sequence has no data model or no frames.
+	 * become events. The root's motion moves onto its children first (MoveRootOntoChildren), and a
+	 * clip with a loop_start event has its end joined to it (CloseLoopSeam); OutClip.DroppedNotifies,
+	 * DroppedCurves, RootMotion and LoopSeam* say what was left out or changed. False with OutError
+	 * when the sequence has no data model or no frames.
 	 */
 	static bool Sample(const UAnimSequence* Sequence, const FMantleAvatarContract& Contract, FMantleAnimClipData& OutClip, FString& OutError);
+
+	/**
+	 * Players' clients hold an emote's root still (the driver keeps the graph's root, so root motion is ignored), so
+	 * Sample moves whatever the root does onto the root's children that have tracks (the pelvis, and the IK roots):
+	 * each child's keys become child * root(t) * RootReference^-1, and the root's track holds RootReference. A turn, a
+	 * jump or a sway on the root then still shows. Travel across the floor further than MaxTravelCm (the contract's
+	 * emoteMaxRootCm) is taken out instead (bInPlace): emotes play in place, so such a clip dances on the spot. The
+	 * root's and the children's tracks hold 1 or FrameCount keys of each kind (Sample runs it before it drops translations
+	 * at the reference); a child without translation keys is left alone. Clip.RootMotion says what was found. Pure.
+	 */
+	static void MoveRootOntoChildren(FMantleAnimClipData& Clip, FName Root, TConstArrayView<FName> Children, const FTransform& RootReference,
+		double MaxTravelCm);
+
+	/**
+	 * #291: a clip with a loop_start event loops from it to its end on players' clients, so its last frame should be its
+	 * loop_start frame's pose. Blends every animated track over the last BlendSeconds (at most half the loop) from its own
+	 * keys into that pose, so the jump back is seamless; Clip.LoopSeamDegrees and LoopSeamCm say how far apart the two
+	 * frames were. Nothing changes for a loop_start at or after the last frame. Tracks hold 1 or FrameCount keys. Pure.
+	 */
+	static void CloseLoopSeam(FMantleAnimClipData& Clip, float LoopStartSeconds, float BlendSeconds);
 
 	/** 16-bit snorm as the worker quantizes it (round(clamp(v) * 32767)). */
 	static int16 QuantizeSnorm16(float Value);
