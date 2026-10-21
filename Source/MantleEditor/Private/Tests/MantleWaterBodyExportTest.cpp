@@ -241,13 +241,15 @@ bool FMantleWaterBodyCarvingCountTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// A box stands in for the landscape: the count reads only its bounds on the ground plane.
+	// A box stands in for the landscape: the count reads only its bounds on the ground plane. A plain AActor has no root component when
+	// it spawns, so the spawn location is dropped (AActor::PostSpawnInitialize places only a root); the box is put at the centre itself.
 	auto MakeGround = [&Fixture](const FVector& Centre)
 	{
 		AActor* Ground = Fixture.World->SpawnActor<AActor>(Centre, FRotator::ZeroRotator);
 		UBoxComponent* Box = NewObject<UBoxComponent>(Ground, TEXT("Ground"));
 		Box->SetBoxExtent(FVector(5000.0, 5000.0, 100.0));
 		Ground->SetRootComponent(Box);
+		Box->SetWorldLocation(Centre);
 		Box->RegisterComponent();
 		return Ground;
 	};
@@ -260,6 +262,13 @@ bool FMantleWaterBodyCarvingCountTest::RunTest(const FString& Parameters)
 	}
 	AActor* Under = MakeGround(FVector(0.0, 0.0, 0.0));
 	AActor* Far = MakeGround(FVector(5000000.0, 5000000.0, 0.0));
+	// The numbers the count compares, so a failure shows them.
+	const FBox LakeBounds = Lake->GetComponentsBoundingBox(/*bNonColliding*/ true);
+	const FBox UnderBounds = Under->GetComponentsBoundingBox();
+	const FBox FarBounds = Far->GetComponentsBoundingBox();
+	AddInfo(FString::Printf(TEXT("lake %s; under %s; far %s; lake to far %.0f"), *LakeBounds.ToString(), *UnderBounds.ToString(), *FarBounds.ToString(),
+		FVector::Dist2D(LakeBounds.GetCenter(), FarBounds.GetCenter())));
+	TestTrue(TEXT("the far ground is where it was put"), FarBounds.GetCenter().Equals(FVector(5000000.0, 5000000.0, 0.0), 1.0));
 	TestEqual(TEXT("the lake carves the landscape it overlaps, and the custom body does not"), FMantleWaterBodyExport::CountBodiesCarving(Under), 1);
 	TestEqual(TEXT("a landscape far from the water is not carved"), FMantleWaterBodyExport::CountBodiesCarving(Far), 0);
 	return true;
