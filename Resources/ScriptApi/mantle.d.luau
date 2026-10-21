@@ -489,7 +489,7 @@ declare extern type AvatarService with
 end
 declare Avatar: AvatarService
 
---- Give players the built-in Tools and weapons, take them away, and equip them (server only).
+--- Give players weapons, take them away, and equip them (server only).
 declare extern type BackpackService with
 	--- A consumable (a potion, a medkit, food: a weapon-builder item with the Consumable hold) was used, on the server, at the moment its effect lands: halfway through its drink or use clip. It fires for every use, whether the item has a built-in effect or not, and never for a use that was cancelled (sprinting, jumping or dodging first spends nothing). toolId is the item's Tool id in the player's Backpack, docName the name the creator gave it in the builder, usesLeft how many uses it has left (0: it is gone from the Backpack), and builtInEffect whether its own heal also ran (false for an item whose effect is "none": your script is the whole effect).
 	ItemUsed: Signal<(Player, string, string, number, boolean)>
@@ -497,14 +497,10 @@ declare extern type BackpackService with
 	function Clear(self, player: Player): number
 	--- Put the Tool in this Backpack slot in the player's hands. Slots count from 0, so the hotbar key 1 is slot 0. Returns false when the slot is empty or the player is dead. (server only)
 	function EquipSlot(self, player: Player, slot: number): boolean
-	--- The ids GrantBuiltIn accepts in this build: "grenade", "healthpack" and "spawnpad". "fists" is never listed. No weapon is built in (editor test sessions also list their test guns). (server only)
-	function GetBuiltInTools(self): {string}
 	--- The ids of the Tools in the player's Backpack, in slot order. Fists, which every player always has, is never listed. Empty while the player has no character (respawning). (server only)
 	function GetTools(self, player: Player): {string}
 	--- Give the player a weapon this place stores: item is the library item id Storage:Get returns for one of the place's storage names. Returns the new Tool's stable id. Errors for anything else -- an asset id, an object path, an item the place does not store, or a vehicle. Also errors if the stored weapon has not finished preparing or the player cannot receive it. (server only)
 	function Grant(self, player: Player, item: string): string
-	--- Give the player one of the built-in Tools: "grenade", "healthpack" or "spawnpad". Returns the new Tool's id, or nil when the player has no character right now, already has that Tool, or has a full Backpack. A player holding nothing equips it at once. "fists" is accepted and does nothing: every player always has fists. No weapon is built in: give one from the place's storage with Grant. (Editor test sessions also take the test guns GetBuiltInTools lists there.) (server only)
-	function GrantBuiltIn(self, player: Player, tool: string): string?
 	--- Take the Tool with this id out of the player's Backpack (unequipping it first). Returns false when the player does not have it. Fists can never be removed. (server only)
 	function Remove(self, player: Player, toolId: string): boolean
 	--- Paint one of the player's weapons: color is "#RRGGBB", the same format as Vehicles:SetPaintColor. Every player sees the new colour. Returns false when the player does not have that Tool or it is not a weapon. (server only)
