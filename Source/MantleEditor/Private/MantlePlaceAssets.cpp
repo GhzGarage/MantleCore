@@ -1490,7 +1490,13 @@ FMantlePlaceDependencies FMantlePlaceDependencies::Gather(UWorld* World)
 			FMantlePlaceExporter::CollectPrefabParts(Actor, Parts);
 			for (const FMantlePrefabPart& Part : Parts)
 			{
-				if (Part.Type == EMantleEntityType::StaticMesh)
+				if (Part.Type == EMantleEntityType::StaticMesh && Part.WaterMesh)
+				{
+					// A Water plugin body (GhzGarage/mantle#818): its mesh, drawn with its water material.
+					Out.AddMesh(Part.WaterMesh, Label);
+					Out.AddMaterial(Part.WaterMaterial, Label);
+				}
+				else if (Part.Type == EMantleEntityType::StaticMesh)
 				{
 					Out.AddComponent(Cast<UStaticMeshComponent>(Part.Component), Label, Part.MirroredMesh);
 				}
@@ -2590,9 +2596,33 @@ FMantleMaterialAnalysis FMantlePlaceAssets::AnalyzeMaterial(const UMaterialInter
 		return Input && Input->Expression;
 	};
 
+	// GhzGarage/mantle#818: a Single Layer Water surface material (a Water plugin body's) is water already, whatever its graph: it
+	// always publishes with the water key (FMantleWaterMaterial::RecogniseSingleLayer), and its shading is then no loss. The Water
+	// plugin's Water_Material is masked (a depth mask, which Mantle's opaque water does without) and builds its outputs with Set
+	// Material Attributes, so it has no output roots to read and never reached the branch below; its coefficients and colour come
+	// from its named parameters, else from a clear lake's defaults. Its waves are world position offset, which the water key has none
+	// of: the offset is dropped and said (bWavesDropped).
+	const bool bSingleLayerWater = !Out.bCarPaint && Base->MaterialDomain == MD_Surface && Models.HasShadingModel(MSM_SingleLayerWater);
+	auto DropWaves = [&Out]()
+	{
+		Out.Fidelity2.bWind = false;
+		Out.Fidelity2.Water.bWavesDropped = true;
+		Out.Losses &= ~EMantleMaterialLoss::WorldPositionOffset;
+	};
+
 	if (Base->bUseMaterialAttributes)
 	{
 		Walk.WalkInput(Root(MP_MaterialAttributes), ERoot::Surface);
+		if (bSingleLayerWater && FMantleWaterMaterial::RecogniseSingleLayer(Material, nullptr, nullptr, Out.Fidelity2.Water))
+		{
+			// Published as Mantle's water, which is Single Layer Water: no longer a loss of special shading. The walk flagged a
+			// world position offset pin of the Set Material Attributes node as the loss; it is the water's waves, dropped and said.
+			Out.Losses &= ~EMantleMaterialLoss::SpecialShading;
+			if (Out.Has(EMantleMaterialLoss::WorldPositionOffset) || Out.Fidelity2.Water.bWavesDropped)
+			{
+				DropWaves();
+			}
+		}
 	}
 	else
 	{
@@ -2654,8 +2684,21 @@ FMantleMaterialAnalysis FMantlePlaceAssets::AnalyzeMaterial(const UMaterialInter
 
 		// #628: a depth-faded translucent material (water): the bake sees the fade's near end and writes opacity 0, so its
 		// opacity (and deep colour, when the graph gives one) is carried as constants read at the far end.
-		if (bCarries && bLit && Walk.bTranslucent && !Fidelity.bWind && FMantleWaterMaterial::Recognise(Material, Roots.Opacity, Roots.BaseColor, Roots.Normal, Fidelity.Water))
+		// GhzGarage/mantle#818: a Single Layer Water material (a Water plugin body's) is water already, before any fade is looked for.
+		// Its waves are world position offset, which reads as wind: the water key has no waves, so the offset is dropped and said (bWavesDropped).
+		if ((bSingleLayerWater && FMantleWaterMaterial::RecogniseSingleLayer(Material, Roots.BaseColor, Roots.Normal, Fidelity.Water))
+			|| (bCarries && bLit && Walk.bTranslucent && !Fidelity.bWind && FMantleWaterMaterial::Recognise(Material, Roots.Opacity, Roots.BaseColor, Roots.Normal, Fidelity.Water)))
 		{
+			if (Fidelity.Water.bSingleLayer)
+			{
+				// Published as Mantle's water, which is Single Layer Water: no longer a loss of special shading.
+				Out.Losses &= ~EMantleMaterialLoss::SpecialShading;
+				if (Connected(MP_WorldPositionOffset) || Fidelity.bWind || Fidelity.Water.bWavesDropped)
+				{
+					DropWaves();
+					Carry({ MP_WorldPositionOffset });
+				}
+			}
 			Carry({ MP_Opacity });
 			if (Fidelity.Water.bColour)
 			{
