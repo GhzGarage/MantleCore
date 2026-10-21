@@ -1198,7 +1198,7 @@ namespace MantleEmoteCheckPrivate
 			bWrists |= Args[Index].Equals(TEXT("wrists"), ESearchCase::IgnoreCase);
 			bSave |= Args[Index].Equals(TEXT("save"), ESearchCase::IgnoreCase);
 		}
-		if (!Retargeter || !Source || !Target || !FMantleEmoteRetarget::MatchRestHandsInPlace(Retargeter, Source->GetRefSkeleton(), Target->GetRefSkeleton(), Note, Error, bWrists))
+		if (!Retargeter || !Source || !Target || !(bWrists ? FMantleEmoteRetarget::MatchWristsInPlace(Retargeter, Source->GetRefSkeleton(), Target->GetRefSkeleton(), Note, Error) : FMantleEmoteRetarget::MatchRestHandsInPlace(Retargeter, Source->GetRefSkeleton(), Target->GetRefSkeleton(), Note, Error)))
 		{
 			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_MATCH_RETARGET failed %s: %s"), *Path, Retargeter ? *Error : TEXT("no such retargeter"));
 			return;
@@ -1221,7 +1221,7 @@ namespace MantleEmoteCheckPrivate
 		TEXT("Mantle.Dev.MatchRetargetHands <Retargeter> <builtin|female|male|<SourceMesh>> <builtin|female|male|<TargetMesh>> [wrists] [save] -- gives the ")
 		TEXT("retargeter's target retarget pose the source's rest fingers (the hands as they were, so held things stay put) and its finger chains ")
 		TEXT("joint for joint (FMantleEmoteRetarget::MatchRestHandsInPlace). In memory, so a Mantle.Dev.CheckEmote after it shows the result; ")
-		TEXT("with wrists, hand_l and hand_r also take the source's palm turn; with save, the asset is saved."),
+		TEXT("with wrists, only the wrists' constant twist and bend error is removed (MatchWristsInPlace); with save, the asset is saved."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunMatchCommand));
 
 	FAutoConsoleCommand GMantleDevCheckEmoteCommand(

@@ -94,11 +94,18 @@ struct FMantleEmoteRetarget
 	 * The same match on Retargeter itself (the game's RTG_UEFN_to_Mantle_* retargeters, Mantle.Dev.MatchRetargetHands),
 	 * fingers only: hand_l and hand_r keep their rest pose, so a weapon in a hand socket keeps its place and turn (turning
 	 * the hands tilted it 4.8 degrees). Its target retarget pose and finger chains are changed in memory and its package
-	 * dirtied; the caller saves it. bTurnHands also gives hand_l and hand_r the source's palm turn (twist and bend of the
-	 * wrist match; a held weapon tilts with it).
+	 * dirtied; the caller saves it.
 	 */
-	static bool MatchRestHandsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError,
-		const bool bTurnHands = false);
+	static bool MatchRestHandsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError);
+
+	/**
+	 * Removes the constant wrist error from Retargeter (the game's RTG_UEFN_to_Mantle_*): the hands' retarget pose offsets left a
+	 * fixed twist about the forearm (26 degrees on the MetaHuman) and bend against the source's, so every frame's wrist was off by
+	 * that much. Only hand_l and hand_r are turned, the twist about the forearm axis and the bend at the wrist, by what the two
+	 * retarget poses differ from their reference poses; the fingers follow the hand. A held weapon tilts with the hand. In
+	 * memory, package dirtied; the caller saves it.
+	 */
+	static bool MatchWristsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError);
 
 	/**
 	 * A mesh on Skeleton to retarget from (its proportions): the skeleton's preview mesh, else a skeletal mesh in the
