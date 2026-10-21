@@ -179,7 +179,7 @@ struct MANTLEEDITOR_API FMantleWaterZoneData
 	int32 OverlapPriority = 0;
 };
 
-/** What a level's Water plugin actors hold. Pure data; nothing here is written into the place yet. */
+/** What a level's Water plugin actors hold. Pure data; the export writes it into the place as WaterBody entities and settings.water. */
 struct MANTLEEDITOR_API FMantleWaterBodies
 {
 	/** The Water plugin's module is loaded in this editor. False means there is nothing to read, and not that the level has none. */
