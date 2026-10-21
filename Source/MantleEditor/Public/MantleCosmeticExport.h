@@ -159,12 +159,6 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	 */
 	TOptional<TArray<int32>> KeepSlots;
 
-	/**
-	 * Garments from a skeletal mesh or Chaos cloth asset: upload in the one size it was made in. Unset, BuildCore first wraps it
-	 * as an Outfit (FMantleParametricOutfit::PrepareWrapped) to make the standard sizes, and sets this on the drafts it builds.
-	 */
-	bool bOneSize = false;
-
 	/** Avatars: skin, eyes or other per body section (empty entries are filled from the material slot names). */
 	TArray<FString> SectionRoles;
 
@@ -397,8 +391,15 @@ public:
 	static FMantleCosmeticPackage Build(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract,
 		FMantleSkinnedMesh* OutHairPreview = nullptr, FMantleSkinnedMesh* OutHairSourceFace = nullptr);
 
-	/** Build without the provenance: the files and the item. */
+	/**
+	 * Build without the provenance: the files and the item. A skeletal-mesh or cloth-asset garment is first wrapped as an
+	 * Outfit for the standard fit sizes (FMantleParametricOutfit::PrepareWrapped), or uploads in its one size when it cannot be.
+	 */
 	static FMantleCosmeticPackage BuildCore(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract,
+		FMantleSkinnedMesh* OutHairPreview = nullptr, FMantleSkinnedMesh* OutHairSourceFace = nullptr);
+
+	/** BuildCore for a draft that is already as it uploads (an Outfit's prepared size, a garment in its one size): no wrapping. */
+	static FMantleCosmeticPackage BuildPrepared(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract,
 		FMantleSkinnedMesh* OutHairPreview = nullptr, FMantleSkinnedMesh* OutHairSourceFace = nullptr);
 
 	/**

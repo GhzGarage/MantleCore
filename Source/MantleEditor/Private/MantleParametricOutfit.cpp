@@ -798,6 +798,7 @@ bool FMantleParametricOutfit::FindSourceBody(const USkeletalMesh* AuthoringBody,
 	{
 		TWeakObjectPtr<UMetaHumanCharacterEditorSubsystem> Subsystem;
 		TStrongObjectPtr<UMetaHumanCharacter> Character;
+		TStrongObjectPtr<USkeletalMesh> Merged;
 		bool bRemove = false;
 		~FLease()
 		{
@@ -825,32 +826,38 @@ bool FMantleParametricOutfit::FindSourceBody(const USkeletalMesh* AuthoringBody,
 		OutError = TEXT("MetaHuman Creator could not provide the authoring character's merged body and head");
 		return false;
 	}
+	// The subsystem owns the mesh; the lease keeps it from collection while the Outfit is in use.
+	Lease->Merged.Reset(Preview.MergedHeadAndBodyMesh.Get());
 	OutBody = Preview.MergedHeadAndBodyMesh.Get();
 	return true;
+}
+
+USkeletalMesh* FMantleParametricOutfit::GarmentMesh(UObject* Garment, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutError)
+{
+	if (USkeletalMesh* Mesh = Cast<USkeletalMesh>(Garment)) { return Mesh; }
+	const UChaosClothAssetBase* Cloth = Cast<UChaosClothAssetBase>(Garment);
+	if (!Cloth || Cloth->IsA<UChaosOutfitAsset>()) { OutError = TEXT("choose a skeletal mesh or a Chaos cloth asset"); return nullptr; }
+	// Its render geometry as a skeletal mesh, the form the export reads.
+	FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("ChaosClothAssetTools"));
+	USkeletalMesh* Mesh = NewObject<USkeletalMesh>(GetTransientPackage());
+	KeepAlive.Emplace(Mesh);
+	if (!Cloth->ExportToSkeletalMesh(*Mesh)) { OutError = TEXT("the cloth asset could not export its render geometry"); return nullptr; }
+	MantleParametricOutfitPrivate::Finish(Mesh);
+	if (!Mesh->GetSkeleton())
+	{
+		USkeleton* Skeleton = NewObject<USkeleton>(GetTransientPackage());
+		KeepAlive.Emplace(Skeleton);
+		Skeleton->MergeAllBonesToBoneTree(Mesh, false);
+		Mesh->SetSkeleton(Skeleton);
+	}
+	return Mesh;
 }
 
 UChaosOutfitAsset* FMantleParametricOutfit::WrapGarment(UObject* Garment, const TOptional<TArray<int32>>& KeepSlots, USkeletalMesh* SourceBody,
 	TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutError)
 {
-	USkeletalMesh* Mesh = Cast<USkeletalMesh>(Garment);
-	if (!Mesh)
-	{
-		const UChaosClothAssetBase* Cloth = Cast<UChaosClothAssetBase>(Garment);
-		if (!Cloth || Cloth->IsA<UChaosOutfitAsset>()) { OutError = TEXT("choose a skeletal mesh or a Chaos cloth asset"); return nullptr; }
-		// Its render geometry as a skeletal mesh, the form the Outfit route reads.
-		FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("ChaosClothAssetTools"));
-		Mesh = NewObject<USkeletalMesh>(GetTransientPackage());
-		KeepAlive.Emplace(Mesh);
-		if (!Cloth->ExportToSkeletalMesh(*Mesh)) { OutError = TEXT("the cloth asset could not export its render geometry"); return nullptr; }
-		MantleParametricOutfitPrivate::Finish(Mesh);
-		if (!Mesh->GetSkeleton())
-		{
-			USkeleton* Skeleton = NewObject<USkeleton>(GetTransientPackage());
-			KeepAlive.Emplace(Skeleton);
-			Skeleton->MergeAllBonesToBoneTree(Mesh, false);
-			Mesh->SetSkeleton(Skeleton);
-		}
-	}
+	USkeletalMesh* Mesh = GarmentMesh(Garment, KeepAlive, OutError);
+	if (!Mesh) { return nullptr; }
 	FMantleOutfitAuthoredSource Source;
 	Source.Id = TEXT("authored");
 	Source.Garment = Mesh;
@@ -874,7 +881,6 @@ bool FMantleParametricOutfit::PrepareWrapped(const FMantleCosmeticDraft& Draft, 
 	if (!Outfit) { return false; }
 	OutDraft = Draft;
 	OutDraft.Source = Outfit;
-	OutDraft.bOneSize = true;
 	OutDraft.KeepSlots.Reset();
 	OutDraft.OutfitTargets.Reset();
 	OutDraft.OutfitSourceSize.Reset();

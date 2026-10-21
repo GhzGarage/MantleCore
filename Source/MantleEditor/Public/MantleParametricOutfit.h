@@ -29,6 +29,9 @@ struct MANTLEEDITOR_API FMantleParametricOutfit
 	/** A skeletal mesh or a Chaos cloth asset that is not an Outfit: clothing WrapGarment can make a resizable Outfit of. */
 	static bool IsGarmentSource(const UObject* Source);
 
+	/** Garment as the skeletal mesh the export reads: itself, or a cloth asset's render geometry made into a transient one (kept alive by KeepAlive). */
+	static USkeletalMesh* GarmentMesh(UObject* Garment, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutError);
+
 	/**
 	 * A skeletal-mesh (or Chaos cloth asset) garment as a transient one-size Outfit, so it resizes like any MetaHuman Outfit.
 	 * Only the sections drawn with KeepSlots (the garment's material slots; all when unset) go in. SourceBody is the combined
