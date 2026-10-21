@@ -3,6 +3,7 @@
 
 #include "MantleAvatarContract.h"
 #include "MantleEditorActions.h"
+#include "MantleFitBodies.h"
 #include "MantleParametricOutfitAuthoring.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "MantleAvatarConverter.h"
@@ -52,6 +53,9 @@ DEFINE_LOG_CATEGORY_STATIC(LogMantleParametricOutfit, Log, All);
 
 namespace MantleParametricOutfitPrivate
 {
+	/** How far the closest fifth of a garment's vertices may be from its authoring body's skin (cm). */
+	constexpr float WrapMaxCloseCm = 3.0f;
+
 	void Finish(USkinnedAsset* Asset)
 	{
 		USkinnedAsset* Assets[] = { Asset };
@@ -877,6 +881,34 @@ bool FMantleParametricOutfit::PrepareWrapped(const FMantleCosmeticDraft& Draft, 
 		return false;
 	}
 	if (!FindSourceBody(Draft.AuthoringBody.Get(), Lease, SourceBody, OutWhy)) { return false; }
+	// The authoring body is found by search, so check the garment really sits on it: a Chaos resize from the wrong body leaves
+	// the garment floating or buried on every size. Garments touch their body somewhere, so the closest fifth of the garment's
+	// vertices must lie close to its skin.
+	{
+		USkeletalMesh* Worn = GarmentMesh(Draft.Source.Get(), KeepAlive, OutWhy);
+		TArray<FVector3f> GarmentPoints, BodyPoints;
+		if (!Worn) { return false; }
+		if (!FMantleFitBodies::ReadVertices(Worn, 0, GarmentPoints) || !FMantleFitBodies::ReadVertices(SourceBody, 0, BodyPoints) || BodyPoints.IsEmpty())
+		{
+			OutWhy = TEXT("the garment or its authoring body has no geometry to check the fit with");
+			return false;
+		}
+		TArray<float> Nearest;
+		for (int32 Index = 0; Index < GarmentPoints.Num(); Index += 4)
+		{
+			float Best = TNumericLimits<float>::Max();
+			for (const FVector3f& Point : BodyPoints) { Best = FMath::Min(Best, FVector3f::DistSquared(GarmentPoints[Index], Point)); }
+			Nearest.Add(FMath::Sqrt(Best));
+		}
+		Nearest.Sort();
+		const float Close = Nearest.IsEmpty() ? TNumericLimits<float>::Max() : Nearest[Nearest.Num() / 5];
+		UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_WRAP_FIT garment=%s body=%s closest-fifth=%.2fcm"), *Draft.Source->GetName(), *Draft.AuthoringBody->GetName(), Close);
+		if (Close > MantleParametricOutfitPrivate::WrapMaxCloseCm)
+		{
+			OutWhy = FString::Printf(TEXT("it does not sit on the authoring body %s found for it (its closest fifth is %.1f cm from the skin)"), *Draft.AuthoringBody->GetName(), Close);
+			return false;
+		}
+	}
 	UChaosOutfitAsset* Outfit = WrapGarment(Draft.Source.Get(), Draft.KeepSlots, SourceBody, KeepAlive, OutWhy);
 	if (!Outfit) { return false; }
 	OutDraft = Draft;
