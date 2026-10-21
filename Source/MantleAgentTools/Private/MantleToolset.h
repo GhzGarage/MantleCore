@@ -132,9 +132,11 @@ public:
 
 	/**
 	 * Check a cosmetic: the Cosmetics panel's "Check only" on a skeletal mesh, a Chaos cloth asset, a MetaHuman Outfit
-	 * (an imported .mhpkg outfit, checked as clothing), or a Groom or hair cards static mesh (hair slots only), with the panel's defaults (the authoring body
+	 * (an imported .mhpkg outfit, checked as clothing), a Groom or hair cards static mesh (hair slots only), or an animation
+	 * sequence (an emote, slot emote: one on the MetaHuman, UE5 or UE4 Mannequin skeleton is retargeted onto the UEFN
+	 * mannequin first, at most 10 s), with the panel's defaults (the authoring body
 	 * it finds, generated LODs, thumbnail). Exports in memory; nothing is uploaded. Read-only.
-	 * @param AssetPath The skeletal mesh, Outfit, Groom or cards mesh, e.g. /Game/Clothing/SKM_Jacket or /Game/Outfits/Survivor/OA_SurvivorOutfit.
+	 * @param AssetPath The skeletal mesh, Outfit, Groom, cards mesh or animation sequence, e.g. /Game/Clothing/SKM_Jacket or /Game/Outfits/Survivor/OA_SurvivorOutfit.
 	 * @param Slot The item's slot (a garment slot such as top, a hair slot such as hair, avatar, or, for a MetaHuman
 	 * Outfit hat or other rigid piece, an accessory slot such as acc_hat: it uploads fitted to the reference head);
 	 * "" takes the panel's default, the first 3D clothing slot. Always pass it.
@@ -154,7 +156,7 @@ public:
 	 * @return JSON: {"ok", "asset", "class", "slot", "name", "canUpload" (no errors), "issues":
 	 * [{"severity": "error"|"warning"|"info", "message", "hint"}], "notes": [lines], "files":
 	 * [{"key", "label", "bytes"}]}, or a refusal (not_found, not_skeletal_mesh, unknown_slot,
-	 * outfit_not_clothing, cards_not_hair, accessory_needs_outfit, unknown_section, unknown_fit_sex).
+	 * outfit_not_clothing, cards_not_hair, accessory_needs_outfit, animation_not_emote, unknown_section, unknown_fit_sex).
 	 */
 	UFUNCTION(meta = (AICallable))
 	static FString CheckCosmetic(const FString& AssetPath, const FString& Slot = TEXT(""), const FString& Name = TEXT(""), const FString& Sections = TEXT(""),
@@ -169,7 +171,7 @@ public:
 	 * for this specific upload. A MetaHuman Outfit uploads with garment variants fitted to Epic's standard body types,
 	 * made automatically (as CheckCosmetic says); no converted MetaHuman is needed. Refused, with nothing sent, when the creator is not signed in, the
 	 * check finds errors, or an upload started here is still running.
-	 * @param AssetPath The skeletal mesh, Outfit, Groom or cards mesh, as for CheckCosmetic.
+	 * @param AssetPath The skeletal mesh, Outfit, Groom, cards mesh or animation sequence (an emote), as for CheckCosmetic.
 	 * @param Slot The item's slot, as for CheckCosmetic.
 	 * @param Name The item's name players see; "" takes the asset's name. Always pass it.
 	 * @param Sections The sections to upload, as for CheckCosmetic. Always pass it.

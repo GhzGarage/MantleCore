@@ -17,8 +17,7 @@
 #include "MantleCatalogGarmentFit.h"
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticItem.h"
-// Not MantleAnimClip.h: its track and event types share their names with MantleAnimClipWriter.h's, and MantleEditor
-// builds as a unity build. The idle clip stays opaque here (UMantleClipAnimInstance reads and plays it).
+// The idle clip stays opaque here (UMantleClipAnimInstance reads and plays it).
 #include "MantleClipAnimInstance.h"
 #include "MantleGarmentFitter.h"
 #include "MantleHairHeadFit.h"

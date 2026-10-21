@@ -10,6 +10,7 @@ class UAnimSequence;
 class USkeletalMesh;
 class USkeleton;
 struct FMantleAnimClipData;
+struct FMantleSkinJointName;
 
 /**
  * #535: an emote made on a MetaHuman, UE5 Mannequin or (#593) UE4 Mannequin body, retargeted onto the UEFN mannequin
@@ -47,6 +48,9 @@ struct FMantleEmoteRetarget
 	 * emote skeleton (uefn: no retarget) first, then metahuman, ue5mannequin and ue4mannequin. Empty when it is none of them.
 	 */
 	static FString IdentifySkeleton(const USkeleton* Skeleton, const FMantleAvatarContract& Contract);
+
+	/** IdentifySkeleton on a joint table (FMantleCosmeticChecks::JointsOf). Pure. */
+	static FString IdentifyJoints(TConstArrayView<FMantleSkinJointName> Joints, const FMantleAvatarContract& Contract);
 
 	/**
 	 * A mesh on Skeleton to retarget from (its proportions): the skeleton's preview mesh, else a skeletal mesh in the

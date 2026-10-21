@@ -78,7 +78,7 @@ int16 FMantleAnimClipWriter::QuantizeSnorm16(float Value)
 void FMantleAnimClipWriter::Canonicalize(FMantleAnimClipData& Clip)
 {
 	using namespace MantleAnimClipWriterPrivate;
-	for (FMantleAnimClipTrack& Track : Clip.Tracks)
+	for (FMantleAnimClipTrackData& Track : Clip.Tracks)
 	{
 		for (FQuat4f& Rotation : Track.Rotations)
 		{
@@ -93,7 +93,7 @@ void FMantleAnimClipWriter::Canonicalize(FMantleAnimClipData& Clip)
 			Track.Translations.SetNum(1);
 		}
 	}
-	Clip.Events.StableSort([](const FMantleAnimClipEvent& A, const FMantleAnimClipEvent& B) { return A.TimeSeconds < B.TimeSeconds; });
+	Clip.Events.StableSort([](const FMantleAnimClipEventData& A, const FMantleAnimClipEventData& B) { return A.TimeSeconds < B.TimeSeconds; });
 }
 
 TArray<uint8> FMantleAnimClipWriter::Encode(const FMantleAnimClipData& InClip, const FMantleContractSkeleton* Skeleton)
@@ -107,7 +107,7 @@ TArray<uint8> FMantleAnimClipWriter::Encode(const FMantleAnimClipData& InClip, c
 	{
 		// A place clip's tracks in its own bone table's order, as the cook writes them.
 		const TArray<FName>& Bones = Clip.SkeletonBones;
-		Clip.Tracks.StableSort([&Bones](const FMantleAnimClipTrack& A, const FMantleAnimClipTrack& B)
+		Clip.Tracks.StableSort([&Bones](const FMantleAnimClipTrackData& A, const FMantleAnimClipTrackData& B)
 		{
 			const int32 IndexA = Bones.IndexOfByKey(A.Bone);
 			const int32 IndexB = Bones.IndexOfByKey(B.Bone);
@@ -116,7 +116,7 @@ TArray<uint8> FMantleAnimClipWriter::Encode(const FMantleAnimClipData& InClip, c
 	}
 	else if (Skeleton)
 	{
-		Clip.Tracks.StableSort([Skeleton](const FMantleAnimClipTrack& A, const FMantleAnimClipTrack& B)
+		Clip.Tracks.StableSort([Skeleton](const FMantleAnimClipTrackData& A, const FMantleAnimClipTrackData& B)
 		{
 			const int32 IndexA = Skeleton->Find(A.Bone);
 			const int32 IndexB = Skeleton->Find(B.Bone);
@@ -142,7 +142,7 @@ TArray<uint8> FMantleAnimClipWriter::Encode(const FMantleAnimClipData& InClip, c
 			WriteU32(Out, static_cast<uint32>(Clip.SkeletonParents.IsValidIndex(Bone) ? Clip.SkeletonParents[Bone] : INDEX_NONE));
 		}
 	}
-	for (const FMantleAnimClipTrack& Track : Clip.Tracks)
+	for (const FMantleAnimClipTrackData& Track : Clip.Tracks)
 	{
 		WriteStr16(Out, Track.Bone.ToString());
 		uint8 Flags = 0;
@@ -184,7 +184,7 @@ TArray<uint8> FMantleAnimClipWriter::Encode(const FMantleAnimClipData& InClip, c
 			}
 		}
 	}
-	for (const FMantleAnimClipEvent& Event : Clip.Events)
+	for (const FMantleAnimClipEventData& Event : Clip.Events)
 	{
 		WriteF32(Out, Event.TimeSeconds);
 		WriteStr16(Out, Event.Name);
@@ -226,7 +226,7 @@ void FMantleAnimClipWriter::Validate(const FMantleAnimClipData& Clip, const FMan
 
 	TSet<FName> Seen;
 	bool bForeign = false;
-	for (const FMantleAnimClipTrack& Track : Clip.Tracks)
+	for (const FMantleAnimClipTrackData& Track : Clip.Tracks)
 	{
 		if (Skeleton->Find(Track.Bone) == INDEX_NONE)
 		{
@@ -304,7 +304,7 @@ void FMantleAnimClipWriter::Validate(const FMantleAnimClipData& Clip, const FMan
 	{
 		OutIssues.Add(FMantleCosmeticChecks::Error(FString::Printf(TEXT("%d events, the limit is %d."), Clip.Events.Num(), Contract.EmoteMaxEvents)));
 	}
-	for (const FMantleAnimClipEvent& Event : Clip.Events)
+	for (const FMantleAnimClipEventData& Event : Clip.Events)
 	{
 		if (!Contract.EmoteEvents.Contains(Event.Name))
 		{
@@ -356,7 +356,7 @@ bool FMantleAnimClipWriter::Sample(const UAnimSequence* Sequence, const FMantleA
 		{
 			continue;
 		}
-		FMantleAnimClipTrack& Track = OutClip.Tracks.AddDefaulted_GetRef();
+		FMantleAnimClipTrackData& Track = OutClip.Tracks.AddDefaulted_GetRef();
 		Track.Bone = TrackName;
 		Track.Rotations.Reserve(OutClip.FrameCount);
 		Track.Translations.Reserve(OutClip.FrameCount);
@@ -400,7 +400,7 @@ bool FMantleAnimClipWriter::Sample(const UAnimSequence* Sequence, const FMantleA
 		const FString Name = Notify.NotifyName.ToString();
 		if (Contract.EmoteEvents.Contains(Name))
 		{
-			FMantleAnimClipEvent& Event = OutClip.Events.AddDefaulted_GetRef();
+			FMantleAnimClipEventData& Event = OutClip.Events.AddDefaulted_GetRef();
 			Event.Name = Name;
 			Event.TimeSeconds = FMath::Clamp(Notify.GetTime(), 0.0f, static_cast<float>(OutClip.DurationSeconds()));
 		}
@@ -467,7 +467,7 @@ bool FMantleAnimClipWriter::SampleOnMesh(const UAnimSequence* Sequence, const US
 		{
 			continue;
 		}
-		FMantleAnimClipTrack Track;
+		FMantleAnimClipTrackData Track;
 		Track.Bone = BoneName;
 		Track.Rotations.Reserve(OutClip.FrameCount);
 		Track.Translations.Reserve(OutClip.FrameCount);
@@ -512,7 +512,7 @@ bool FMantleAnimClipWriter::SampleOnMesh(const UAnimSequence* Sequence, const US
 	// A clip that moves nothing still holds a pose: one constant track on the root (a clip has at least one).
 	if (OutClip.Tracks.Num() == 0)
 	{
-		FMantleAnimClipTrack& Root = OutClip.Tracks.AddDefaulted_GetRef();
+		FMantleAnimClipTrackData& Root = OutClip.Tracks.AddDefaulted_GetRef();
 		Root.Bone = BoneInfo[0].Name;
 		Root.Rotations.Add(FQuat4f(BonePose[0].GetRotation().GetNormalized()));
 	}

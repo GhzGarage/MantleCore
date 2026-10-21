@@ -234,8 +234,12 @@ FString FMantleEmoteRetarget::IdentifySkeleton(const USkeleton* Skeleton, const 
 	{
 		return FString();
 	}
-	const FReferenceSkeleton& Reference = Skeleton->GetReferenceSkeleton();
-	const TArray<FMantleSkinJointName> Joints = FMantleCosmeticChecks::JointsOf(Reference);
+	return IdentifyJoints(FMantleCosmeticChecks::JointsOf(Skeleton->GetReferenceSkeleton()), Contract);
+}
+
+FString FMantleEmoteRetarget::IdentifyJoints(TConstArrayView<FMantleSkinJointName> Joints, const FMantleAvatarContract& Contract)
+{
+	using namespace MantleEmoteRetargetPrivate;
 	for (const FString& Id : { Contract.EmoteSkeleton, FString(EmoteMetaHumanId), FString(EmoteUE5MannequinId), FString(EmoteUE4MannequinId) })
 	{
 		const FMantleContractSkeleton* Fixture = Contract.FindSkeleton(Id);
