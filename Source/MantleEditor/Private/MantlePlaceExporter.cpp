@@ -3446,18 +3446,23 @@ void FMantlePlaceExporter::CheckInstanceSource(const UInstancedStaticMeshCompone
 			++Flat;
 		}
 	}
+	// GhzGarage/mantle#818: neither refuses the place. A mirrored instance publishes as an instance of a mirrored copy of the
+	// mesh (#628), and one scaled to zero is nothing to see, so Export leaves it out and says so in the coverage report.
 	if (Mirrored > 0)
 	{
 		OutParts.Add(FMantleUnpublishedPart{
-			FString::Printf(TEXT("has %d mirrored instance(s) of %s (a negative scale on one axis); Mantle publishes scales above zero."),
+			FString::Printf(TEXT("has %d mirrored instance(s) of %s (a negative scale on one axis); they publish as a mirrored copy of the mesh."),
 				Mirrored, *Mesh->GetName()),
-			TEXT("Keep instance scales positive (for PCG, in the Transform Points node), or use a mirrored copy of the mesh.") });
+			TEXT("Nothing to do. A mesh that can't be read for the copy is left out, and the coverage report says so."),
+			/*bBlocksPublish*/ false });
 	}
 	if (Flat > 0)
 	{
 		OutParts.Add(FMantleUnpublishedPart{
-			FString::Printf(TEXT("has %d instance(s) of %s scaled to zero."), Flat, *Mesh->GetName()),
-			TEXT("Remove them, or give them a scale above zero.") });
+			FString::Printf(TEXT("has %d instance(s) of %s scaled to zero; they are left out."),
+				Flat, *Mesh->GetName()),
+			TEXT("Nothing to do: an instance with no size can't be seen or touched."),
+			/*bBlocksPublish*/ false });
 	}
 
 	// Overrides are written by slot with null padding (#262), as for a StaticMesh actor. A mesh from
@@ -3999,36 +4004,101 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 				continue;
 			}
 
-			FMantleStaticMeshProps Mesh;
-			ExporterReadMeshComponent(Component, SourcePath, ReferencedAssets, Uploads, Result.Errors, Mesh);
-			const FString Key = InstancedGroupKey(Mesh);
+			// The group for this component's mesh, or for a mirrored copy of it (MeshOverride); same key, same group, level-wide.
 			const bool bFoliage = ExporterIsFoliageOwner(Owner);
-			int32 GroupIndex = INDEX_NONE;
-			if (const int32* Found = GroupByKey.Find(Key))
+			auto GroupFor = [&](const UStaticMesh* MeshOverride)
 			{
-				GroupIndex = *Found;
-				Groups[GroupIndex].bThinFirst = Groups[GroupIndex].bThinFirst && bFoliage;
-			}
-			else
-			{
-				GroupIndex = Groups.Num();
-				GroupByKey.Add(Key, GroupIndex);
+				FMantleStaticMeshProps Mesh;
+				ExporterReadMeshComponent(Component, SourcePath, ReferencedAssets, Uploads, Result.Errors, Mesh, MeshOverride);
+				const FString Key = InstancedGroupKey(Mesh);
+				if (const int32* Found = GroupByKey.Find(Key))
+				{
+					Groups[*Found].bThinFirst = Groups[*Found].bThinFirst && bFoliage;
+					return *Found;
+				}
+				const int32 Index = Groups.Num();
+				GroupByKey.Add(Key, Index);
 				FMantleInstancedMeshGroup& Added = Groups.AddDefaulted_GetRef();
 				Added.Mesh = Mesh;
 				Added.MeshName = Component->GetStaticMesh()->GetName();
 				Added.bThinFirst = bFoliage;
-			}
+				return Index;
+			};
+			const int32 GroupIndex = GroupFor(nullptr);
 
-			TArray<FTransform>& Instances = Groups[GroupIndex].WorldInstances;
+			// GhzGarage/mantle#818: a mirrored instance is placed as an instance of the mesh's mirrored copy (one per set of negative
+			// axes, cached by FMantleMirrorBake) at the positive scale; one scaled to zero is left out.
+			struct FMirroredGroup { int32 Group = INDEX_NONE; UStaticMesh* Mesh = nullptr; };
+			TMap<int32, FMirroredGroup> MirrorGroups;
+			TMap<int32, FString> MirrorFailures;
+			int32 MirroredCount = 0;
+			int32 FlatCount = 0;
+			int32 UnmirroredCount = 0;
+			FString UnmirroredWhy;
+
 			const int32 Count = Component->GetInstanceCount();
-			Instances.Reserve(Instances.Num() + Count);
+			Groups[GroupIndex].WorldInstances.Reserve(Groups[GroupIndex].WorldInstances.Num() + Count);
 			for (int32 InstanceIndex = 0; InstanceIndex < Count; ++InstanceIndex)
 			{
 				FTransform Instance;
-				if (Component->GetInstanceTransform(InstanceIndex, Instance, /*bWorldSpace*/ true))
+				if (!Component->GetInstanceTransform(InstanceIndex, Instance, /*bWorldSpace*/ true))
 				{
-					Instances.Add(ExporterNormalizeInstance(Instance));
+					continue;
 				}
+				const FTransform Normalized = ExporterNormalizeInstance(Instance);
+				const FVector Scale = Normalized.GetScale3D();
+				if (Scale.GetMin() < 0.0)
+				{
+					const int32 Mask = (Scale.X < 0.0 ? 1 : 0) | (Scale.Y < 0.0 ? 2 : 0) | (Scale.Z < 0.0 ? 4 : 0);
+					FMirroredGroup* Mirrored = MirrorGroups.Find(Mask);
+					if (!Mirrored && !MirrorFailures.Contains(Mask))
+					{
+						const FMantleMirrorResult Mirror = FMantleActorDecompose::ResolveMirror(Component->GetStaticMesh(), Scale);
+						if (Mirror.bOk)
+						{
+							Mirrored = &MirrorGroups.Add(Mask, FMirroredGroup{ GroupFor(Mirror.Mesh), Mirror.Mesh });
+						}
+						else
+						{
+							MirrorFailures.Add(Mask, Mirror.Why);
+						}
+					}
+					if (!Mirrored)
+					{
+						++UnmirroredCount;
+						UnmirroredWhy = MirrorFailures.FindRef(Mask);
+						continue;
+					}
+					FTransform Placed = Normalized;
+					Placed.SetScale3D(Scale.GetAbs());
+					Groups[Mirrored->Group].WorldInstances.Add(Placed);
+					++MirroredCount;
+				}
+				else if (Scale.GetMin() < GExporterMinInstanceScale)
+				{
+					++FlatCount;
+				}
+				else
+				{
+					Groups[GroupIndex].WorldInstances.Add(Normalized);
+				}
+			}
+
+			const FString MeshName = Component->GetStaticMesh()->GetName();
+			if (MirroredCount > 0)
+			{
+				Result.Coverage.Add(MantleCoverageCategory::StaticMeshes, EMantleCoverageOutcome::Approximated, MeshName,
+					TEXT("instances with a negative scale are published as instances of a mirrored copy of the mesh, at the positive scale."), MirroredCount);
+			}
+			if (FlatCount > 0)
+			{
+				Result.Coverage.Add(MantleCoverageCategory::StaticMeshes, EMantleCoverageOutcome::Dropped, MeshName,
+					TEXT("instances scaled to zero are left out: they have no size, so nothing of them can be seen or touched."), FlatCount);
+			}
+			if (UnmirroredCount > 0)
+			{
+				Result.Coverage.Add(MantleCoverageCategory::StaticMeshes, EMantleCoverageOutcome::Dropped, MeshName,
+					FString::Printf(TEXT("instances with a negative scale are left out: a mirrored copy of the mesh could not be made (%s)."), *UnmirroredWhy), UnmirroredCount);
 			}
 		}
 
