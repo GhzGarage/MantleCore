@@ -2,6 +2,9 @@
 #include "MantleParametricOutfit.h"
 
 #include "MantleAvatarContract.h"
+#include "MantleEditorActions.h"
+#include "MantleParametricOutfitAuthoring.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "MantleAvatarConverter.h"
 #include "MantleBodyCorrespondence.h"
 #include "MantleBodyTopologyData.h"
@@ -760,6 +763,130 @@ namespace MantleParametricOutfitPrivate
 bool FMantleParametricOutfit::IsSource(const UObject* Source)
 {
 	return Source && Source->IsA<UChaosOutfitAsset>();
+}
+
+bool FMantleParametricOutfit::IsGarmentSource(const UObject* Source)
+{
+	return Source && !IsSource(Source) && (Source->IsA<USkeletalMesh>() || Source->IsA<UChaosClothAssetBase>());
+}
+
+bool FMantleParametricOutfit::FindSourceBody(const USkeletalMesh* AuthoringBody, TSharedPtr<void>& OutLease, USkeletalMesh*& OutBody, FString& OutError)
+{
+	OutBody = nullptr;
+	OutLease.Reset();
+	const FString* Built = AuthoringBody && FMantleAvatarConverter::IsConvertOutput(AuthoringBody)
+		? AuthoringBody->GetPackage()->GetMetaData().FindValue(AuthoringBody, FMantleAvatarConverter::BuiltKey) : nullptr;
+	const int32 Cut = Built ? Built->Find(TEXT("/Unpacked/")) : INDEX_NONE;
+	if (Cut == INDEX_NONE)
+	{
+		OutError = TEXT("the authoring body is not one Mantle converted from a MetaHuman Creator character");
+		return false;
+	}
+	FARFilter Filter;
+	Filter.PackagePaths.Add(FName(*Built->Left(Cut)));
+	Filter.ClassPaths.Add(UMetaHumanCharacter::StaticClass()->GetClassPathName());
+	TArray<FAssetData> Found;
+	FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().GetAssets(Filter, Found);
+	UMetaHumanCharacter* Character = Found.Num() == 1 ? Cast<UMetaHumanCharacter>(Found[0].GetAsset()) : nullptr;
+	UMetaHumanCharacterEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UMetaHumanCharacterEditorSubsystem>() : nullptr;
+	if (!Character || !Subsystem)
+	{
+		OutError = TEXT("the MetaHuman Creator character the authoring body was converted from was not found");
+		return false;
+	}
+	struct FLease
+	{
+		TWeakObjectPtr<UMetaHumanCharacterEditorSubsystem> Subsystem;
+		TStrongObjectPtr<UMetaHumanCharacter> Character;
+		bool bRemove = false;
+		~FLease()
+		{
+			if (bRemove && Subsystem.IsValid() && IsInGameThread()) { Subsystem->RemoveObjectToEdit(Character.Get()); }
+		}
+	};
+	TSharedRef<FLease> Lease = MakeShared<FLease>();
+	Lease->Subsystem = Subsystem;
+	Lease->Character.Reset(Character);
+	const bool bAlreadyEditing = Subsystem->IsObjectAddedForEditing(Character);
+	if (!bAlreadyEditing && !Subsystem->TryAddObjectToEdit(Character))
+	{
+		OutError = TEXT("MetaHuman Creator could not open the authoring character");
+		return false;
+	}
+	Lease->bRemove = !bAlreadyEditing;
+	OutLease = Lease;
+	FMetaHumanCharacterPreviewAssetOptions Options;
+	Options.bGenerateMergedHeadAndBodyMesh = true;
+	Options.bGenerateBodyMeasurements = true;
+	FMetaHumanCharacterPreviewAssets Preview;
+	if (!Subsystem->TryGetCharacterPreviewAssets(Character, Options, Preview) || !Preview.MergedHeadAndBodyMesh)
+	{
+		OutLease.Reset();
+		OutError = TEXT("MetaHuman Creator could not provide the authoring character's merged body and head");
+		return false;
+	}
+	OutBody = Preview.MergedHeadAndBodyMesh.Get();
+	return true;
+}
+
+UChaosOutfitAsset* FMantleParametricOutfit::WrapGarment(UObject* Garment, const TOptional<TArray<int32>>& KeepSlots, USkeletalMesh* SourceBody,
+	TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutError)
+{
+	USkeletalMesh* Mesh = Cast<USkeletalMesh>(Garment);
+	if (!Mesh)
+	{
+		const UChaosClothAssetBase* Cloth = Cast<UChaosClothAssetBase>(Garment);
+		if (!Cloth || Cloth->IsA<UChaosOutfitAsset>()) { OutError = TEXT("choose a skeletal mesh or a Chaos cloth asset"); return nullptr; }
+		// Its render geometry as a skeletal mesh, the form the Outfit route reads.
+		FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("ChaosClothAssetTools"));
+		Mesh = NewObject<USkeletalMesh>(GetTransientPackage());
+		KeepAlive.Emplace(Mesh);
+		if (!Cloth->ExportToSkeletalMesh(*Mesh)) { OutError = TEXT("the cloth asset could not export its render geometry"); return nullptr; }
+		MantleParametricOutfitPrivate::Finish(Mesh);
+		if (!Mesh->GetSkeleton())
+		{
+			USkeleton* Skeleton = NewObject<USkeleton>(GetTransientPackage());
+			KeepAlive.Emplace(Skeleton);
+			Skeleton->MergeAllBonesToBoneTree(Mesh, false);
+			Mesh->SetSkeleton(Skeleton);
+		}
+	}
+	FMantleOutfitAuthoredSource Source;
+	Source.Id = TEXT("authored");
+	Source.Garment = Mesh;
+	Source.CombinedBodyHead = SourceBody;
+	Source.KeepSlots = KeepSlots;
+	return FMantleParametricOutfitAuthoring::Create(MakeArrayView(&Source, 1), GetTransientPackage(), FName(*(TEXT("WrappedOutfit_") + Garment->GetName())),
+		1500, KeepAlive, OutError);
+}
+
+bool FMantleParametricOutfit::PrepareWrapped(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract, FMantleCosmeticDraft& OutDraft,
+	TArray<TStrongObjectPtr<UObject>>& KeepAlive, TSharedPtr<void>& Lease, FString& OutWhy)
+{
+	USkeletalMesh* SourceBody = nullptr;
+	if (!Draft.AuthoringBody.IsValid())
+	{
+		OutWhy = TEXT("no MetaHuman authoring body was found for it");
+		return false;
+	}
+	if (!FindSourceBody(Draft.AuthoringBody.Get(), Lease, SourceBody, OutWhy)) { return false; }
+	UChaosOutfitAsset* Outfit = WrapGarment(Draft.Source.Get(), Draft.KeepSlots, SourceBody, KeepAlive, OutWhy);
+	if (!Outfit) { return false; }
+	OutDraft = Draft;
+	OutDraft.Source = Outfit;
+	OutDraft.bOneSize = true;
+	OutDraft.KeepSlots.Reset();
+	OutDraft.OutfitTargets.Reset();
+	OutDraft.OutfitSourceSize.Reset();
+	OutDraft.AuthoringBody.Reset();
+	OutDraft.AuthoringFace.Reset();
+	FMantleEditorActions::ApplyCosmeticFitTargetDefaults(OutDraft, &Contract);
+	if (OutDraft.OutfitTargets.IsEmpty())
+	{
+		OutWhy = OutDraft.FitBodiesStatus.IsEmpty() ? FString(TEXT("the standard fit bodies were not made")) : OutDraft.FitBodiesStatus;
+		return false;
+	}
+	return true;
 }
 
 bool FMantleParametricOutfit::ListSizes(UObject* Source, TArray<FMantleOutfitSourceSize>& OutSizes, FString& OutError)

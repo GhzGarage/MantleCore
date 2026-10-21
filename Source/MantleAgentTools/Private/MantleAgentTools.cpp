@@ -729,12 +729,14 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 	}
 	// A MetaHuman Outfit Asset (a parametric .mhpkg outfit) is clothing too: the panel exports it the same way.
 	const bool bOutfit = FMantleParametricOutfit::IsSource(Asset);
+	// A Chaos cloth asset (not an Outfit) is clothing too: it is wrapped as an Outfit for its sizes (FMantleParametricOutfit::WrapGarment).
+	const bool bClothAsset = FMantleParametricOutfit::IsGarmentSource(Asset) && !Cast<USkeletalMesh>(Asset);
 	// Hair the panel uploads from a Groom (its cards) or a hair cards static mesh, in a hair slot only.
 	const bool bHairCardsSource = FMantleCosmeticExport::IsGroomAsset(Asset) || Cast<UStaticMesh>(Asset);
-	if (!Cast<USkeletalMesh>(Asset) && !bOutfit && !bHairCardsSource)
+	if (!Cast<USkeletalMesh>(Asset) && !bOutfit && !bClothAsset && !bHairCardsSource)
 	{
 		OutRefusal = Refusal(TEXT("not_skeletal_mesh"), FString::Printf(
-			TEXT("%s is a %s, not a skeletal mesh, a MetaHuman Outfit, a Groom or a hair cards static mesh. These tools check and upload clothing, hair and avatars made from skeletal meshes, clothing from MetaHuman Outfits, and hair from Grooms and cards meshes; use Tools > Mantle > Cosmetics... for the rest."),
+			TEXT("%s is a %s, not a skeletal mesh, a Chaos cloth asset, a MetaHuman Outfit, a Groom or a hair cards static mesh. These tools check and upload clothing, hair and avatars made from skeletal meshes, clothing from MetaHuman Outfits, and hair from Grooms and cards meshes; use Tools > Mantle > Cosmetics... for the rest."),
 			*Asset->GetName(), *Asset->GetClass()->GetName()));
 		return false;
 	}
@@ -780,6 +782,13 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 		OutRefusal = Refusal(TEXT("cards_not_hair"), FString::Printf(
 			TEXT("%s is a Groom or a cards mesh, which uploads as hair. Use one of: %s."),
 			*Asset->GetName(), *FString::Join(CosmeticSlotOptions(*Contract, EMantleCosmeticClass::Hair), TEXT(", "))));
+		return false;
+	}
+	if (bClothAsset && Class != EMantleCosmeticClass::Garment)
+	{
+		OutRefusal = Refusal(TEXT("cloth_not_clothing"), FString::Printf(
+			TEXT("%s is a Chaos cloth asset, which uploads as clothing. Use one of: %s."),
+			*Asset->GetName(), *FString::Join(CosmeticSlotOptions(*Contract, EMantleCosmeticClass::Garment), TEXT(", "))));
 		return false;
 	}
 	if (!bOutfit && Class == EMantleCosmeticClass::Accessory)

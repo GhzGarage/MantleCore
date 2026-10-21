@@ -159,6 +159,12 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	 */
 	TOptional<TArray<int32>> KeepSlots;
 
+	/**
+	 * Garments from a skeletal mesh or Chaos cloth asset: upload in the one size it was made in. Unset, BuildCore first wraps it
+	 * as an Outfit (FMantleParametricOutfit::PrepareWrapped) to make the standard sizes, and sets this on the drafts it builds.
+	 */
+	bool bOneSize = false;
+
 	/** Avatars: skin, eyes or other per body section (empty entries are filled from the material slot names). */
 	TArray<FString> SectionRoles;
 

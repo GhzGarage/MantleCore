@@ -24,6 +24,9 @@ struct MANTLEEDITOR_API FMantleOutfitAuthoredSource
 	 */
 	TSharedPtr<const FMantleGlbMesh> Geometry;
 	TArray<UMaterialInterface*> Materials;
+
+	/** When set, only the Garment's sections drawn with one of these material slots go into the Outfit (a Garment's kept sections). */
+	TOptional<TArray<int32>> KeepSlots;
 };
 
 /** Render-only native Outfit authoring. Original meshes and their materials are read without modification. */

@@ -5051,6 +5051,26 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 	using namespace MantleCosmeticExportPrivate;
 	if (OutHairPreview) *OutHairPreview = FMantleSkinnedMesh();
 	if (OutHairSourceFace) *OutHairSourceFace = FMantleSkinnedMesh();
+	if (Draft.Class == EMantleCosmeticClass::Garment && !Draft.bOneSize && Draft.OutfitTargets.IsEmpty()
+		&& FMantleParametricOutfit::IsGarmentSource(Draft.Source.Get()))
+	{
+		// A skeletal-mesh or cloth-asset garment: wrapped as an Outfit it gets the standard fit sizes like any Outfit.
+		FMantleCosmeticDraft Wrapped;
+		TArray<TStrongObjectPtr<UObject>> KeepAlive;
+		TSharedPtr<void> Lease;
+		FString Why;
+		if (FMantleParametricOutfit::PrepareWrapped(Draft, Contract, Wrapped, KeepAlive, Lease, Why))
+		{
+			FMantleCosmeticPackage Result = BuildCore(Wrapped, Contract, OutHairPreview, OutHairSourceFace);
+			if (!Result.HasErrors()) { Result.Notes.Insert(TEXT("Made as a MetaHuman Outfit, so it uploads in Epic's standard body sizes."), 0); }
+			return Result;
+		}
+		FMantleCosmeticDraft Single = Draft;
+		Single.bOneSize = true;
+		FMantleCosmeticPackage Result = BuildCore(Single, Contract, OutHairPreview, OutHairSourceFace);
+		Result.Notes.Insert(FString::Printf(TEXT("Uploads in one size: it could not be made in sizes (%s)."), *Why), 0);
+		return Result;
+	}
 	if (Draft.Class == EMantleCosmeticClass::Garment && !Draft.OutfitTargets.IsEmpty())
 	{
 		FMantleCosmeticPackage Result;
