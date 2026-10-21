@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "MantleHeadFit.h"
+#include "MantleOutfitSections.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/SoftObjectPath.h"
 
@@ -58,14 +59,17 @@ struct MANTLEEDITOR_API FMantleParametricOutfit
 	/** Pure (tested): Points (component space, cm) span a whole body's height, feet to head. */
 	static bool IsWholeBody(TConstArrayView<FVector3f> Points);
 
+	/** Pure (tested): Sections (and the mesh's name) are a bare character body: no clothing section, a skin section (or a name for a body), not a head. */
+	static bool IsBareBody(TConstArrayView<FMantleOutfitSection> Sections, const FString& MeshName);
+
 	/** The character's bare body beside Garment (its folder or up to two above) whose separate clothing, by the Convert list's matching, includes Garment. */
 	static USkeletalMesh* FindBodyBeside(USkeletalMesh* Garment);
 
 	/**
-	 * Route 2: Make Outfit from garment (FMantleGarmentOutfit::Make) on the bare body beside the garment, whole mesh only. The
+	 * Route 2: Make Outfit from garment (FMantleGarmentOutfit::Make) on the bare body beside the garment, whole mesh only; Convert's bare-skin tick is confirmed automatically for that body (OutNote says so). The
 	 * Outfit is saved next to the body (<body folder>/Converted) and reused when it was made from this garment before. Null with OutWhy.
 	 */
-	static UChaosOutfitAsset* MakeOutfitBeside(const FMantleCosmeticDraft& Draft, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutWhy);
+	static UChaosOutfitAsset* MakeOutfitBeside(const FMantleCosmeticDraft& Draft, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutWhy, FString* OutNote = nullptr);
 
 	/**
 	 * Draft's skeletal-mesh or cloth-asset garment as a draft of an Outfit with the standard fit bodies as targets (what the

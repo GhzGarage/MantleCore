@@ -931,6 +931,20 @@ bool FMantleParametricOutfit::IsWholeBody(TConstArrayView<FVector3f> Points)
 	return High - Low >= MantleParametricOutfitPrivate::WholeBodyMinCm;
 }
 
+bool FMantleParametricOutfit::IsBareBody(TConstArrayView<FMantleOutfitSection> Sections, const FString& MeshName)
+{
+	bool bHasSkin = false;
+	for (const FMantleOutfitSection& Section : Sections)
+	{
+		const EMantleOutfitPiece Piece = FMantleOutfitSections::Classify(Section);
+		if (!FMantleOutfitSections::PieceSlot(Piece).IsEmpty()) { return false; }
+		bHasSkin |= Piece == EMantleOutfitPiece::Skin;
+	}
+	const TArray<FString> Words = FMantleOutfitSections::Words(MeshName);
+	const bool bNamedBody = Words.Contains(TEXT("body")) || Words.Contains(TEXT("nude")) || Words.Contains(TEXT("naked"));
+	return (bHasSkin || bNamedBody) && !Words.Contains(TEXT("head")) && !Words.Contains(TEXT("face"));
+}
+
 USkeletalMesh* FMantleParametricOutfit::FindBodyBeside(USkeletalMesh* Garment)
 {
 	if (!Garment) { return nullptr; }
@@ -954,18 +968,11 @@ USkeletalMesh* FMantleParametricOutfit::FindBodyBeside(USkeletalMesh* Garment)
 			if (Data.PackageName == Garment->GetPackage()->GetFName()) { continue; }
 			USkeletalMesh* Body = Cast<USkeletalMesh>(Data.GetAsset());
 			if (!Body || Body == Garment) { continue; }
-			const FString Worn = FMantleGarmentOutfit::WornClothing(*Body);
-			if (!Worn.IsEmpty()) { UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: wears %s"), *Body->GetName(), *Worn); continue; }
-			// A bare body: no clothing sections (WornClothing, above), a skin section or a name for a body, never a head; the whole-body height below rules out a part such as feet or a torso.
+			// A bare body: no clothing sections, a skin section, never a head (IsBareBody); the whole-body height below rules out a part such as feet or a torso.
 			TArray<int32> Slots;
-			const TArray<FMantleOutfitSection> Sections = FMantleCosmeticExport::ReadOutfitSections(Body, 0, Slots);
-			bool bHasSkin = false;
-			for (const FMantleOutfitSection& Section : Sections) { bHasSkin |= FMantleOutfitSections::Classify(Section) == EMantleOutfitPiece::Skin; }
-			const TArray<FString> Words = FMantleOutfitSections::Words(Body->GetName());
-			const bool bNamedBody = Words.Contains(TEXT("body")) || Words.Contains(TEXT("nude")) || Words.Contains(TEXT("naked"));
-			if (!(bHasSkin || bNamedBody) || Words.Contains(TEXT("head")) || Words.Contains(TEXT("face")))
+			if (!IsBareBody(FMantleCosmeticExport::ReadOutfitSections(Body, 0, Slots), Body->GetName()))
 			{
-				UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: not a bare body (has skin %d)"), *Body->GetName(), bHasSkin ? 1 : 0);
+				UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: not a bare body (clothing: %s)"), *Body->GetName(), *FMantleGarmentOutfit::WornClothing(*Body));
 				continue;
 			}
 			// A whole body: feet, hands or a torso alone are not the body the clothing was made for.
@@ -990,7 +997,7 @@ USkeletalMesh* FMantleParametricOutfit::FindBodyBeside(USkeletalMesh* Garment)
 	return nullptr;
 }
 
-UChaosOutfitAsset* FMantleParametricOutfit::MakeOutfitBeside(const FMantleCosmeticDraft& Draft, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutWhy)
+UChaosOutfitAsset* FMantleParametricOutfit::MakeOutfitBeside(const FMantleCosmeticDraft& Draft, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutWhy, FString* OutNote)
 {
 	USkeletalMesh* Garment = Cast<USkeletalMesh>(Draft.Source.Get());
 	USkeletalMesh* Body = FindBodyBeside(Garment);
@@ -1017,7 +1024,10 @@ UChaosOutfitAsset* FMantleParametricOutfit::MakeOutfitBeside(const FMantleCosmet
 	FMantleGarmentOutfitResult Result;
 	FString Json, Code;
 	USkeletalMesh* Garments[] = { Garment };
-	if (!FMantleGarmentOutfit::Make(*Body, Garments, FString(), FString(), Result, Json, Code, OutWhy)) { return nullptr; }
+	// Convert asks the creator to confirm the kept parts are bare skin. FindBodyBeside took a body with no clothing sections and a
+	// skin section, which is what that line asserts, and Make works on copies of it, so the line is confirmed here.
+	if (OutNote) { *OutNote = FString::Printf(TEXT("The bare-skin step was confirmed automatically for %s: it has no clothing sections and a skin section."), *Body->GetName()); }
+	if (!FMantleGarmentOutfit::Make(*Body, Garments, FString(), TEXT("Strip.0.BareSkin"), Result, Json, Code, OutWhy)) { return nullptr; }
 	const FMantleGarmentOutfitPiece* Piece = Result.Pieces.FindByPredicate([](const FMantleGarmentOutfitPiece& Entry) { return !Entry.Outfit.IsEmpty(); });
 	UChaosOutfitAsset* Outfit = Piece ? Cast<UChaosOutfitAsset>(FSoftObjectPath(Piece->Outfit).TryLoad()) : nullptr;
 	if (!Outfit)
@@ -1038,9 +1048,9 @@ bool FMantleParametricOutfit::PrepareWrapped(const FMantleCosmeticDraft& Draft, 
 	FString Route = TEXT("wrapped on its MetaHuman authoring body");
 	if (!Outfit)
 	{
-		FString WhyBeside;
-		Outfit = MakeOutfitBeside(Draft, KeepAlive, WhyBeside);
-		Route = TEXT("made with Make Outfit from garment on its character's body");
+		FString WhyBeside, NoteBeside;
+		Outfit = MakeOutfitBeside(Draft, KeepAlive, WhyBeside, &NoteBeside);
+		Route = FString::Printf(TEXT("made with Make Outfit from garment on its character's body. %s"), *NoteBeside);
 		if (!Outfit)
 		{
 			OutWhy = FString::Printf(TEXT("%s; and %s"), *WhyOnBody, *WhyBeside);

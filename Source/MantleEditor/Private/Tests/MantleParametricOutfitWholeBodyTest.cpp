@@ -1,4 +1,5 @@
 // Copyright Joshua Eger. All Rights Reserved.
+#include "MantleOutfitSections.h"
 #include "MantleParametricOutfit.h"
 
 #include "Misc/AutomationTest.h"
@@ -21,6 +22,31 @@ bool FMantleParametricOutfitWholeBodyTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("feet alone are not a body"), FMantleParametricOutfit::IsWholeBody(Feet));
 	TestFalse(TEXT("a torso alone is not a body"), FMantleParametricOutfit::IsWholeBody(Torso));
 	TestFalse(TEXT("no vertices are not a body"), FMantleParametricOutfit::IsWholeBody(TArray<FVector3f>()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleParametricOutfitBareBodyTest,
+	"Mantle.Editor.ParametricOutfit.BareBody",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleParametricOutfitBareBodyTest::RunTest(const FString& Parameters)
+{
+	auto Section = [](const TCHAR* Slot, const TCHAR* Material)
+	{
+		FMantleOutfitSection Result;
+		Result.SlotName = Slot;
+		Result.MaterialName = Material;
+		return Result;
+	};
+	// Only a body with no clothing section is confirmed as bare skin automatically.
+	TestTrue(TEXT("a body with skin, eyes and lashes is bare"), FMantleParametricOutfit::IsBareBody(
+		{ Section(TEXT("Body"), TEXT("M_Skin")), Section(TEXT("Eyes"), TEXT("M_Eyes")), Section(TEXT("Lashes"), TEXT("M_Lashes")) }, TEXT("SK_VampireGirl")));
+	TestFalse(TEXT("a body with a shirt section is not"), FMantleParametricOutfit::IsBareBody(
+		{ Section(TEXT("Body"), TEXT("M_Skin")), Section(TEXT("Shirt"), TEXT("M_Shirt")) }, TEXT("SK_Girl_Body")));
+	TestFalse(TEXT("a body with a pants section is not"), FMantleParametricOutfit::IsBareBody(
+		{ Section(TEXT("Body"), TEXT("M_Skin")), Section(TEXT("Pants"), TEXT("M_Pants")) }, TEXT("SK_Dressed")));
+	TestFalse(TEXT("a head is not a body"), FMantleParametricOutfit::IsBareBody({ Section(TEXT("Head"), TEXT("M_Skin")) }, TEXT("SK_Head")));
 	return true;
 }
 
