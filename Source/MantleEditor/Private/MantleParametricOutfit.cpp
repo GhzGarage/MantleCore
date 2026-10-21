@@ -12,6 +12,7 @@
 #include "MantleCosmeticExport.h"
 #include "MantleAvatarRefitFixer.h"
 #include "MantleGarmentOutfit.h"
+#include "MantleAvatarConvertFixer.h"
 #include "MantleNailSeating.h"
 #include "MeshDescription.h"
 #include "Rendering/SkeletalMeshLODModel.h"
@@ -53,8 +54,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogMantleParametricOutfit, Log, All);
 
 namespace MantleParametricOutfitPrivate
 {
-	/** How far the closest fifth of a garment's vertices may be from its authoring body's skin (cm). */
-	constexpr float WrapMaxCloseCm = 0.0f; // measuring
+	/** How far the closest twentieth of a garment's vertices may be from its authoring body's skin (cm). */
+	constexpr float WrapMaxCloseCm = 1.5f;
 
 	void Finish(USkinnedAsset* Asset)
 	{
@@ -871,48 +872,143 @@ UChaosOutfitAsset* FMantleParametricOutfit::WrapGarment(UObject* Garment, const 
 		1500, KeepAlive, OutError);
 }
 
-bool FMantleParametricOutfit::PrepareWrapped(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract, FMantleCosmeticDraft& OutDraft,
-	TArray<TStrongObjectPtr<UObject>>& KeepAlive, TSharedPtr<void>& Lease, FString& OutWhy)
+UChaosOutfitAsset* FMantleParametricOutfit::WrapOnAuthoringBody(const FMantleCosmeticDraft& Draft, TArray<TStrongObjectPtr<UObject>>& KeepAlive,
+	TSharedPtr<void>& Lease, FString& OutWhy)
 {
 	USkeletalMesh* SourceBody = nullptr;
 	if (!Draft.AuthoringBody.IsValid())
 	{
 		OutWhy = TEXT("no MetaHuman authoring body was found for it");
-		return false;
+		return nullptr;
 	}
-	if (!FindSourceBody(Draft.AuthoringBody.Get(), Lease, SourceBody, OutWhy)) { return false; }
+	if (!FindSourceBody(Draft.AuthoringBody.Get(), Lease, SourceBody, OutWhy)) { return nullptr; }
 	// The authoring body is found by search, so check the garment really sits on it: a Chaos resize from the wrong body leaves
-	// the garment floating or buried on every size. Garments touch their body somewhere, so the closest fifth of the garment's
-	// vertices must lie close to its skin.
+	// the garment floating or buried on every size. A garment made on its body touches it, so its closest vertices must
+	// lie on the skin.
+	USkeletalMesh* Worn = GarmentMesh(Draft.Source.Get(), KeepAlive, OutWhy);
+	TArray<FVector3f> GarmentPoints, BodyPoints;
+	if (!Worn) { return nullptr; }
+	if (!FMantleFitBodies::ReadVertices(Worn, 0, GarmentPoints) || !FMantleFitBodies::ReadVertices(SourceBody, 0, BodyPoints) || BodyPoints.IsEmpty())
 	{
-		USkeletalMesh* Worn = GarmentMesh(Draft.Source.Get(), KeepAlive, OutWhy);
-		TArray<FVector3f> GarmentPoints, BodyPoints;
-		if (!Worn) { return false; }
-		if (!FMantleFitBodies::ReadVertices(Worn, 0, GarmentPoints) || !FMantleFitBodies::ReadVertices(SourceBody, 0, BodyPoints) || BodyPoints.IsEmpty())
+		OutWhy = TEXT("the garment or its authoring body has no geometry to check the fit with");
+		return nullptr;
+	}
+	TArray<float> Nearest;
+	for (int32 Index = 0; Index < GarmentPoints.Num(); Index += 4)
+	{
+		float Best = TNumericLimits<float>::Max();
+		for (const FVector3f& Point : BodyPoints) { Best = FMath::Min(Best, FVector3f::DistSquared(GarmentPoints[Index], Point)); }
+		Nearest.Add(FMath::Sqrt(Best));
+	}
+	Nearest.Sort();
+	auto Percentile = [&Nearest](const int32 Percent) { return Nearest.IsEmpty() ? TNumericLimits<float>::Max() : Nearest[FMath::Min(Nearest.Num() - 1, Nearest.Num() * Percent / 100)]; };
+	UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_WRAP_FIT garment=%s body=%s p2=%.2f p5=%.2f p10=%.2f p20=%.2f p50=%.2f cm"), *Draft.Source->GetName(),
+		*Draft.AuthoringBody->GetName(), Percentile(2), Percentile(5), Percentile(10), Percentile(20), Percentile(50));
+	if (Percentile(5) > MantleParametricOutfitPrivate::WrapMaxCloseCm)
+	{
+		OutWhy = FString::Printf(TEXT("it does not sit on the authoring body %s found for it (its closest vertices are %.1f cm from the skin)"), *Draft.AuthoringBody->GetName(), Percentile(5));
+		return nullptr;
+	}
+	return WrapGarment(Draft.Source.Get(), Draft.KeepSlots, SourceBody, KeepAlive, OutWhy);
+}
+
+USkeletalMesh* FMantleParametricOutfit::FindBodyBeside(USkeletalMesh* Garment)
+{
+	if (!Garment) { return nullptr; }
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	FString Folder = FPackageName::GetLongPackagePath(Garment->GetOutermost()->GetName());
+	// The garment's folder and up to two above it: a character's clothing sits in or under its body's folder.
+	for (int32 Level = 0; Level < 3 && Folder.Len() > 1; ++Level, Folder = FPackageName::GetLongPackagePath(Folder))
+	{
+		FARFilter Filter;
+		Filter.PackagePaths.Add(FName(*Folder));
+		Filter.ClassPaths.Add(USkeletalMesh::StaticClass()->GetClassPathName());
+		TArray<FAssetData> Meshes;
+		Registry.GetAssets(Filter, Meshes);
+		for (const FAssetData& Data : Meshes)
 		{
-			OutWhy = TEXT("the garment or its authoring body has no geometry to check the fit with");
-			return false;
+			FString Skeleton;
+			Data.GetTagValue(TEXT("Skeleton"), Skeleton);
+			const FString Name = Data.AssetName.ToString();
+			const FString Package = Data.PackageName.ToString();
+			if (!FMantleCosmeticExport::CouldBeAuthoringBody(Name, Package, Skeleton)
+				|| !(Name.Contains(TEXT("Body"), ESearchCase::IgnoreCase) || Package.Contains(TEXT("/Body/"), ESearchCase::IgnoreCase)))
+			{
+				continue;
+			}
+			USkeletalMesh* Body = Cast<USkeletalMesh>(Data.GetAsset());
+			if (!Body || Body == Garment || !FMantleGarmentOutfit::WornClothing(*Body).IsEmpty()) { continue; }
+			// The body names this garment among its separate clothing (the Convert list's own matching).
+			TArray<FMantleConvertGarment> Garments;
+			TArray<FString> NotOffered;
+			FMantleGarmentOutfit::FindGarments(*Body, Garments, NotOffered);
+			if (Garments.ContainsByPredicate([Garment](const FMantleConvertGarment& Entry) { return Entry.Mesh.Get() == Garment && Entry.Why.IsEmpty(); }))
+			{
+				return Body;
+			}
 		}
-		TArray<float> Nearest;
-		for (int32 Index = 0; Index < GarmentPoints.Num(); Index += 4)
+	}
+	return nullptr;
+}
+
+UChaosOutfitAsset* FMantleParametricOutfit::MakeOutfitBeside(const FMantleCosmeticDraft& Draft, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutWhy)
+{
+	USkeletalMesh* Garment = Cast<USkeletalMesh>(Draft.Source.Get());
+	USkeletalMesh* Body = FindBodyBeside(Garment);
+	if (!Body) { OutWhy = TEXT("no bare character body was found next to it"); return nullptr; }
+	if (Draft.KeepSlots.IsSet()) { OutWhy = TEXT("Make Outfit from garment takes the whole mesh, not chosen sections"); return nullptr; }
+	// Made once: an Outfit saved earlier from this garment is reused.
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	FARFilter Filter;
+	Filter.PackagePaths.Add(FName(*(FPackageName::GetLongPackagePath(Body->GetOutermost()->GetName()) / TEXT("Converted"))));
+	Filter.bRecursivePaths = true;
+	Filter.ClassPaths.Add(UChaosOutfitAsset::StaticClass()->GetClassPathName());
+	TArray<FAssetData> Existing;
+	Registry.GetAssets(Filter, Existing);
+	for (const FAssetData& Data : Existing)
+	{
+		UChaosOutfitAsset* Outfit = Cast<UChaosOutfitAsset>(Data.GetAsset());
+		const FString* MadeFrom = Outfit ? Outfit->GetPackage()->GetMetaData().FindValue(Outfit, FMantleGarmentOutfit::MadeFromGarmentKey) : nullptr;
+		if (MadeFrom && *MadeFrom == Garment->GetPathName())
 		{
-			float Best = TNumericLimits<float>::Max();
-			for (const FVector3f& Point : BodyPoints) { Best = FMath::Min(Best, FVector3f::DistSquared(GarmentPoints[Index], Point)); }
-			Nearest.Add(FMath::Sqrt(Best));
+			KeepAlive.Emplace(Outfit);
+			return Outfit;
 		}
-		Nearest.Sort();
-		const float Close = Nearest.IsEmpty() ? TNumericLimits<float>::Max() : Nearest[Nearest.Num() / 5];
-		auto Percentile = [&Nearest](const int32 Percent) { return Nearest.IsEmpty() ? -1.0f : Nearest[FMath::Min(Nearest.Num() - 1, Nearest.Num() * Percent / 100)]; };
-		UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_WRAP_FIT garment=%s body=%s p2=%.2f p5=%.2f p10=%.2f p20=%.2f p50=%.2f cm"), *Draft.Source->GetName(),
-			*Draft.AuthoringBody->GetName(), Percentile(2), Percentile(5), Percentile(10), Percentile(20), Percentile(50));
-		if (Close > MantleParametricOutfitPrivate::WrapMaxCloseCm)
+	}
+	FMantleGarmentOutfitResult Result;
+	FString Json, Code;
+	USkeletalMesh* Garments[] = { Garment };
+	if (!FMantleGarmentOutfit::Make(*Body, Garments, FString(), FString(), Result, Json, Code, OutWhy)) { return nullptr; }
+	const FMantleGarmentOutfitPiece* Piece = Result.Pieces.FindByPredicate([](const FMantleGarmentOutfitPiece& Entry) { return !Entry.Outfit.IsEmpty(); });
+	UChaosOutfitAsset* Outfit = Piece ? Cast<UChaosOutfitAsset>(FSoftObjectPath(Piece->Outfit).TryLoad()) : nullptr;
+	if (!Outfit)
+	{
+		OutWhy = Result.Pieces.IsEmpty() || Result.Pieces[0].Error.IsEmpty() ? FString(TEXT("Make Outfit from garment made nothing")) : Result.Pieces[0].Error;
+		return nullptr;
+	}
+	KeepAlive.Emplace(Outfit);
+	return Outfit;
+}
+
+bool FMantleParametricOutfit::PrepareWrapped(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract, FMantleCosmeticDraft& OutDraft,
+	TArray<TStrongObjectPtr<UObject>>& KeepAlive, TSharedPtr<void>& Lease, FString& OutWhy, FString* OutRoute)
+{
+	// The first route that applies: the garment sits on a MetaHuman authoring body, or its character's bare body is beside it.
+	FString WhyOnBody;
+	UChaosOutfitAsset* Outfit = WrapOnAuthoringBody(Draft, KeepAlive, Lease, WhyOnBody);
+	FString Route = TEXT("wrapped on its MetaHuman authoring body");
+	if (!Outfit)
+	{
+		FString WhyBeside;
+		Outfit = MakeOutfitBeside(Draft, KeepAlive, WhyBeside);
+		Route = TEXT("made with Make Outfit from garment on its character's body");
+		if (!Outfit)
 		{
-			OutWhy = FString::Printf(TEXT("it does not sit on the authoring body %s found for it (its closest fifth is %.1f cm from the skin)"), *Draft.AuthoringBody->GetName(), Close);
+			OutWhy = FString::Printf(TEXT("%s; and %s"), *WhyOnBody, *WhyBeside);
 			return false;
 		}
 	}
-	UChaosOutfitAsset* Outfit = WrapGarment(Draft.Source.Get(), Draft.KeepSlots, SourceBody, KeepAlive, OutWhy);
-	if (!Outfit) { return false; }
+	if (OutRoute) { *OutRoute = Route; }
 	OutDraft = Draft;
 	OutDraft.Source = Outfit;
 	OutDraft.KeepSlots.Reset();

@@ -49,12 +49,29 @@ struct MANTLEEDITOR_API FMantleParametricOutfit
 	static bool FindSourceBody(const USkeletalMesh* AuthoringBody, TSharedPtr<void>& OutLease, USkeletalMesh*& OutBody, FString& OutError);
 
 	/**
-	 * Draft's skeletal-mesh or cloth-asset garment as a draft of its wrapped Outfit with the standard fit bodies as targets
-	 * (what the Outfit route builds a variant for). False with OutWhy when it cannot (no MetaHuman authoring body, the
-	 * wrapping or the fit bodies failed): the caller then uploads the garment in its one size. Lease and KeepAlive must outlive OutDraft.
+	 * Route 1: the garment wrapped as an Outfit on its MetaHuman authoring body (Draft.AuthoringBody, a Mantle-converted Creator
+	 * body, which must be the body the garment sits on: checked by how close its closest vertices are to the skin). Null with OutWhy.
+	 */
+	static UChaosOutfitAsset* WrapOnAuthoringBody(const FMantleCosmeticDraft& Draft, TArray<TStrongObjectPtr<UObject>>& KeepAlive,
+		TSharedPtr<void>& Lease, FString& OutWhy);
+
+	/** The character's bare body beside Garment (its folder or up to two above) whose separate clothing, by the Convert list's matching, includes Garment. */
+	static USkeletalMesh* FindBodyBeside(USkeletalMesh* Garment);
+
+	/**
+	 * Route 2: Make Outfit from garment (FMantleGarmentOutfit::Make) on the bare body beside the garment, whole mesh only. The
+	 * Outfit is saved next to the body (<body folder>/Converted) and reused when it was made from this garment before. Null with OutWhy.
+	 */
+	static UChaosOutfitAsset* MakeOutfitBeside(const FMantleCosmeticDraft& Draft, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutWhy);
+
+	/**
+	 * Draft's skeletal-mesh or cloth-asset garment as a draft of an Outfit with the standard fit bodies as targets (what the
+	 * Outfit route builds a variant for), by the first route that applies: WrapOnAuthoringBody, then MakeOutfitBeside. False
+	 * with OutWhy when neither does (or the fit bodies failed): the caller then uploads the garment in its one size.
+	 * OutRoute says which route made it. Lease and KeepAlive must outlive OutDraft.
 	 */
 	static bool PrepareWrapped(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract, FMantleCosmeticDraft& OutDraft,
-		TArray<TStrongObjectPtr<UObject>>& KeepAlive, TSharedPtr<void>& Lease, FString& OutWhy);
+		TArray<TStrongObjectPtr<UObject>>& KeepAlive, TSharedPtr<void>& Lease, FString& OutWhy, FString* OutRoute = nullptr);
 	static bool ListSizes(UObject* Source, TArray<FMantleOutfitSourceSize>& OutSizes, FString& OutError);
 
 	/**

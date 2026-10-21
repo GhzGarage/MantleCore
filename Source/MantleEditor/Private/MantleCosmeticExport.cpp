@@ -5056,11 +5056,11 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 	FMantleCosmeticDraft Wrapped;
 	TArray<TStrongObjectPtr<UObject>> KeepAlive;
 	TSharedPtr<void> Lease;
-	FString Why;
-	if (FMantleParametricOutfit::PrepareWrapped(Draft, Contract, Wrapped, KeepAlive, Lease, Why))
+	FString Why, Route;
+	if (FMantleParametricOutfit::PrepareWrapped(Draft, Contract, Wrapped, KeepAlive, Lease, Why, &Route))
 	{
 		FMantleCosmeticPackage Result = BuildPrepared(Wrapped, Contract, OutHairPreview, OutHairSourceFace);
-		if (!Result.HasErrors()) { Result.Notes.Insert(TEXT("Made as a MetaHuman Outfit, so it uploads in Epic's standard body sizes."), 0); }
+		if (!Result.HasErrors()) { Result.Notes.Insert(FString::Printf(TEXT("Made as a MetaHuman Outfit (%s), so it uploads in Epic's standard body sizes."), *Route), 0); }
 		return Result;
 	}
 	// One size, as the garment is: a cloth asset as its render geometry.
