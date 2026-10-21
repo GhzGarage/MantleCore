@@ -188,22 +188,23 @@ namespace MantleDevRenderOutfitFitsPrivate
 			{
 				Authored = nullptr;
 			}
-			const TPair<const TCHAR*, FMantleThumbnailSubject> Stages[] = {
-				{ TEXT("original"), FMantleCosmeticThumbnail::GarmentSubject(Cast<USkeletalMesh>(Outfit), Body, nullptr) },
-				{ TEXT("twin"), FMantleCosmeticThumbnail::GarmentSubject(Authored, Twin, nullptr) } };
-			for (const TPair<const TCHAR*, FMantleThumbnailSubject>& Stage : Stages)
+			const bool bMade = Body && Authored && Made->GetPackage()->GetMetaData().FindValue(Made, FMantleGarmentOutfit::MadeFromGarmentKey);
+			for (const TCHAR* Stage : { TEXT("original"), TEXT("twin") })
 			{
-				if (!Body || !Authored || !Made->GetPackage()->GetMetaData().FindValue(Made, FMantleGarmentOutfit::MadeFromGarmentKey))
+				if (!bMade)
 				{
 					break;
 				}
+				const bool bOriginal = FCString::Strcmp(Stage, TEXT("original")) == 0;
+				const FMantleThumbnailSubject Subject = bOriginal ? FMantleCosmeticThumbnail::GarmentSubject(Cast<USkeletalMesh>(Outfit), Body, nullptr)
+					: FMantleCosmeticThumbnail::GarmentSubject(Authored, Twin, nullptr);
 				for (const TCHAR* View : { TEXT("front"), TEXT("back") })
 				{
-					FMantleThumbnailSubject Shot = Stage.Value;
+					FMantleThumbnailSubject Shot = Subject;
 					if (FCString::Strcmp(View, TEXT("back")) == 0) { Shot.View.Yaw += 180.0f; }
-					const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), Stage.Key, View));
+					const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), Stage, View));
 					const bool bWritten = Save(Shot, Size, File, Why);
-					UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s %s %s"), Stage.Key, View, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Why);
+					UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s %s %s"), Stage, View, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Why);
 				}
 			}
 		}
