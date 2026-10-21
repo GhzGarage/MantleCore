@@ -10,7 +10,6 @@
 #include "Engine/StaticMesh.h"
 #include "HAL/FileManager.h"
 #include "Materials/MaterialInterface.h"
-#include "ObjectTools.h"
 #include "UObject/UObjectGlobals.h"
 #include "MeshDescription.h"
 #include "Misc/PackageName.h"
@@ -408,8 +407,7 @@ namespace MantleWeaponRigidMeshPrivate
 	}
 
 	/**
-	 * Clears the way for a re-export: the assets a previous export left at these names are deleted, with whatever pointed at
-	 * them cleared, and their files removed, so the new assets are saved into a clean package. A first export finds nothing.
+	 * Clears the way for a re-export: the assets a previous export left at these names are moved aside, and their files removed, so the new assets are saved into a clean package. A first export finds nothing.
 	 */
 	void DeleteExisting(const TArray<TPair<FString, FName>>& Assets)
 	{
@@ -428,7 +426,17 @@ namespace MantleWeaponRigidMeshPrivate
 		}
 		if (Doomed.Num() > 0)
 		{
-			ObjectTools::ForceDeleteObjects(Doomed, false);
+			// Not ObjectTools::ForceDeleteObjects: it unloads packages through the editor selection, which trips the engine
+			// ensure "Element type ID '0' has not been registered" when the typed element registry is not set up (-nullrhi
+			// runs, CI). The old assets move to the transient package and become garbage; their files go below.
+			for (UObject* Old : Doomed)
+			{
+				FAssetRegistryModule::AssetDeleted(Old);
+				Old->ClearFlags(RF_Public | RF_Standalone);
+				Old->Rename(*MakeUniqueObjectName(GetTransientPackage(), Old->GetClass(), Old->GetFName()).ToString(),
+					GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+				Old->MarkAsGarbage();
+			}
 		}
 		// A file the delete left behind (a package the registry did not know) would block the save.
 		for (const TPair<FString, FName>& Asset : Assets)
