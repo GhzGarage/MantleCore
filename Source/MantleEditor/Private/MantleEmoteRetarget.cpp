@@ -397,38 +397,54 @@ TArray<FName> FMantleEmoteRetarget::HandBones(const bool bArms)
 TMap<FName, FQuat> FMantleEmoteRetarget::MatchRestRotations(const FReferenceSkeleton& Source, const TMap<FName, FQuat>& SourceOffsets,
 	const FReferenceSkeleton& Target, const TMap<FName, FQuat>& TargetOffsets, TConstArrayView<FName> Bones, double* OutLargestDegrees)
 {
-	// Each skeleton's retarget pose in component space (rotations only): reference local * offset, parent first.
-	auto Globals = [](const FReferenceSkeleton& Skeleton, const TMap<FName, FQuat>& Offsets)
+	// A bone's retarget-pose local transform: reference local, its rotation * offset (IK Rig's retarget pose).
+	auto LocalOf = [](const FReferenceSkeleton& Skeleton, const TMap<FName, FQuat>& Offsets, const int32 Bone)
 	{
-		TArray<FQuat> Out;
-		for (int32 Bone = 0; Bone < Skeleton.GetRawBoneNum(); ++Bone)
+		FTransform Local = Skeleton.GetRawRefBonePose()[Bone];
+		if (const FQuat* Offset = Offsets.Find(Skeleton.GetBoneName(Bone)))
 		{
-			const FQuat* Offset = Offsets.Find(Skeleton.GetBoneName(Bone));
-			const FQuat Local = Skeleton.GetRawRefBonePose()[Bone].GetRotation() * (Offset ? *Offset : FQuat::Identity);
-			const int32 Parent = Skeleton.GetRawParentIndex(Bone);
-			Out.Add((Parent == INDEX_NONE ? Local : Out[Parent] * Local).GetNormalized());
+			Local.SetRotation((Local.GetRotation() * *Offset).GetNormalized());
 		}
-		return Out;
+		return Local;
 	};
-	// A matched bone's one matched child on both skeletons (none for a hand, which has five, or a fingertip).
-	auto OnlyChild = [&](const FName Name)
+	TArray<FTransform> SourceGlobal;
+	for (int32 Bone = 0; Bone < Source.GetRawBoneNum(); ++Bone)
 	{
-		const int32 Bone = Target.FindRawBoneIndex(Name);
-		FName Found;
-		int32 Count = 0;
-		for (int32 Child = Bone + 1; Child < Target.GetRawBoneNum(); ++Child)
+		const int32 Parent = Source.GetRawParentIndex(Bone);
+		const FTransform Local = LocalOf(Source, SourceOffsets, Bone);
+		SourceGlobal.Add(Parent == INDEX_NONE ? Local : Local * SourceGlobal[Parent]);
+	}
+	// Where Descendant sits in Ancestor's frame, through the bones between (the retarget pose's locals).
+	auto Within = [&LocalOf](const FReferenceSkeleton& Skeleton, const TMap<FName, FQuat>& Offsets, const int32 Ancestor, const int32 Descendant)
+	{
+		FTransform Out = FTransform::Identity;
+		for (int32 Bone = Descendant; Bone != Ancestor; Bone = Skeleton.GetRawParentIndex(Bone))
 		{
-			const FName ChildName = Target.GetBoneName(Child);
-			if (Target.GetRawParentIndex(Child) == Bone && Bones.Contains(ChildName) && Source.FindRawBoneIndex(ChildName) != INDEX_NONE)
+			if (Bone == INDEX_NONE)
 			{
-				Found = ChildName;
-				++Count;
+				return FVector::ZeroVector;
+			}
+			Out = Out * LocalOf(Skeleton, Offsets, Bone);
+		}
+		return Out.GetTranslation();
+	};
+	auto IsUnder = [](const FReferenceSkeleton& Skeleton, const int32 Ancestor, int32 Bone)
+	{
+		for (; Bone != INDEX_NONE; Bone = Skeleton.GetRawParentIndex(Bone))
+		{
+			if (Bone == Ancestor)
+			{
+				return true;
 			}
 		}
-		return Count == 1 ? Found : NAME_None;
+		return false;
 	};
-	const TArray<FQuat> SourceGlobal = Globals(Source, SourceOffsets);
-	TArray<FQuat> TargetGlobal = Globals(Target, TargetOffsets);
+
+	// Parent first, each matched bone turned (from its own rotation, never copying the source's: the skeletons' bone axes
+	// differ, the UE4 Mannequin's most) so that it points where the source's points: a bone with one matched child at that
+	// child; a hand at its middle finger, its palm turned so the index-to-pinky line matches (a hand without those, as a bone). A bone the turn cannot be
+	// read for (no matched child, no fingers) is left as it is.
+	TArray<FQuat> TargetGlobal;
 	TMap<FName, FQuat> Out;
 	double Largest = 0.0;
 	for (int32 Bone = 0; Bone < Target.GetRawBoneNum(); ++Bone)
@@ -437,35 +453,71 @@ TMap<FName, FQuat> FMantleEmoteRetarget::MatchRestRotations(const FReferenceSkel
 		const int32 SourceBone = Source.FindRawBoneIndex(Name);
 		const int32 Parent = Target.GetRawParentIndex(Bone);
 		const FQuat ParentGlobal = Parent == INDEX_NONE ? FQuat::Identity : TargetGlobal[Parent];
-		if (Bones.Contains(Name) && SourceBone != INDEX_NONE)
+		const FQuat Global = (ParentGlobal * LocalOf(Target, TargetOffsets, Bone).GetRotation()).GetNormalized();
+		TargetGlobal.Add(Global);
+		if (!Bones.Contains(Name) || SourceBone == INDEX_NONE)
 		{
-			// The source's rotation in component space, turned the little more that points this bone at its child as the
-			// source's points (the two skeletons place a finger's next joint a little differently in the bone's frame).
-			FQuat Global = SourceGlobal[SourceBone];
-			const FName Child = OnlyChild(Name);
-			if (!Child.IsNone())
+			continue;
+		}
+		// The same bone's vector to another (by name) in each skeleton's component space; zero when either lacks it.
+		auto Toward = [&](const FString& Other, FVector& OutTarget, FVector& OutSource)
+		{
+			const int32 TargetOther = Target.FindRawBoneIndex(FName(*Other));
+			const int32 SourceOther = Source.FindRawBoneIndex(FName(*Other));
+			OutTarget = OutSource = FVector::ZeroVector;
+			if (TargetOther != INDEX_NONE && SourceOther != INDEX_NONE && IsUnder(Target, Bone, TargetOther) && IsUnder(Source, SourceBone, SourceOther))
 			{
-				const FVector TargetDirection = Global.RotateVector(Target.GetRawRefBonePose()[Target.FindRawBoneIndex(Child)].GetTranslation());
-				const FVector SourceDirection = Global.RotateVector(Source.GetRawRefBonePose()[Source.FindRawBoneIndex(Child)].GetTranslation());
-				if (!TargetDirection.IsNearlyZero() && !SourceDirection.IsNearlyZero())
+				OutTarget = Global.RotateVector(Within(Target, TargetOffsets, Bone, TargetOther));
+				OutSource = SourceGlobal[SourceBone].GetRotation().RotateVector(Within(Source, SourceOffsets, SourceBone, SourceOther));
+			}
+			return !OutTarget.IsNearlyZero() && !OutSource.IsNearlyZero();
+		};
+		FQuat Turn = FQuat::Identity;
+		bool bTurned = false;
+		const FString Text = Name.ToString();
+		if (Text.StartsWith(TEXT("hand_")))
+		{
+			const FString Side = Text.RightChop(5);
+			FVector TargetMiddle, SourceMiddle, TargetIndex, SourceIndex, TargetPinky, SourcePinky;
+			if (Toward(TEXT("middle_01_") + Side, TargetMiddle, SourceMiddle) && Toward(TEXT("index_01_") + Side, TargetIndex, SourceIndex)
+				&& Toward(TEXT("pinky_01_") + Side, TargetPinky, SourcePinky))
+			{
+				const FQuat TargetFrame = FRotationMatrix::MakeFromXY(TargetMiddle, TargetIndex - TargetPinky).ToQuat();
+				const FQuat SourceFrame = FRotationMatrix::MakeFromXY(SourceMiddle, SourceIndex - SourcePinky).ToQuat();
+				Turn = SourceFrame * TargetFrame.Inverse();
+				bTurned = true;
+			}
+		}
+		if (!bTurned)
+		{
+			// The one matched child.
+			FName Child;
+			int32 Count = 0;
+			for (int32 Each = Bone + 1; Each < Target.GetRawBoneNum(); ++Each)
+			{
+				if (Target.GetRawParentIndex(Each) == Bone && Bones.Contains(Target.GetBoneName(Each)) && Source.FindRawBoneIndex(Target.GetBoneName(Each)) != INDEX_NONE)
 				{
-					Global = (FQuat::FindBetweenVectors(TargetDirection, SourceDirection) * Global).GetNormalized();
+					Child = Target.GetBoneName(Each);
+					++Count;
 				}
 			}
-			const FQuat Local = ParentGlobal.Inverse() * Global;
-			const FQuat Offset = (Target.GetRawRefBonePose()[Bone].GetRotation().Inverse() * Local).GetNormalized();
-			const FQuat* Was = TargetOffsets.Find(Name);
-			Largest = FMath::Max(Largest, FMath::RadiansToDegrees(Offset.AngularDistance(Was ? *Was : FQuat::Identity)));
-			Out.Add(Name, Offset);
-			TargetGlobal[Bone] = Global;
+			FVector TargetChild, SourceChild;
+			if (Count == 1 && Toward(Child.ToString(), TargetChild, SourceChild))
+			{
+				Turn = FQuat::FindBetweenVectors(TargetChild, SourceChild);
+				bTurned = true;
+			}
 		}
-		else
+		if (!bTurned)
 		{
-			// Unchanged locally; its rotation follows its parent's new one.
-			const FQuat* Offset = TargetOffsets.Find(Name);
-			const FQuat Local = Target.GetRawRefBonePose()[Bone].GetRotation() * (Offset ? *Offset : FQuat::Identity);
-			TargetGlobal[Bone] = (ParentGlobal * Local).GetNormalized();
+			continue;
 		}
+		const FQuat Matched = (Turn * Global).GetNormalized();
+		TargetGlobal[Bone] = Matched;
+		const FQuat Offset = (Target.GetRawRefBonePose()[Bone].GetRotation().Inverse() * (ParentGlobal.Inverse() * Matched)).GetNormalized();
+		const FQuat* Was = TargetOffsets.Find(Name);
+		Largest = FMath::Max(Largest, FMath::RadiansToDegrees(Offset.AngularDistance(Was ? *Was : FQuat::Identity)));
+		Out.Add(Name, Offset);
 	}
 	if (OutLargestDegrees)
 	{
