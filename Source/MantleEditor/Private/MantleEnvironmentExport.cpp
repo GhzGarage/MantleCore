@@ -330,6 +330,33 @@ namespace MantleEnvironmentExportPrivate
 	{
 		switch (Format)
 		{
+		case TSF_G8:
+		{
+			const FColor Color(Texel[0], Texel[0], Texel[0], 255);
+			Out = bSRGB ? FLinearColor(Color) : Color.ReinterpretAsLinear();
+			return true;
+		}
+		case TSF_G16:
+		{
+			uint16 Grey;
+			FMemory::Memcpy(&Grey, Texel, sizeof(Grey));
+			Out = FLinearColor(Grey / 65535.0f, Grey / 65535.0f, Grey / 65535.0f, 1.0f);
+			return true;
+		}
+		case TSF_R16F:
+		{
+			FFloat16 Red;
+			FMemory::Memcpy(&Red, Texel, sizeof(Red));
+			Out = FLinearColor(Red.GetFloat(), Red.GetFloat(), Red.GetFloat(), 1.0f);
+			return true;
+		}
+		case TSF_R32F:
+		{
+			float Red;
+			FMemory::Memcpy(&Red, Texel, sizeof(Red));
+			Out = FLinearColor(Red, Red, Red, 1.0f);
+			return true;
+		}
 		case TSF_BGRA8:
 		{
 			const FColor Color(Texel[2], Texel[1], Texel[0], Texel[3]);
@@ -364,6 +391,103 @@ namespace MantleEnvironmentExportPrivate
 		default:
 			return false;
 		}
+	}
+
+	/** The bytes one texel of an uncompressed built (platform) pixel format takes, and the source format that reads the same bytes; 0 for a format not handled (block compressed). */
+	int64 PlatformTexelFormat(const EPixelFormat Format, ETextureSourceFormat& OutSource)
+	{
+		switch (Format)
+		{
+		case PF_FloatRGBA:
+			OutSource = TSF_RGBA16F;
+			return 8;
+		case PF_A32B32G32R32F:
+			OutSource = TSF_RGBA32F;
+			return 16;
+		case PF_B8G8R8A8:
+			OutSource = TSF_BGRA8;
+			return 4;
+		case PF_G8:
+			OutSource = TSF_G8;
+			return 1;
+		case PF_R16F:
+			OutSource = TSF_R16F;
+			return 2;
+		case PF_R32_FLOAT:
+			OutSource = TSF_R32F;
+			return 4;
+		default:
+			return 0;
+		}
+	}
+
+	/**
+	 * The mean luminance over a cube's six faces, each Size texels a side, one after the other from Data (+X, -X, +Y, -Y, +Z, -Z),
+	 * sampled about every Step texels, each weighted by the solid angle it covers. Negative when a texel cannot be read.
+	 */
+	double SixFaceMean(const uint8* Data, const int32 Size, const int64 BytesPerTexel, const ETextureSourceFormat Format, const bool bSRGB,
+		const bool bLowerHemisphereBlack, const int32 Step)
+	{
+		const int64 SliceBytes = static_cast<int64>(Size) * Size * BytesPerTexel;
+		double Sum = 0.0;
+		double Weights = 0.0;
+		for (int32 Face = 0; Face < 6; ++Face)
+		{
+			for (int32 Y = Step / 2; Y < Size; Y += Step)
+			{
+				for (int32 X = Step / 2; X < Size; X += Step)
+				{
+					// The solid angle a texel covers on the unit cube, up to a constant: (1 + u^2 + v^2)^-1.5.
+					const double U = (X + 0.5) / Size * 2.0 - 1.0;
+					const double V = (Y + 0.5) / Size * 2.0 - 1.0;
+					const double Weight = FMath::Pow(1.0 + U * U + V * V, -1.5);
+					// Faces are +X, -X, +Y, -Y, +Z, -Z, the side faces upright: the lower half is the rows past the middle.
+					const bool bBlack = bLowerHemisphereBlack && (Face == 5 || (Face < 4 && Y >= Size / 2));
+					if (!bBlack)
+					{
+						FLinearColor Color;
+						if (!ReadSourceTexel(Data + Face * SliceBytes + (static_cast<int64>(Y) * Size + X) * BytesPerTexel, Format, bSRGB, Color))
+						{
+							return -1.0;
+						}
+						Sum += Weight * Color.GetLuminance();
+					}
+					Weights += Weight;
+				}
+			}
+		}
+		return Weights > 0.0 ? Sum / Weights : -1.0;
+	}
+
+	/**
+	 * The mean luminance over a long-lat (equirectangular) image, Width by Height texels, the top row straight up: each row is
+	 * weighted by the solid angle it covers, cos(latitude). Samples about 1M texels at most. Negative when a texel cannot be read.
+	 */
+	double LongLatMean(const uint8* Data, const int32 Width, const int32 Height, const int64 BytesPerTexel, const ETextureSourceFormat Format,
+		const bool bSRGB, const bool bLowerHemisphereBlack)
+	{
+		const int32 Step = FMath::Max(1, FMath::CeilToInt(FMath::Sqrt(static_cast<double>(Width) * Height / 1048576.0)));
+		double Sum = 0.0;
+		double Weights = 0.0;
+		for (int32 Y = Step / 2; Y < Height; Y += Step)
+		{
+			const double Latitude = (0.5 - (Y + 0.5) / Height) * UE_DOUBLE_PI;
+			const double Weight = FMath::Cos(Latitude);
+			for (int32 X = Step / 2; X < Width; X += Step)
+			{
+				if (!bLowerHemisphereBlack || Latitude > 0.0)
+				{
+					FLinearColor Color;
+					if (!ReadSourceTexel(Data + (static_cast<int64>(Y) * Width + X) * BytesPerTexel, Format, bSRGB, Color))
+					{
+						return -1.0;
+					}
+					Sum += Weight * Color.GetLuminance();
+				}
+				Weights += Weight;
+			}
+		}
+		return Weights > 0.0 ? Sum / Weights : -1.0;
 	}
 
 	/** The actor an entity id was exported from, null when none. */
@@ -402,10 +526,11 @@ namespace MantleEnvironmentExportPrivate
 			NotCarried.Add(FString::Printf(TEXT("Sky Light (%s)"), FMantleTargetFeatures::NeedsNewerClient));
 			return;
 		}
-		const double LevelMean = FMantleEnvironmentExport::SkyLightMeanLuminance(Component);
+		FString ReadFrom;
+		const double LevelMean = FMantleEnvironmentExport::SkyLightMeanLuminance(Component, &ReadFrom);
 		if (LevelMean < 0.0 && Component->SourceType == SLS_SpecifiedCubemap)
 		{
-			NotCarried.Add(TEXT("Sky Light (its cubemap's brightness could not be read from the texture's source data, so Mantle's own sky light is used at full strength)"));
+			NotCarried.Add(TEXT("Sky Light (its cubemap's brightness could not be read from the texture's source data or its built mips, so Mantle's own sky light is used at full strength)"));
 			return;
 		}
 		if (LevelMean < 0.0)
@@ -418,12 +543,12 @@ namespace MantleEnvironmentExportPrivate
 		const double Scale = FMantleEnvironmentExport::SkyLightScaleFor(LevelMean, Hour);
 		if (Scale >= SkyLightScaleUnchanged)
 		{
-			Info = FString::Printf(TEXT("its brightness (%.3g) is as bright as Mantle's sky at %s, so Mantle's own is used at full strength"), LevelMean, *HourText(Hour));
+			Info = FString::Printf(TEXT("its brightness (%.3g, from %s) is as bright as Mantle's sky at %s, so Mantle's own is used at full strength"), LevelMean, *ReadFrom, *HourText(Hour));
 			return;
 		}
 		Environment.SkyLightIntensity = Rounded(Scale);
-		Carried = FString::Printf(TEXT("strength (%g of Mantle's sky light, from the level's sky brightness %.3g against Mantle's sky at %s)"),
-			*Environment.SkyLightIntensity, LevelMean, *HourText(Hour));
+		Carried = FString::Printf(TEXT("strength (%g of Mantle's sky light, from the level's sky brightness %.3g, read from %s, against Mantle's sky at %s)"),
+			*Environment.SkyLightIntensity, LevelMean, *ReadFrom, *HourText(Hour));
 	}
 
 	/**
@@ -962,7 +1087,7 @@ double FMantleEnvironmentExport::SkyLightScaleFor(const double LevelMeanLuminanc
 	return FMath::Clamp(LevelMeanLuminance / MantleSkyMeanLuminance(Hour), 0.0, 1.0);
 }
 
-double FMantleEnvironmentExport::CubemapMeanLuminance(UTextureCube* Cubemap, const bool bLowerHemisphereBlack)
+double FMantleEnvironmentExport::CubemapMeanLuminance(UTextureCube* Cubemap, const bool bLowerHemisphereBlack, FString* OutSource)
 {
 	using namespace MantleEnvironmentExportPrivate;
 	constexpr int32 TargetTexelsPerSide = 32;
@@ -970,61 +1095,76 @@ double FMantleEnvironmentExport::CubemapMeanLuminance(UTextureCube* Cubemap, con
 	{
 		return -1.0;
 	}
+	// The source data: six square faces, or one long-lat image (what an imported HDR panorama is kept as).
 	FTextureSource& Source = Cubemap->Source;
-	const int32 Size = static_cast<int32>(Source.GetSizeX());
 	const ETextureSourceFormat Format = Source.GetFormat(0);
-	if (!Source.IsValid() || Source.GetNumSlices() != 6 || Size <= 0 || Size != Source.GetSizeY() || Source.GetNumLayers() != 1
-		|| Format == TSF_Invalid)
+	if (Source.IsValid() && Source.GetNumLayers() == 1 && Format != TSF_Invalid && Source.GetSizeX() > 0 && Source.GetSizeY() > 0)
+	{
+		const int32 Width = static_cast<int32>(Source.GetSizeX());
+		const int32 Height = static_cast<int32>(Source.GetSizeY());
+		const bool bSixFaces = Source.GetNumSlices() == 6 && Width == Height;
+		const bool bLongLat = Source.GetNumSlices() == 1 && Width >= Height;
+		const int64 BytesPerTexel = FTextureSource::GetBytesPerPixel(Format);
+		const uint8* Data = (bSixFaces || bLongLat) ? Source.LockMipReadOnly(0, 0, 0) : nullptr;
+		if (Data)
+		{
+			const bool bSRGB = Source.GetGammaSpace(0) != EGammaSpace::Linear;
+			const double Mean = bSixFaces ? SixFaceMean(Data, Width, BytesPerTexel, Format, bSRGB, bLowerHemisphereBlack, FMath::Max(1, Width / TargetTexelsPerSide))
+				: LongLatMean(Data, Width, Height, BytesPerTexel, Format, bSRGB, bLowerHemisphereBlack);
+			Source.UnlockMip(0, 0, 0);
+			if (Mean >= 0.0)
+			{
+				if (OutSource)
+				{
+					*OutSource = bSixFaces ? FString::Printf(TEXT("the texture's source data, six %d-texel faces"), Width)
+						: FString::Printf(TEXT("the texture's source data, a %dx%d long-lat image"), Width, Height);
+				}
+				return Mean;
+			}
+		}
+	}
+
+	// The source cannot be read (not kept, a format not handled): the built cube, from the smallest mip with about the texels needed.
+	// Only an uncompressed build is read; a block-compressed one (BC6H, DXT) is not decoded here.
+	if (!Source.IsValid())
+	{
+		// Nothing was imported to build from.
+		return -1.0;
+	}
+	Cubemap->FinishCachePlatformData();
+	FTexturePlatformData* Built = Cubemap->GetPlatformData();
+	ETextureSourceFormat BuiltFormat = TSF_Invalid;
+	const int64 BuiltBytes = Built ? PlatformTexelFormat(Built->PixelFormat, BuiltFormat) : 0;
+	if (BuiltBytes <= 0 || Built->GetNumSlices() != 6 || !Built->TryInlineMipData(0, Cubemap->GetPathName()))
 	{
 		return -1.0;
 	}
-	const int64 BytesPerTexel = FTextureSource::GetBytesPerPixel(Format);
-	const uint8* Data = Source.LockMipReadOnly(0, 0, 0);
+	int32 MipIndex = 0;
+	while (MipIndex + 1 < Built->Mips.Num() && Built->Mips[MipIndex + 1].SizeX >= TargetTexelsPerSide)
+	{
+		++MipIndex;
+	}
+	FTexture2DMipMap& Mip = Built->Mips[MipIndex];
+	const int32 Size = Mip.SizeX;
+	if (Size <= 0 || Size != Mip.SizeY || Mip.BulkData.GetBulkDataSize() < BuiltBytes * Size * Size * 6)
+	{
+		return -1.0;
+	}
+	const uint8* Data = static_cast<const uint8*>(Mip.BulkData.LockReadOnly());
 	if (!Data)
 	{
 		return -1.0;
 	}
-	const int64 SliceBytes = Source.CalcMipSize(0, 0, 0) / 6;
-	const bool bSRGB = Source.GetGammaSpace(0) != EGammaSpace::Linear;
-	const int32 Step = FMath::Max(1, Size / TargetTexelsPerSide);
-	double Sum = 0.0;
-	double Weights = 0.0;
-	bool bReadable = true;
-	for (int32 Face = 0; Face < 6 && bReadable; ++Face)
+	const double Mean = SixFaceMean(Data, Size, BuiltBytes, BuiltFormat, Cubemap->SRGB, bLowerHemisphereBlack, 1);
+	Mip.BulkData.Unlock();
+	if (Mean >= 0.0 && OutSource)
 	{
-		for (int32 Y = Step / 2; Y < Size && bReadable; Y += Step)
-		{
-			for (int32 X = Step / 2; X < Size; X += Step)
-			{
-				// The solid angle a texel covers on the unit cube, up to a constant: (1 + u^2 + v^2)^-1.5.
-				const double U = (X + 0.5) / Size * 2.0 - 1.0;
-				const double V = (Y + 0.5) / Size * 2.0 - 1.0;
-				const double Weight = FMath::Pow(1.0 + U * U + V * V, -1.5);
-				// Faces are +X, -X, +Y, -Y, +Z, -Z, the side faces upright: the lower half is the rows past the middle.
-				const bool bBlack = bLowerHemisphereBlack && (Face == 5 || (Face < 4 && Y >= Size / 2));
-				if (!bBlack)
-				{
-					FLinearColor Color;
-					if (!ReadSourceTexel(Data + Face * SliceBytes + (static_cast<int64>(Y) * Size + X) * BytesPerTexel, Format, bSRGB, Color))
-					{
-						bReadable = false;
-						break;
-					}
-					Sum += Weight * Color.GetLuminance();
-				}
-				Weights += Weight;
-			}
-		}
+		*OutSource = FString::Printf(TEXT("the built cubemap's %d-texel mip"), Size);
 	}
-	Source.UnlockMip(0, 0, 0);
-	if (!bReadable || Weights <= 0.0)
-	{
-		return -1.0;
-	}
-	return Sum / Weights;
+	return Mean;
 }
 
-double FMantleEnvironmentExport::SkyLightMeanLuminance(USkyLightComponent* Component)
+double FMantleEnvironmentExport::SkyLightMeanLuminance(USkyLightComponent* Component, FString* OutSource)
 {
 	if (!Component)
 	{
@@ -1032,7 +1172,7 @@ double FMantleEnvironmentExport::SkyLightMeanLuminance(USkyLightComponent* Compo
 	}
 	if (Component->SourceType == SLS_SpecifiedCubemap)
 	{
-		const double CubemapMean = CubemapMeanLuminance(Component->Cubemap, Component->bLowerHemisphereIsBlack);
+		const double CubemapMean = CubemapMeanLuminance(Component->Cubemap, Component->bLowerHemisphereIsBlack, OutSource);
 		if (CubemapMean <= 0.0 || !FMath::IsFinite(CubemapMean))
 		{
 			return -1.0;
@@ -1045,11 +1185,19 @@ double FMantleEnvironmentExport::SkyLightMeanLuminance(USkyLightComponent* Compo
 		return static_cast<double>(Radiance.CalcIntegral().GetLuminance()) / (4.0 * UE_DOUBLE_PI);
 	};
 	double Mean = MeanOf(Component->GetIrradianceEnvironmentMap());
+	if (OutSource)
+	{
+		*OutSource = TEXT("the sky light's own capture");
+	}
 	FSHVectorRGB3 OneOff;
 	if ((!FMath::IsFinite(Mean) || Mean <= 0.0) && MantleEnvironmentExportPrivate::CaptureCopyOf(Component, OneOff))
 	{
 		// A real-time capture's map is empty here, and so is one that never captured: take it from a one-off capture.
 		Mean = MeanOf(OneOff);
+		if (OutSource)
+		{
+			*OutSource = TEXT("a one-off capture of the scene");
+		}
 	}
 	if (!FMath::IsFinite(Mean) || Mean <= 0.0)
 	{
