@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleWeaponRigidMesh.h"
+#include "MantleAssetCleanup.h"
 
 #include "Animation/Skeleton.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -426,17 +427,8 @@ namespace MantleWeaponRigidMeshPrivate
 		}
 		if (Doomed.Num() > 0)
 		{
-			// Not ObjectTools::ForceDeleteObjects: it unloads packages through the editor selection, which trips the engine
-			// ensure "Element type ID '0' has not been registered" when the typed element registry is not set up (-nullrhi
-			// runs, CI). The old assets move to the transient package and become garbage; their files go below.
-			for (UObject* Old : Doomed)
-			{
-				FAssetRegistryModule::AssetDeleted(Old);
-				Old->ClearFlags(RF_Public | RF_Standalone);
-				Old->Rename(*MakeUniqueObjectName(GetTransientPackage(), Old->GetClass(), Old->GetFName()).ToString(),
-					GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
-				Old->MarkAsGarbage();
-			}
+			// The old assets move to the transient package and become garbage; their files go below.
+			FMantleAssetCleanup::MoveAside(Doomed, /*bDeleteFiles*/ false);
 		}
 		// A file the delete left behind (a package the registry did not know) would block the save.
 		for (const TPair<FString, FName>& Asset : Assets)
@@ -464,10 +456,7 @@ namespace MantleWeaponRigidMeshPrivate
 		if (UObject* Old = FindObject<UObject>(Package, *AssetName.ToString()))
 		{
 			// Still in memory after the delete (something held it): move it aside so the new asset can take the name.
-			FAssetRegistryModule::AssetDeleted(Old);
-			Old->ClearFlags(RF_Public | RF_Standalone);
-			Old->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
-			Old->MarkAsGarbage();
+			FMantleAssetCleanup::MoveAside({ Old }, /*bDeleteFiles*/ false);
 		}
 		return Package;
 	}
