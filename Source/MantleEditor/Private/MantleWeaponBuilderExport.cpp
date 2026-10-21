@@ -208,7 +208,7 @@ bool FMantleWeaponBuilderExport::BuildDocument(const UMantleWeaponSource& Source
 	using namespace MantleWeaponBuilderExportPrivate;
 	using namespace MantleWeaponBuilderLogic;
 	Out = FMantleWeaponDesc();
-	if (Source.Hold >= EMantleWeaponHold::Count || Source.Delivery > EMantleWeaponSourceDelivery::Beam || Source.Resource > EMantleWeaponSourceResource::None)
+	if (Source.Hold >= EMantleWeaponHold::Count || Source.Delivery > EMantleWeaponSourceDelivery::Use || Source.Resource > EMantleWeaponSourceResource::None)
 	{
 		OutMessages.Add(LOCTEXT("InvalidChoice", "Pick a supported hold, delivery and resource for your weapon."));
 		return false;
