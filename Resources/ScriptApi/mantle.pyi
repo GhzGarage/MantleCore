@@ -578,7 +578,7 @@ DataStore: _DataStoreService
 
 class _EffectsService:
     """Show Mantle's built-in visual effects anywhere in the world. Play makes a puff of particles (smoke, fire, sparks, dust, glow, explosion, impact, muzzle flash, blood, splash, confetti, heal), Beam draws a short tracer line between two points, and Decal leaves a mark such as a bullet hole or a scorch on a surface. All are cosmetic: they do not hurt anyone or change the world. Example: Effects:Play('Explosion', Vector3.new(0, 5, 0))"""
-    def beam(self, from: Vector3, to: Vector3, params: Optional[dict[str, Any]] = ...) -> None:
+    def beam(self, from_: Vector3, to: Vector3, params: Optional[dict[str, Any]] = ...) -> None:
         """Draw a short-lived glowing beam (a tracer or a zap) from one point to another, then it fades. params: Color ('#RRGGBB', the beam's own look by default), Width (how thick, 0.5 to 100 cm, 4 by default) and Duration (how long it shows, 0 to 5 seconds, 0.15 by default); numbers out of range are clamped. A line longer than 1000 m is cut short. A client or a server holds at most 16 beams at once; a new one past that replaces the oldest. Use it for tracers, lightning bolts, lasers or showing a link between two things. Example: Effects:Beam(Vector3.new(0, 2, 0), Vector3.new(0, 2, 40), {Color = '#FF3030', Duration = 0.2}). From a client script only this player sees it; from a server script every player does, but not one who joins later. A dedicated server shows nothing. At most 10 effect calls a frame per script (Play, Beam and Decal count together), and a server script at most 10 a second (bursts of 20); past either the script stops."""
         ...
     def decal(self, position: Vector3, normal: Vector3, params: Optional[dict[str, Any]] = ...) -> None:
