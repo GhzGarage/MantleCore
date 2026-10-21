@@ -263,9 +263,10 @@ bool FMantleWeaponBuilderExport::BuildDocument(const UMantleWeaponSource& Source
 	{
 		// #1025: a consumable is used up, never fired: no attack, spread, recoil, parts, attachments or sounds, just its own block.
 		const FMantleWeaponSourceConsumable& C = Source.Consumable;
-		if (!FMath::IsFinite(C.Heal) || C.Heal < 0.f || C.Heal > 1000.f || !FMath::IsFinite(C.HealSeconds) || C.HealSeconds < 0.f || C.HealSeconds > 60.f)
+		const bool bHeals = C.Effect == EMantleWeaponSourceConsumableEffect::Heal;
+		if (bHeals && (!FMath::IsFinite(C.Heal) || C.Heal < 1.f || C.Heal > 1000.f || !FMath::IsFinite(C.HealSeconds) || C.HealSeconds < 0.f || C.HealSeconds > 60.f))
 		{
-			OutMessages.Add(LOCTEXT("BadHeal", "Set the health between 0 and 1000, and the time to spread it over between 0 and 60 seconds."));
+			OutMessages.Add(LOCTEXT("BadHeal", "Set the health between 1 and 1000, and the time to spread it over between 0 and 60 seconds."));
 			return false;
 		}
 		if (C.Uses < 1 || C.Uses > 100)
@@ -284,9 +285,17 @@ bool FMantleWeaponBuilderExport::BuildDocument(const UMantleWeaponSource& Source
 			return false;
 		}
 		FMantleWeaponDocConsumable Consumable;
-		Consumable.Style = C.Style == EMantleWeaponConsumeStyle::EatDrink ? EMantleWeaponDocUseStyle::EatDrink : EMantleWeaponDocUseStyle::Use;
-		Consumable.Heal.Set(C.Heal);
-		Consumable.HealSeconds.Set(C.HealSeconds);
+		Consumable.Style = C.Style == EMantleWeaponSourceUseStyle::EatDrink ? EMantleWeaponDocUseStyle::EatDrink : EMantleWeaponDocUseStyle::Use;
+		if (bHeals)
+		{
+			Consumable.Heal.Set(C.Heal);
+			Consumable.HealSeconds.Set(C.HealSeconds);
+		}
+		else
+		{
+			// The document refuses heal and healSeconds beside effect none.
+			Consumable.Effect.Set(EMantleWeaponDocConsumableEffect::None);
+		}
 		Consumable.Uses.Set(C.Uses);
 		if (C.bOverrideUseSeconds) Consumable.UseSeconds.Set(C.UseSeconds);
 		Consumable.CooldownSeconds.Set(C.CooldownSeconds);

@@ -8,7 +8,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 namespace MantleWeaponBuilderConsumableTestPrivate
 {
-	UMantleWeaponSource* MakeConsumable(EMantleWeaponConsumeStyle Style)
+	UMantleWeaponSource* MakeConsumable(EMantleWeaponSourceUseStyle Style)
 	{
 		UMantleWeaponSource* Out = NewObject<UMantleWeaponSource>();
 		Out->DisplayName = TEXT("Health potion");
@@ -30,7 +30,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleWeaponBuilderConsumableTest, "Mantle.Edi
 bool FMantleWeaponBuilderConsumableTest::RunTest(const FString& Parameters)
 {
 	using namespace MantleWeaponBuilderConsumableTestPrivate;
-	for (const EMantleWeaponConsumeStyle Style : { EMantleWeaponConsumeStyle::EatDrink, EMantleWeaponConsumeStyle::Use })
+	for (const EMantleWeaponSourceUseStyle Style : { EMantleWeaponSourceUseStyle::EatDrink, EMantleWeaponSourceUseStyle::Use })
 	{
 		UMantleWeaponSource* Input = MakeConsumable(Style);
 		FMantleWeaponDesc Desc;
@@ -47,7 +47,7 @@ bool FMantleWeaponBuilderConsumableTest::RunTest(const FString& Parameters)
 
 		const FString Json = FMantleWeaponDocument::Write(Desc);
 		TestFalse(TEXT("a use document writes no fire"), Json.Contains(TEXT("\"fire\"")));
-		TestTrue(TEXT("it names the style"), Json.Contains(Style == EMantleWeaponConsumeStyle::EatDrink ? TEXT("\"eatDrink\"") : TEXT("\"use\"")));
+		TestTrue(TEXT("it names the style"), Json.Contains(Style == EMantleWeaponSourceUseStyle::EatDrink ? TEXT("\"eatDrink\"") : TEXT("\"use\"")));
 		FMantleWeaponDesc Back;
 		FString Error;
 		if (TestTrue(TEXT("the document reads back"), FMantleWeaponDocument::Parse(Json, Back, Error)))
@@ -67,7 +67,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleWeaponBuilderConsumableRangesTest, "Mant
 bool FMantleWeaponBuilderConsumableRangesTest::RunTest(const FString& Parameters)
 {
 	using namespace MantleWeaponBuilderConsumableTestPrivate;
-	UMantleWeaponSource* Input = MakeConsumable(EMantleWeaponConsumeStyle::Use);
+	UMantleWeaponSource* Input = MakeConsumable(EMantleWeaponSourceUseStyle::Use);
 	Input->Consumable.bOverrideUseSeconds = true;
 	Input->Consumable.UseSeconds = 2.0f;
 	FMantleWeaponDesc Desc;
@@ -77,7 +77,7 @@ bool FMantleWeaponBuilderConsumableRangesTest::RunTest(const FString& Parameters
 
 	const auto Refused = [&](TFunction<void(FMantleWeaponSourceConsumable&)> Break, const TCHAR* What)
 	{
-		UMantleWeaponSource* Bad = MakeConsumable(EMantleWeaponConsumeStyle::EatDrink);
+		UMantleWeaponSource* Bad = MakeConsumable(EMantleWeaponSourceUseStyle::EatDrink);
 		Break(Bad->Consumable);
 		FMantleWeaponDesc Out;
 		TArray<FText> Why;
@@ -85,9 +85,30 @@ bool FMantleWeaponBuilderConsumableRangesTest::RunTest(const FString& Parameters
 		TestTrue(TEXT("with a message"), Why.Num() > 0);
 	};
 	Refused([](FMantleWeaponSourceConsumable& C) { C.Heal = 1001.f; }, TEXT("heal above 1000"));
+	Refused([](FMantleWeaponSourceConsumable& C) { C.Heal = 0.f; }, TEXT("heal of 0 (use effect none instead)"));
 	Refused([](FMantleWeaponSourceConsumable& C) { C.Uses = 0; }, TEXT("no uses"));
 	Refused([](FMantleWeaponSourceConsumable& C) { C.bOverrideUseSeconds = true; C.UseSeconds = 0.1f; }, TEXT("use time below 0.5"));
 	Refused([](FMantleWeaponSourceConsumable& C) { C.CooldownSeconds = 601.f; }, TEXT("cooldown above 600"));
+	return true;
+}
+
+// "No effect" is explicit: effect none writes no heal, and the document reads back.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleWeaponBuilderConsumableNoEffectTest, "Mantle.Editor.WeaponBuilderConsumable.NoEffectIsExplicit", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FMantleWeaponBuilderConsumableNoEffectTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleWeaponBuilderConsumableTestPrivate;
+	UMantleWeaponSource* Input = MakeConsumable(EMantleWeaponSourceUseStyle::Use);
+	Input->Consumable.Effect = EMantleWeaponSourceConsumableEffect::None;
+	Input->Consumable.Uses = 5;
+	FMantleWeaponDesc Desc;
+	TArray<FText> Messages;
+	if (!TestTrue(TEXT("effect none builds"), FMantleWeaponBuilderExport::BuildDocument(*Input, GripPoint(), TEXT("FixtureMesh"), Desc, Messages))) { for (const FText& Message : Messages) AddError(Message.ToString()); return true; }
+	const FString Json = FMantleWeaponDocument::Write(Desc);
+	TestTrue(TEXT("it says effect none"), Json.Contains(TEXT("\"effect\"")) && Json.Contains(TEXT("\"none\"")));
+	TestFalse(TEXT("and writes no heal"), Json.Contains(TEXT("\"heal\"")));
+	FMantleWeaponDesc Back;
+	FString Error;
+	TestTrue(TEXT("the document reads back"), FMantleWeaponDocument::Parse(Json, Back, Error));
 	return true;
 }
 #endif

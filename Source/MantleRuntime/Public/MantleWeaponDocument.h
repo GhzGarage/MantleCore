@@ -494,14 +494,25 @@ enum class EMantleWeaponDocUseStyle : uint8
 	Count
 };
 
+/** schema consumable.effect (#1025): what the item does by itself at the effect moment. */
+enum class EMantleWeaponDocConsumableEffect : uint8
+{
+	/** Heals the holder (Heal, HealSeconds). */
+	Heal,
+	/** Nothing built in: the place's server script does it all (Backpack.ItemUsed fires either way). */
+	None,
+	Count
+};
+
 /** schema consumable (#1025): the use delivery's numbers. */
 struct FMantleWeaponDocConsumable
 {
 	/** Required. */
 	EMantleWeaponDocUseStyle Style = EMantleWeaponDocUseStyle::EatDrink;
-	/** Health given, up to the maximum; 0: no built-in effect (the place's script does it, Backpack.ItemUsed). */
+	TMantleWeaponDocValue<EMantleWeaponDocConsumableEffect> Effect{ EMantleWeaponDocConsumableEffect::Heal };
+	/** With effect heal: health given, up to the maximum. */
 	TMantleWeaponDocValue<double> Heal{ 50.0 };
-	/** 0: the whole heal at the effect moment; above 0: spread evenly over this many seconds from it. */
+	/** With effect heal. 0: the whole heal at the effect moment; above 0: spread evenly over this many seconds from it. */
 	TMantleWeaponDocValue<double> HealSeconds{ 0.0 };
 	TMantleWeaponDocValue<int32> Uses{ 1 };
 	/** Seconds one use takes; unset: the clip's own length (the value here is only the clips' length, 2.5). */
@@ -845,6 +856,7 @@ public:
 	static const TCHAR* ReloadStyleName(EMantleWeaponDocReloadStyle Style);
 	static const TCHAR* EffectsName(EMantleWeaponDocEffects Effects);
 	static const TCHAR* UseStyleName(EMantleWeaponDocUseStyle Style);
+	static const TCHAR* ConsumableEffectName(EMantleWeaponDocConsumableEffect Effect);
 
 	/** #904: Effects is an element (not one of the firearms' rifle, pistol and shotgun). */
 	static bool IsElement(EMantleWeaponDocEffects Effects) { return Effects > EMantleWeaponDocEffects::Shotgun && Effects < EMantleWeaponDocEffects::Count; }

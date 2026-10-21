@@ -49,6 +49,7 @@ namespace MantleWeaponDocumentPrivate
 	};
 	// #1025: consumable.style, and what a consumable (delivery use) refuses: a weapon's numbers, and attachments (its mesh shows alone).
 	const TCHAR* const GWeaponDocUseStyleNames[] = { TEXT("eatDrink"), TEXT("use") };
+	const TCHAR* const GWeaponDocConsumableEffectNames[] = { TEXT("heal"), TEXT("none") };
 	const TCHAR* const GWeaponDocUseRefused[] = {
 		TEXT("fire"), TEXT("attachments"), TEXT("sounds"), TEXT("firstPerson"), TEXT("spread"), TEXT("sway"), TEXT("recoil")
 	};
@@ -75,6 +76,7 @@ namespace MantleWeaponDocumentPrivate
 	static_assert(WeaponDocCount(GWeaponDocSocketNames) == static_cast<int32>(EMantleWeaponDocSocket::Count), "one name per socket");
 	static_assert(WeaponDocCount(GWeaponDocInterpNames) == static_cast<int32>(EMantleWeaponDocInterp::Count), "one name per interpolation");
 	static_assert(WeaponDocCount(GWeaponDocUseStyleNames) == static_cast<int32>(EMantleWeaponDocUseStyle::Count), "one name per use style");
+	static_assert(WeaponDocCount(GWeaponDocConsumableEffectNames) == static_cast<int32>(EMantleWeaponDocConsumableEffect::Count), "one name per consumable effect");
 
 	/** Names[Index], or "" past the table. */
 	template <int32 N>
@@ -1343,13 +1345,14 @@ namespace MantleWeaponDocumentPrivate
 
 		void ReadConsumable(const TSharedPtr<FJsonObject>& Obj, const FString& Path, FMantleWeaponDocConsumable& Out)
 		{
-			Keys(Obj, Path, { TEXT("style"), TEXT("heal"), TEXT("healSeconds"), TEXT("uses"), TEXT("useSeconds"), TEXT("cooldownSeconds"), TEXT("moveWhileUsing") },
+			Keys(Obj, Path, { TEXT("style"), TEXT("effect"), TEXT("heal"), TEXT("healSeconds"), TEXT("uses"), TEXT("useSeconds"), TEXT("cooldownSeconds"), TEXT("moveWhileUsing") },
 				{ TEXT("style") });
 			if (const TSharedPtr<FJsonValue> Style = Field(Obj, TEXT("style")))
 			{
 				Choice(Style, At(Path, TEXT("style")), GWeaponDocUseStyleNames, Out.Style);
 			}
-			OptNumber(Obj, Path, TEXT("heal"), 0.0, 1000.0, Out.Heal);
+			OptChoice(Obj, Path, TEXT("effect"), GWeaponDocConsumableEffectNames, Out.Effect);
+			OptNumber(Obj, Path, TEXT("heal"), 1.0, 1000.0, Out.Heal);
 			OptNumber(Obj, Path, TEXT("healSeconds"), 0.0, 60.0, Out.HealSeconds);
 			OptInteger(Obj, Path, TEXT("uses"), 1, 100, Out.Uses);
 			OptNumber(Obj, Path, TEXT("useSeconds"), 0.5, 10.0, Out.UseSeconds);
@@ -2073,6 +2076,10 @@ namespace MantleWeaponDocumentPrivate
 		{
 			FWeaponDocNodePtr Node = WeaponDocObjectNode();
 			WeaponDocPut(Node, TEXT("style"), WeaponDocStringNode(WeaponDocNameAt(GWeaponDocUseStyleNames, static_cast<int32>(In.Style))));
+			if (In.Effect.bSet)
+			{
+				WeaponDocPut(Node, TEXT("effect"), WeaponDocStringNode(WeaponDocNameAt(GWeaponDocConsumableEffectNames, static_cast<int32>(In.Effect.Value))));
+			}
 			Number(Node, TEXT("heal"), In.Heal);
 			Number(Node, TEXT("healSeconds"), In.HealSeconds);
 			Integer(Node, TEXT("uses"), In.Uses);
@@ -2836,6 +2843,19 @@ void FMantleWeaponDocument::CheckRules(const FMantleWeaponDesc& D, TArray<FMantl
 		}
 	}
 
+	// #1025: a consumable whose effect is none does nothing itself, so it has no heal numbers.
+	if (D.Consumable.bSet && D.Consumable.Value.Effect.Value == EMantleWeaponDocConsumableEffect::None)
+	{
+		if (D.Consumable.Value.Heal.bSet)
+		{
+			R.Add(TEXT("consumable/heal"), TEXT("mantle"), TEXT("is a heal's, but the effect is none: drop it, or write effect heal"));
+		}
+		if (D.Consumable.Value.HealSeconds.bSet)
+		{
+			R.Add(TEXT("consumable/healSeconds"), TEXT("mantle"), TEXT("is a heal's, but the effect is none: drop it, or write effect heal"));
+		}
+	}
+
 	// The charge (#840): required (a bow's draw), optional or none (the firearms) by the hold.
 	if (Info.Charge == EMantleWeaponDocChargeRule::None && D.Charge.bSet)
 	{
@@ -3028,6 +3048,11 @@ const TCHAR* FMantleWeaponDocument::ReloadStyleName(const EMantleWeaponDocReload
 const TCHAR* FMantleWeaponDocument::UseStyleName(const EMantleWeaponDocUseStyle Style)
 {
 	return MantleWeaponDocumentPrivate::WeaponDocNameAt(MantleWeaponDocumentPrivate::GWeaponDocUseStyleNames, static_cast<int32>(Style));
+}
+
+const TCHAR* FMantleWeaponDocument::ConsumableEffectName(const EMantleWeaponDocConsumableEffect Effect)
+{
+	return MantleWeaponDocumentPrivate::WeaponDocNameAt(MantleWeaponDocumentPrivate::GWeaponDocConsumableEffectNames, static_cast<int32>(Effect));
 }
 
 TConstArrayView<const TCHAR*> FMantleWeaponDocument::GetUseRefusedFields()

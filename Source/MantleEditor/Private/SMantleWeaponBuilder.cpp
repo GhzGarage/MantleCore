@@ -844,8 +844,15 @@ FText SMantleWeaponBuilder::SummaryText() const
 	if (Working->Hold == EMantleWeaponHold::Consumable)
 	{
 		const FMantleWeaponSourceConsumable& C = Working->Consumable;
-		Lines.Add(FString::Printf(TEXT("Used by: %s"), C.Style == EMantleWeaponConsumeStyle::EatDrink ? TEXT("eating or drinking") : TEXT("using it (lift and crush)")));
-		Lines.Add(FString::Printf(TEXT("Health: %.0f%s; uses: %d"), C.Heal, C.HealSeconds > 0.f ? *FString::Printf(TEXT(" over %.1f seconds"), C.HealSeconds) : TEXT(""), C.Uses));
+		Lines.Add(FString::Printf(TEXT("Used by: %s"), C.Style == EMantleWeaponSourceUseStyle::EatDrink ? TEXT("eating or drinking") : TEXT("using it (lift and crush)")));
+		if (C.Effect == EMantleWeaponSourceConsumableEffect::Heal)
+		{
+			Lines.Add(FString::Printf(TEXT("Heals: %.0f%s; uses: %d"), C.Heal, C.HealSeconds > 0.f ? *FString::Printf(TEXT(" over %.1f seconds"), C.HealSeconds) : TEXT(""), C.Uses));
+		}
+		else
+		{
+			Lines.Add(FString::Printf(TEXT("Effect: none of its own (a script does it); uses: %d"), C.Uses));
+		}
 		Lines.Add(FString::Printf(TEXT("Use time: %s; wait between uses: %.1f seconds; %s"),
 			C.bOverrideUseSeconds ? *FString::Printf(TEXT("%.1f seconds"), C.UseSeconds) : TEXT("the animation's own length"), C.CooldownSeconds,
 			C.bMoveWhileUsing ? TEXT("can walk while using") : TEXT("stands still while using")));
@@ -1372,9 +1379,17 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakeTuningStep()
 	if (Working->Hold == EMantleWeaponHold::Consumable)
 	{
 		// A consumable is used up, not fired: its own few settings replace the attack ones.
-		const TArray<TPair<EMantleWeaponConsumeStyle, FText>> Styles = {
-			{ EMantleWeaponConsumeStyle::EatDrink, LOCTEXT("StyleEatDrink", "Eat or drink (bottle to the lips)") },
-			{ EMantleWeaponConsumeStyle::Use, LOCTEXT("StyleUseIt", "Use (lift the hand and crush; medkits)") },
+		const TArray<TPair<EMantleWeaponSourceUseStyle, FText>> Styles = {
+			{ EMantleWeaponSourceUseStyle::EatDrink, LOCTEXT("StyleEatDrink", "Eat or drink (bottle to the lips)") },
+			{ EMantleWeaponSourceUseStyle::Use, LOCTEXT("StyleUseIt", "Use (lift the hand and crush; medkits)") },
+		};
+		const TArray<TPair<EMantleWeaponSourceConsumableEffect, FText>> Effects = {
+			{ EMantleWeaponSourceConsumableEffect::Heal, LOCTEXT("EffectHeal", "Heal") },
+			{ EMantleWeaponSourceConsumableEffect::None, LOCTEXT("EffectNone", "Nothing of its own (a script does it)") },
+		};
+		const TFunction<EVisibility()> ShowHeal = [this]
+		{
+			return Working->Consumable.Effect == EMantleWeaponSourceConsumableEffect::Heal ? EVisibility::Visible : EVisibility::Collapsed;
 		};
 		return SNew(SScrollBox)
 			+ SScrollBox::Slot().Padding(0.f, 6.f)
@@ -1382,13 +1397,16 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakeTuningStep()
 				SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight()[MakeRow(LOCTEXT("UseStyle", "How it is used"),
 					LOCTEXT("UseStyleTip", "Eat or drink plays the drinking animation of whatever the character holds. Use plays the lift-and-crush animation, a good fit for a medkit."),
-					MakeChoiceControl<EMantleWeaponConsumeStyle>(Styles, [this] { return Working->Consumable.Style; }, [this](EMantleWeaponConsumeStyle V) { Working->Consumable.Style = V; }))]
-				+ SVerticalBox::Slot().AutoHeight()[MakeRow(LOCTEXT("Heal", "Health given"),
-					LOCTEXT("HealTip", "How much health one use gives, up to the character's maximum. 0 gives none: a script can do something else."),
-					MakeFloatSpin(0.f, 1000.f, 5.f, [this] { return Working->Consumable.Heal; }, [this](float V) { Working->Consumable.Heal = V; }))]
-				+ SVerticalBox::Slot().AutoHeight()[MakeRow(LOCTEXT("HealSeconds", "Spread over (seconds)"),
+					MakeChoiceControl<EMantleWeaponSourceUseStyle>(Styles, [this] { return Working->Consumable.Style; }, [this](EMantleWeaponSourceUseStyle V) { Working->Consumable.Style = V; }))]
+				+ SVerticalBox::Slot().AutoHeight()[MakeRow(LOCTEXT("UseEffect", "What it does"),
+					LOCTEXT("UseEffectTip", "Heal gives health. Nothing gives none of its own: a script in your place does the rest."),
+					MakeChoiceControl<EMantleWeaponSourceConsumableEffect>(Effects, [this] { return Working->Consumable.Effect; }, [this](EMantleWeaponSourceConsumableEffect V) { Working->Consumable.Effect = V; }))]
+				+ SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility_Lambda([ShowHeal] { return ShowHeal(); })[MakeRow(LOCTEXT("Heal", "Health given"),
+					LOCTEXT("HealTip", "How much health one use gives, from 1 to 1000, up to the character's maximum."),
+					MakeFloatSpin(1.f, 1000.f, 5.f, [this] { return Working->Consumable.Heal; }, [this](float V) { Working->Consumable.Heal = V; }))]]
+				+ SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility_Lambda([ShowHeal] { return ShowHeal(); })[MakeRow(LOCTEXT("HealSeconds", "Spread over (seconds)"),
 					LOCTEXT("HealSecondsTip", "0 gives all of it at once. Above 0 spreads it evenly over this many seconds."),
-					MakeFloatSpin(0.f, 60.f, 0.5f, [this] { return Working->Consumable.HealSeconds; }, [this](float V) { Working->Consumable.HealSeconds = V; }))]
+					MakeFloatSpin(0.f, 60.f, 0.5f, [this] { return Working->Consumable.HealSeconds; }, [this](float V) { Working->Consumable.HealSeconds = V; }))]]
 				+ SVerticalBox::Slot().AutoHeight()[MakeRow(LOCTEXT("Uses", "Uses"),
 					LOCTEXT("UsesTip", "How many times it can be used before it is gone."),
 					MakeIntSpin(1, 100, [this] { return Working->Consumable.Uses; }, [this](int32 V) { Working->Consumable.Uses = V; }))]
