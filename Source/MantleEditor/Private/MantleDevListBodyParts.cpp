@@ -39,7 +39,7 @@ namespace MantleDevListBodyPartsPrivate
 			FString Described;
 			for (const FMantleOutfitSection& Section : Sections)
 			{
-				Described += FString::Printf(TEXT("%s/%s=%s "), *Section.SlotName, Section.Material.IsEmpty() ? TEXT("-") : *Section.Material,
+				Described += FString::Printf(TEXT("%s/%s=%s "), *Section.SlotName, Section.MaterialName.IsEmpty() ? TEXT("-") : *Section.MaterialName,
 					FMantleOutfitSections::Classify(Section) == EMantleOutfitPiece::Skin ? TEXT("skin") : TEXT("other"));
 			}
 			TArray<FVector3f> Points;
