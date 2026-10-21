@@ -5,6 +5,7 @@
 #include "MantlePlaceAssets.h"
 #include "MantlePlaceLimits.h"
 #include "MantlePlaceStorage.h"
+#include "MantleRuntime.h"
 
 #include "Containers/Ticker.h"
 #include "Dom/JsonObject.h"
@@ -1031,6 +1032,8 @@ void FMantlePreviewStatus::Fail(const FString& Error)
 		State = EState::Failed;
 		ErrorText = Error;
 	}
+	// The status file is rewritten by the next launch of the same bundle; the log keeps why this one stopped.
+	UE_LOG(LogMantle, Error, TEXT("MANTLE_PREVIEW_FAILED %s"), *Error);
 	AddMessage(ELevel::Error, TEXT("preview"), Error);
 	Touch(true);
 }
