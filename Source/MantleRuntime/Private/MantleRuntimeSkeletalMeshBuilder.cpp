@@ -8,6 +8,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "HAL/IConsoleManager.h"
 #include "ReferenceSkeleton.h"
+#include "SkeletalMeshReductionSettings.h"
 #include "Rendering/MultiSizeIndexContainer.h"
 #include "Rendering/PositionVertexBuffer.h"
 #include "Rendering/SkeletalMeshLODRenderData.h"
@@ -655,6 +656,9 @@ USkeletalMesh* FMantleRuntimeSkeletalMeshBuilder::Build(const FMantleSkinnedMesh
 		LODInfo.BuildSettings.bUseHighPrecisionTangentBasis = LOD.bHighPrecisionTangents;
 		LODInfo.BuildSettings.bUseHighPrecisionSkinWeights = false;
 		LODInfo.BuildSettings.bUseBackwardsCompatibleF16TruncUVs = false;
+		// The render data is filled directly, but a later build must not halve it: the default reduction settings are half the triangles.
+		LODInfo.ReductionSettings.NumOfTrianglesPercentage = 1.0f;
+		LODInfo.ReductionSettings.NumOfVertPercentage = 1.0f;
 
 		// Owned by the render data's indirect array from here on (as in FSkeletalMeshMerge::GenerateLODModel).
 		FSkeletalMeshLODRenderData* LODData = new FSkeletalMeshLODRenderData();
