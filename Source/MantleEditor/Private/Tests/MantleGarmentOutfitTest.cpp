@@ -312,6 +312,12 @@ bool FMantleGarmentOutfitCoverSkinTest::RunTest(const FString& Parameters)
 	FMantleAvatarRefit::CoverSkin(Lining, Knee, After);
 	TestTrue(TEXT("a lining facing the skin does not move"), Lining.Positions[0].Equals(FVector3f(1, 1, 1), 1e-4f) && Lining.Positions[3].Equals(FVector3f(9, 9, 1), 1e-4f));
 
+	// Skin far through it is beside the garment's edge, not under it (the chest above a neckline): left alone.
+	const FMantleSkinnedMeshLOD Beside = SkinSheet(10, 0.0f, [](const float X, const float Y) { return X == 6.0f && Y == 3.0f ? 2.5f : 0.0f; });
+	FMantleSkinnedMeshLOD Edge = Square(1.0f, false);
+	FMantleAvatarRefit::CoverSkin(Edge, Beside, After);
+	TestTrue(TEXT("skin far through does not move it"), Edge.Positions[1].Equals(FVector3f(9, 1, 1), 1e-4f));
+
 	// Skin well under the garment asks nothing of it.
 	FMantleSkinnedMeshLOD High = Square(1.6f, false);
 	TestEqual(TEXT("nothing through a garment over it"), FMantleAvatarRefit::CoverSkin(High, Knee, After), 0);

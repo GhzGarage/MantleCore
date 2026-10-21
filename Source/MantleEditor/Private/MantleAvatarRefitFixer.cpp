@@ -967,6 +967,8 @@ int32 FMantleAvatarRefit::CoverSkin(FMantleSkinnedMeshLOD& Garment, const FMantl
 {
 	OutAfter = 0;
 	int32 ThroughBefore = -1;
+	TArray<float> Moved;
+	Moved.Init(0.0f, Garment.NumVertices());
 	if (Garment.NumTriangles() == 0 || Body.Positions.IsEmpty() || Body.Normals.Num() != Body.Positions.Num())
 	{
 		return 0;
@@ -990,7 +992,7 @@ int32 FMantleAvatarRefit::CoverSkin(FMantleSkinnedMeshLOD& Garment, const FMantl
 			float Over = 0.0f;
 			FVector3f Normal;
 			if (!SkinOver.IsTracked(Point) || !SkinOver.Measure(Point, Body.Positions[Point], Garment.Positions, Over, Normal)
-				|| FVector3f::DotProduct(Normal, Body.Normals[Point]) < FMantleGarmentClearance::NormalMinDot)
+				|| FVector3f::DotProduct(Normal, Body.Normals[Point]) < SkinCoverMinDot || Over > SkinCoverMaxThroughCm)
 			{
 				continue;
 			}
@@ -1024,9 +1026,11 @@ int32 FMantleAvatarRefit::CoverSkin(FMantleSkinnedMeshLOD& Garment, const FMantl
 		bool bMoved = false;
 		for (int32 Vertex = 0; Vertex < Garment.NumVertices(); ++Vertex)
 		{
-			if (Lack[Vertex] > 0.0f)
+			const float Move = FMath::Min(Lack[Vertex], SkinCoverMaxMoveCm - Moved[Vertex]);
+			if (Move > 0.0f)
 			{
-				Garment.Positions[Vertex] += Along[Vertex] * Lack[Vertex];
+				Garment.Positions[Vertex] += Along[Vertex] * Move;
+				Moved[Vertex] += Move;
 				bMoved = true;
 			}
 		}

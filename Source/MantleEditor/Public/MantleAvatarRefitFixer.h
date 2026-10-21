@@ -239,11 +239,23 @@ public:
 	static constexpr int32 SkinCoverPasses = 3;
 
 	/**
+	 * CoverSkin only answers skin at most this far through a garment triangle, cm: a kneecap between vertices comes through
+	 * a little; skin further out is beside the garment's edge (a neckline, a waistband, a cuff), not under it.
+	 */
+	static constexpr float SkinCoverMaxThroughCm = 0.5f;
+
+	/** ... whose normal agrees with the triangle's at least this much (a hem's fold turns away from the skin), ... */
+	static constexpr float SkinCoverMinDot = 0.7f;
+
+	/** ... and moves no garment vertex more than this in all, cm. */
+	static constexpr float SkinCoverMaxMoveCm = 1.0f;
+
+	/**
 	 * Pure (tested): skin that comes through a garment between its vertices (a kneecap under a coarse trouser leg, where every
 	 * vertex is outside the skin) is covered. Each Body point within SkinCoverSearchCm whose closest garment point lies inside
-	 * a garment triangle (not on its open edge) facing the way the skin does, and less than SkinCoverCm under it, moves that
-	 * triangle's corners out along the triangle's normal by what it lacks (the most any such point asks of a corner),
-	 * SkinCoverPasses passes. A garment layer facing the skin (an inner lining) is left alone. Returns the skin points through
+	 * a garment triangle (not on its open edge) facing the way the skin does (SkinCoverMinDot), less than SkinCoverCm under it
+	 * and at most SkinCoverMaxThroughCm through it, moves that triangle's corners out along the triangle's normal by what it
+	 * lacks (the most any such point asks of a corner), SkinCoverPasses passes, no vertex more than SkinCoverMaxMoveCm in all. A garment layer facing the skin (an inner lining) is left alone. Returns the skin points through
 	 * the garment (above it) before; OutAfter, after.
 	 */
 	static int32 CoverSkin(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, int32& OutAfter);

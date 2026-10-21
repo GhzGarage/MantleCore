@@ -360,8 +360,8 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 
 const FName FMantleGarmentOutfit::MadeFromGarmentKey(TEXT("MantleMadeFromGarment"));
 const FName FMantleGarmentOutfit::MadeVersionKey(TEXT("MantleMadeFromGarmentVersion"));
-// 3: the garment is carried with the skin onto the MetaHuman (CarryWithSkin), and skin coming through it between its vertices is covered (CoverSkin).
-const TCHAR* const FMantleGarmentOutfit::MadeVersion = TEXT("3");
+// 3: the garment is carried with the skin onto the MetaHuman (CarryWithSkin), and skin coming through it between its vertices is covered (CoverSkin); 4: CoverSkin only answers skin a little through it.
+const TCHAR* const FMantleGarmentOutfit::MadeVersion = TEXT("4");
 
 const TArray<TPair<FName, FName>>& FMantleGarmentOutfit::Limbs()
 {
