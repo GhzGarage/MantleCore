@@ -63,13 +63,25 @@ bool FMantleWaterBody::IsBodyMeshComponent(const UStaticMeshComponent* Mesh)
 	{
 		return false;
 	}
+	// Whatever the plugin hangs under a body (a lake's surface mesh, a river's pieces) and its own water mesh component classes.
+	if (DerivesFrom(Mesh->GetClass(), TEXT("WaterBodyMeshComponent")))
+	{
+		return true;
+	}
+	for (const USceneComponent* Parent = Mesh->GetAttachParent(); Parent; Parent = Parent->GetAttachParent())
+	{
+		if (IsWaterBody(Parent))
+		{
+			return true;
+		}
+	}
 	for (const UActorComponent* Component : Owner->GetComponents())
 	{
 		if (!IsWaterBody(Component))
 		{
 			continue;
 		}
-		// A Custom body's own mesh component (MeshComp), else the mesh any body's override names.
+		// A Custom body's own mesh component (MeshComp, attached to it in the plugin but found by name too), else the mesh any body's override names.
 		if (ReadObject(Component, TEXT("MeshComp")) == Mesh)
 		{
 			return true;

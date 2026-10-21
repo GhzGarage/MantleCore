@@ -65,7 +65,12 @@ bool FMantleWaterBodySkippedWithWarningTest::RunTest(const FString& Parameters)
 	TArray<FMantlePrefabPart> Parts;
 	TArray<FMantleUnpublishedPart> Unsupported;
 	FMantlePlaceExporter::CollectPrefabParts(Lake, Parts, &Unsupported);
-	TestEqual(TEXT("the lake publishes no parts"), Parts.Num(), 0);
+	FString PartClasses;
+	for (const FMantlePrefabPart& Part : Parts)
+	{
+		PartClasses += (Part.Component ? Part.Component->GetClass()->GetName() + TEXT(" ") + Part.Component->GetName() : FString(TEXT("(none)"))) + TEXT("; ");
+	}
+	TestEqual(*FString::Printf(TEXT("the lake publishes no parts (got: %s)"), *PartClasses), Parts.Num(), 0);
 	int32 Warnings = 0;
 	for (const FMantleUnpublishedPart& Part : Unsupported)
 	{
