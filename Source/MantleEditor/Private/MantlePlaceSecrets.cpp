@@ -37,7 +37,7 @@ bool MantlePlaceSecrets::CheckName(const FString& Name, FString& OutWhy)
 	}
 	if (!bOk)
 	{
-		OutWhy = TEXT("A secret's name starts with a letter and has only capital letters, digits and underscores, up to 64 characters (for example DISCORD_WEBHOOK).");
+		OutWhy = TEXT("A secret's name starts with a letter and has only capital letters, digits and underscores, up to 64 characters (for example API_KEY).");
 		return false;
 	}
 	return true;

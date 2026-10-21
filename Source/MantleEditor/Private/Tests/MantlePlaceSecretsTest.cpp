@@ -17,7 +17,7 @@ bool FMantlePlaceSecretsNamesTest::RunTest(const FString& Parameters)
 {
 	FString Why;
 	TestEqual(TEXT("typed names are upper-cased and trimmed"), MantlePlaceSecrets::NormalizeName(TEXT("  api_key2 ")), FString(TEXT("API_KEY2")));
-	TestTrue(TEXT("plain name"), MantlePlaceSecrets::CheckName(TEXT("DISCORD_WEBHOOK"), Why));
+	TestTrue(TEXT("plain name"), MantlePlaceSecrets::CheckName(TEXT("API_KEY"), Why));
 	TestTrue(TEXT("one letter"), MantlePlaceSecrets::CheckName(TEXT("A"), Why));
 	TestTrue(TEXT("64 characters"), MantlePlaceSecrets::CheckName(TEXT("A") + FString::ChrN(63, TEXT('B')), Why));
 	TestFalse(TEXT("65 characters"), MantlePlaceSecrets::CheckName(TEXT("A") + FString::ChrN(64, TEXT('B')), Why));
