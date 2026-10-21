@@ -101,7 +101,7 @@ enum class EMantleEntityType : uint8
 	Text,
 	/**
 	 * A body of the Water plugin (GhzGarage/mantle#997): a lake, river, ocean or custom-mesh body, with the place's Water Zone in
-	 * settings.water. Added without a schema version bump, gated by the waterBodies client feature.
+	 * settings.water. Added without a schema version bump, and not behind a client feature: every client reads it.
 	 */
 	WaterBody
 };
