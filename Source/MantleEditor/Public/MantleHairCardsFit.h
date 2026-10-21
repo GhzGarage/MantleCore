@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "MantleHairFitReport.h"
+#include "MantleHairScalpFit.h"
 
 /**
  * #51: the whole upload-time head fit of bought hair cards, in one call: split the cap from the cards (FMantleHairCapSplit),
@@ -41,4 +42,7 @@ struct MANTLEEDITOR_API FMantleHairCardsFit
 	};
 
 	static FResult Run(const FInput& Input);
+
+	/** The median distance, cm, of the vertices the triangles use from the head's skin; the cap guard's measure. */
+	static double MedianDistanceToSkin(const FMantleScalpHeadSurface& Head, TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Triangles);
 };

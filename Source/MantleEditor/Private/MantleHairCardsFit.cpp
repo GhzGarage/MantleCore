@@ -5,6 +5,18 @@
 #include "MantleHairPieceFit.h"
 #include "MantleHairScalpFit.h"
 
+double FMantleHairCardsFit::MedianDistanceToSkin(const FMantleScalpHeadSurface& Head, TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Triangles)
+{
+	TArray<double> Distances;
+	for (const uint32 V : Triangles)
+	{
+		if (Positions.IsValidIndex(static_cast<int32>(V))) Distances.Add(FMath::Abs(Head.Query(FVector(Positions[V])).SignedDistance));
+	}
+	if (Distances.IsEmpty()) return 0.0;
+	Distances.Sort();
+	return Distances[Distances.Num() / 2];
+}
+
 FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 {
 	FResult Out;
@@ -77,15 +89,10 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 	if (Split.bFound)
 	{
 		// A cap hugs the scalp. One big piece that hangs far from the skin is a sheet of long hair, not a cap.
-		TArray<double> CapDistances;
-		for (const uint32 V : Split.CapIndices)
+		const double CapMedian = MedianDistanceToSkin(Surface, Out.Positions, Split.CapIndices);
+		if (CapMedian > CapMaxMedianDistanceCm)
 		{
-			CapDistances.Add(FMath::Abs(Surface.Query(FVector(Out.Positions[V])).SignedDistance));
-		}
-		CapDistances.Sort();
-		if (CapDistances[CapDistances.Num() / 2] > CapMaxMedianDistanceCm)
-		{
-			Out.Notes.Add(FString::Printf(TEXT("Hair cap: the big piece hangs %.1f cm from the head, so it is treated as hair, not a cap."), CapDistances[CapDistances.Num() / 2]));
+			Out.Notes.Add(FString::Printf(TEXT("Hair cap: the big piece hangs %.1f cm from the head, so it is treated as hair, not a cap."), CapMedian));
 			Split = FMantleHairCapSplit::FResult();
 			Split.CardIndices = HairTriangles;
 		}

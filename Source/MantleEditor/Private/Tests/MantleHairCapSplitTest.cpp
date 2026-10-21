@@ -247,4 +247,28 @@ bool FMantleHairCardsFitRunTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHairCardsFitCapGuardTest,
+	"Mantle.Editor.HairCardsFit.ABigSheetFarFromTheSkinIsHairNotACap",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHairCardsFitCapGuardTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleHairCapSplitTestPrivate;
+	TArray<FVector3f> HeadP; TArray<uint32> HeadI;
+	CapTestSphere(9.f, 16, 24, HeadP, HeadI);
+	FMantleScalpHeadSurface Head; FString Error;
+	if (!TestTrue(TEXT("head builds"), Head.Build(HeadP, HeadI, Error))) { AddError(Error); return false; }
+
+	TArray<FVector3f> Near, Far; TArray<uint32> NearI, FarI;
+	CapTestSheet(10, 4.f, 9.5f, Near, NearI); // a small sheet half a centimetre off the crown
+	CapTestSheet(10, 4.f, 30.f, Far, FarI);  // the same sheet 21 cm above it
+	const double NearMedian = FMantleHairCardsFit::MedianDistanceToSkin(Head, Near, NearI);
+	const double FarMedian = FMantleHairCardsFit::MedianDistanceToSkin(Head, Far, FarI);
+	TestTrue(TEXT("a close sheet hugs the scalp: a cap"), NearMedian <= FMantleHairCardsFit::CapMaxMedianDistanceCm);
+	TestTrue(TEXT("a far sheet is hair, not a cap"), FarMedian > FMantleHairCardsFit::CapMaxMedianDistanceCm);
+	TestEqual(TEXT("no triangles, no distance"), FMantleHairCardsFit::MedianDistanceToSkin(Head, Near, TConstArrayView<uint32>()), 0.0);
+	return true;
+}
+
 #endif
