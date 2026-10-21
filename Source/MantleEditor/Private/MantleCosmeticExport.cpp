@@ -25,6 +25,7 @@
 #include "MantleHairSourceDiscovery.h"
 #include "MantleHeadFit.h"
 #include "MantleMeshReduce.h"
+#include "MantleAccessorySettings.h"
 #include "MantleNeckSamples.h"
 #include "MantleNativeEyeExport.h"
 #include "MantleOverlayChecks.h"
@@ -5977,6 +5978,20 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 						TEXT("Lower its triangle count in a modelling tool, or add a smaller LOD0.")));
 				}
 			}
+			// A model exported with its pivot at the feet is out of the slot's reach: its box is moved onto the pivot in the
+			// upload (the creator's asset is untouched), and the note says so.
+			FVector3f Recenter = FVector3f::ZeroVector;
+			if (const FMantleContractAccessoryBounds* SlotLimits = Contract.AccessoryBounds.Find(Draft.Slot))
+			{
+				Recenter = FMantleAccessorySettings::RecenterOffset(Mesh.Bounds, *SlotLimits);
+			}
+			if (!Recenter.IsZero())
+			{
+				for (FVector3f& Position : Mesh.Glb.Positions) Position -= Recenter;
+				Mesh.Bounds = Mesh.Bounds.ShiftBy(-Recenter);
+				Package.Notes.Add(FString::Printf(TEXT("Accessory: its pivot was out of reach of %s, so the mesh is centred on the socket (moved %.1f, %.1f, %.1f cm)."),
+					*Draft.Slot, Recenter.X, Recenter.Y, Recenter.Z));
+			}
 			FMantleCosmeticChecks::CheckMeshLimits(Mesh.NumTriangles, Mesh.Glb.Positions.Num(), 0, 0, Class, Issues, 1, EMantleLODPick::LODZeroOnly);
 			if (Mesh.Glb.MaterialNames.Num() != 1)
 			{
@@ -6008,6 +6023,8 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 				}
 				else
 				{
+					for (FVector3f& Position : Lower.Glb.Positions) Position -= Recenter;
+					Lower.Bounds = Lower.Bounds.ShiftBy(-Recenter);
 					FMantleCosmeticChecks::CheckMeshLimits(Lower.NumTriangles, Lower.Glb.Positions.Num(), 0, 0, Class, LowerIssues);
 					FMantleCosmeticChecks::CheckAccessoryBounds(Draft.Slot, Lower.Bounds, Contract, LowerIssues);
 					CheckSectionUVTiles(Lower, TEXT("section"), LowerIssues);

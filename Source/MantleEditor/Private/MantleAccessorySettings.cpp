@@ -7,6 +7,10 @@
 #include "MantleAvatarContract.h"
 #include "Engine/SkeletalMesh.h"
 #include "ReferenceSkeleton.h"
+#include "Engine/StaticMesh.h"
+#include "MantleMeshReduce.h"
+#include "MantlePlaceAssets.h"
+#include "StaticMeshResources.h"
 
 namespace MantleAccessorySettingsPrivate
 {
@@ -91,4 +95,28 @@ void FMantleAccessorySettings::Save(const FMantleCosmeticDraft& Draft, const FSt
 	Saved.SetString(*Section, TEXT("Scale"), *FVector(Draft.AttachScale).ToString());
 	IFileManager::Get().MakeDirectory(*FPaths::GetPath(ConfigFile), true);
 	if (!Saved.Write(ConfigFile, false)) UE_LOG(LogMantle, Warning, TEXT("Accessory placement could not be saved to %s"), *ConfigFile);
+}
+
+FVector3f FMantleAccessorySettings::RecenterOffset(const FBox3f& Bounds, const FMantleContractAccessoryBounds& Limits)
+{
+	if (!Bounds.IsValid) return FVector3f::ZeroVector;
+	const FVector3f Size = Bounds.GetSize();
+	if (Size.GetMax() > Limits.MaxDimensionCm) return FVector3f::ZeroVector;
+	const double Reach = FVector3f(FMath::Max(FMath::Abs(Bounds.Min.X), FMath::Abs(Bounds.Max.X)),
+		FMath::Max(FMath::Abs(Bounds.Min.Y), FMath::Abs(Bounds.Max.Y)), FMath::Max(FMath::Abs(Bounds.Min.Z), FMath::Abs(Bounds.Max.Z))).Size();
+	if (Reach <= Limits.MaxReachCm) return FVector3f::ZeroVector;
+	// Centred, the farthest corner is half the box's diagonal away.
+	return Size.Size() * 0.5 <= Limits.MaxReachCm ? Bounds.GetCenter() : FVector3f::ZeroVector;
+}
+
+const UStaticMesh* FMantleAccessorySettings::UploadMesh(const UStaticMesh* Source, const FMantleContractClass& Class)
+{
+	if (!Source || Class.MaxTriangles <= 0) return Source;
+	const FStaticMeshRenderData* Render = Source->GetRenderData();
+	if (!Render || Render->LODResources.Num() == 0 || Render->LODResources[0].GetNumTriangles() <= Class.MaxTriangles) return Source;
+	FMantlePlaceAssetLimits Limits;
+	Limits.MaxTriangles = Class.MaxTriangles;
+	FString Why;
+	const UStaticMesh* Copy = FMantleMeshReduce::ReducedCopy(Source, Limits, Why);
+	return Copy ? Copy : Source;
 }

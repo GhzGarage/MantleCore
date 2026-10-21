@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleCosmeticPreviewViewport.h"
 #include "MantleAccessoryPlacement.h"
+#include "MantleAccessorySettings.h"
 #include "MantleAvatarContract.h"
 #include "MantleClipAnimInstance.h"
 #include "MantleCosmeticPreview.h"
@@ -241,16 +242,22 @@ bool SMantleCosmeticPreviewViewport::ShowAccessory(UStaticMesh* Mesh, const FStr
 	// Mantle's standardized accessory sockets sit at identity on these bones. An imported MetaHuman need not
 	// contain Mantle sockets to preview: attaching to the contract bone reproduces the published anchor.
 	AccessoryComponent->AttachToComponent(BodyComponent, FAttachmentTransformRules::KeepRelativeTransform, Bone);
+	// The creator sees what uploads: the reduced copy when the mesh is over the triangle limit, and centred on the socket
+	// when its pivot is out of reach (the export does both).
+	Mesh = const_cast<UStaticMesh*>(FMantleAccessorySettings::UploadMesh(Mesh, Contract->RigidAccessory));
 	AccessoryComponent->SetStaticMesh(Mesh);
 	FTransform Placed = MantleAccessoryPlacement::ClampedAttach(Attach);
 	const FMantleContractAccessoryBounds* Limits = Contract->AccessoryBounds.Find(Slot);
+	FVector3f Recenter = FVector3f::ZeroVector;
 	if (Limits)
 	{
-		const FBox3f Bounds(Mesh->GetBoundingBox());
+		FBox3f Bounds(Mesh->GetBoundingBox());
+		Recenter = FMantleAccessorySettings::RecenterOffset(Bounds, *Limits);
+		Bounds = Bounds.ShiftBy(-Recenter);
 		const float Factor = MantleAccessoryPlacement::BoundsClampFactor(Bounds, Placed.GetScale3D(), Limits->MaxDimensionCm, Limits->MaxReachCm);
 		Placed.SetScale3D(Placed.GetScale3D() * Factor);
 	}
-	AccessoryComponent->SetRelativeTransform(MantleAccessoryPlacement::ComposeRelative(
+	AccessoryComponent->SetRelativeTransform(FTransform(FVector(-Recenter)) * MantleAccessoryPlacement::ComposeRelative(
 		Placed, FTransform::Identity, Sockets.Find(Slot)));
 	AccessoryComponent->SetVisibility(true);
 	if (Client.IsValid()) Client->Invalidate();
