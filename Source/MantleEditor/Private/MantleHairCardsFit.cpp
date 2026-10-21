@@ -129,6 +129,7 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 	{
 		Out.Warnings.Add(FString::Printf(TEXT("the hair could not be settled on the scalp (%s), so it keeps the size and position it was given."), *Error));
 		Report.bKeepsOutOfHead = Piece.bKeepsOutOfHead;
+		Report.RootsSeatedPercent = Piece.SeatedFraction * 100.0;
 		Report.bHadCap = Split.bFound;
 		Out.Report = FMantleHairFitReport::Describe(Report);
 		return Out;
@@ -150,7 +151,8 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 
 	Report.bKeepsOutOfHead = Piece.bKeepsOutOfHead;
 	Report.bScalpCheckFit = Scalp.bCheckFit;
-	Report.RootsWithin5mmAfter = M.RootsWithin5mmAfter;
+	// The whole-piece fit's own measure: after Unreal's import, touching cards weld into clumps, so the scalp fit's roots are coarse.
+	Report.RootsSeatedPercent = Piece.SeatedFraction * 100.0;
 	// Only the vertices the cards use: the metrics count every position, cap and built-in head included.
 	TSet<uint32> CardVerticesUsed(Split.CardIndices);
 	Report.CardVertices = CardVerticesUsed.Num();

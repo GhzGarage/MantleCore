@@ -209,7 +209,7 @@ bool FMantleHairFitReportTest::RunTest(const FString& Parameters)
 {
 	// A clean fit: the headline only.
 	FMantleHairFitReport::FInput Good;
-	Good.RootsWithin5mmAfter = 95.0;
+	Good.RootsSeatedPercent = 80.0;
 	Good.CardVertices = 1000;
 	FMantleHairFitReport::FResult Result = FMantleHairFitReport::Describe(Good);
 	TestEqual(TEXT("headline"), Result.Headline, FString(TEXT("We sized your hair to fit the standard head")));
@@ -224,9 +224,10 @@ bool FMantleHairFitReportTest::RunTest(const FString& Parameters)
 	{ FMantleHairFitReport::FInput In = Good; In.bScalpCheckFit = true; TestTrue(TEXT("long lifts"), FMantleHairFitReport::Describe(In).bLowConfidence); }
 	{ FMantleHairFitReport::FInput In = Good; In.CardInsideAfter = 50; TestTrue(TEXT("5% still inside"), FMantleHairFitReport::Describe(In).bLowConfidence); }
 	{ FMantleHairFitReport::FInput In = Good; In.CardInsideAfter = 10; TestFalse(TEXT("1% inside is fine"), FMantleHairFitReport::Describe(In).bLowConfidence); }
-	{ FMantleHairFitReport::FInput In = Good; In.RootsWithin5mmAfter = 20.0; TestTrue(TEXT("roots float"), FMantleHairFitReport::Describe(In).bLowConfidence); }
-	{ FMantleHairFitReport::FInput In = Good; In.RootsWithin5mmAfter = 20.0; In.bHadCap = true; TestFalse(TEXT("roots do not count with a cap"), FMantleHairFitReport::Describe(In).bLowConfidence); }
-	{ FMantleHairFitReport::FInput In = Good; In.RootsWithin5mmAfter = -1.0; TestFalse(TEXT("roots unmeasured"), FMantleHairFitReport::Describe(In).bLowConfidence); }
+	{ FMantleHairFitReport::FInput In = Good; In.RootsSeatedPercent = 20.0; TestTrue(TEXT("few roots on the scalp"), FMantleHairFitReport::Describe(In).bLowConfidence); }
+	{ FMantleHairFitReport::FInput In = Good; In.RootsSeatedPercent = 40.0; TestFalse(TEXT("40% of roots on the scalp is fine (long hair)"), FMantleHairFitReport::Describe(In).bLowConfidence); }
+	{ FMantleHairFitReport::FInput In = Good; In.RootsSeatedPercent = 20.0; In.bHadCap = true; TestFalse(TEXT("roots do not count with a cap"), FMantleHairFitReport::Describe(In).bLowConfidence); }
+	{ FMantleHairFitReport::FInput In = Good; In.RootsSeatedPercent = -1.0; TestFalse(TEXT("roots unmeasured"), FMantleHairFitReport::Describe(In).bLowConfidence); }
 	{
 		FMantleHairFitReport::FInput In = Good; In.bKeepsOutOfHead = false;
 		const FMantleHairFitReport::FResult Low = FMantleHairFitReport::Describe(In);

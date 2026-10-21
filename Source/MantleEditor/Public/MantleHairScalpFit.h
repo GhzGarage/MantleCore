@@ -128,8 +128,8 @@ struct MANTLEEDITOR_API FMantleScalpFit
 	/** A card's root end is the 12% of its length nearer the head. */
 	static constexpr double CardEndFraction = 0.12;
 
-	/** The creator is asked to check the fit when the last-resort lift touched more than this many vertices ... */
-	static constexpr int32 CheckFitLiftCount = 400;
+	/** The creator is asked to check the fit when the last-resort lift touched more than this share of the card vertices on the head ... */
+	static constexpr double CheckFitLiftShare = 0.05;
 	/** ... or moved a vertex farther than this, cm. */
 	static constexpr double CheckFitLiftCm = 3.0;
 

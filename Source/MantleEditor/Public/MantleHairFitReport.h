@@ -27,8 +27,8 @@ struct MANTLEEDITOR_API FMantleHairFitReport
 	static const TCHAR* ConfirmLabel() { return TEXT("Looks good"); }
 	static const TCHAR* AdjustLabel() { return TEXT("Adjust"); }
 
-	/** The share of card roots within 5 mm of the skin (percent) under which the fit is called low confidence. */
-	static constexpr double LowRootPercent = 50.0;
+	/** The share of cards whose roots the whole-piece fit seated on the scalp (percent) under which the fit is called low confidence. */
+	static constexpr double LowSeatedPercent = 35.0;
 	/** The share of card vertices left inside the skin (percent) over which the fit is called low confidence. */
 	static constexpr double LowInsidePercent = 2.0;
 
@@ -38,8 +38,8 @@ struct MANTLEEDITOR_API FMantleHairFitReport
 		bool bKeepsOutOfHead = true;
 		/** The scalp fit asked the creator to check (it had to move a lot of hair a long way). */
 		bool bScalpCheckFit = false;
-		/** Cards only (no cap): the share of card roots within 5 mm of the skin after the fit, percent; negative = not measured. */
-		double RootsWithin5mmAfter = -1.0;
+		/** Cards only (no cap): the share of cards whose roots the whole-piece fit seated on the scalp, percent; negative = not measured. */
+		double RootsSeatedPercent = -1.0;
 		int32 CardVertices = 0;
 		int32 CardInsideAfter = 0;
 		bool bHadCap = false;

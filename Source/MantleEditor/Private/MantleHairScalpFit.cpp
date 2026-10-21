@@ -847,7 +847,9 @@ bool FMantleScalpFit::Run(const FMantleScalpHeadSurface& Head, const FMesh& Card
 		Out.CapPositions = ToFloat(CapWrapped);
 	}
 
-	if (M.CardLifted > CheckFitLiftCount || M.CardLiftMaxCm > CheckFitLiftCm)
+	int32 OnHeadVertices = 0;
+	for (const uint8 bOnHead : CardOnHead) OnHeadVertices += bOnHead;
+	if (M.CardLifted > CheckFitLiftShare * OnHeadVertices || M.CardLiftMaxCm > CheckFitLiftCm)
 	{
 		Out.bCheckFit = true;
 		Out.CheckFitNote = TEXT("Part of this hair had to be moved a long way to stop it sinking into the head. Please check that it sits right on the head.");

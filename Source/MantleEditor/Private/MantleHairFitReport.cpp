@@ -15,7 +15,7 @@ FMantleHairFitReport::FResult FMantleHairFitReport::Describe(const FInput& Input
 
 	const bool bManyInside = Input.CardVertices > 0
 		&& 100.0 * Input.CardInsideAfter / Input.CardVertices > LowInsidePercent;
-	const bool bRootsFloat = !Input.bHadCap && Input.RootsWithin5mmAfter >= 0.0 && Input.RootsWithin5mmAfter < LowRootPercent;
+	const bool bRootsFloat = !Input.bHadCap && Input.RootsSeatedPercent >= 0.0 && Input.RootsSeatedPercent < LowSeatedPercent;
 	Out.bLowConfidence = !Input.bKeepsOutOfHead || Input.bScalpCheckFit || bManyInside || bRootsFloat;
 	if (Out.bLowConfidence)
 	{
