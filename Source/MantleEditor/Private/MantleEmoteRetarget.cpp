@@ -370,27 +370,13 @@ namespace MantleEmoteRetargetPrivate
 			}
 		}
 	};
-
-	/** TEMPORARY (trials, removed before merge): MANTLE_EMOTE_MATCH=none turns the match off. */
-	FString MatchMode()
-	{
-		static const FString Mode = FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_MATCH"));
-		return Mode;
-	}
 }
 
-TArray<FName> FMantleEmoteRetarget::HandBones(const bool bArms)
+TArray<FName> FMantleEmoteRetarget::HandBones()
 {
 	TArray<FName> Out;
 	for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
 	{
-		if (bArms)
-		{
-			for (const TCHAR* Arm : { TEXT("clavicle"), TEXT("upperarm"), TEXT("lowerarm") })
-			{
-				Out.Add(FName(FString::Printf(TEXT("%s_%s"), Arm, Side)));
-			}
-		}
 		Out.Add(FName(FString::Printf(TEXT("hand_%s"), Side)));
 		for (const TCHAR* Finger : { TEXT("thumb"), TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky") })
 		{
@@ -733,7 +719,7 @@ UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FRef
 	}
 	double Largest = 0.0;
 	const TMap<FName, FQuat> Offsets = MatchRestRotations(Source, Copy.OffsetsOf(Source, FRetargeterCopy::Source), Target,
-		Copy.OffsetsOf(Target, FRetargeterCopy::Target), HandBones(false), &Largest);
+		Copy.OffsetsOf(Target, FRetargeterCopy::Target), HandBones(), &Largest);
 	for (const TPair<FName, FQuat>& Offset : Offsets)
 	{
 		Copy.SetTargetOffset(Offset.Key, Offset.Value);
@@ -808,28 +794,24 @@ bool FMantleEmoteRetarget::RetargetAndSample(UAnimSequence* Sequence, const FStr
 	// mantle #840 step 1, rest-pose match: Unreal's auto-align writes no offsets for fingers, so the FK finger chains would
 	// carry the difference between the two rest hands into every frame (a constant 17 to 35 degree under-curl). This
 	// retarget runs through a copy whose UEFN pose has the source's rest arms, hands and fingers.
-	UObject* Matched = nullptr;
-	if (MatchMode() != TEXT("none"))
+	FString MatchError;
+	FString MatchNote;
+	UObject* const Matched = MakeRestHandsCopy(Retargeter, SourceMesh->GetRefSkeleton(), TargetMesh->GetRefSkeleton(), MatchNote, MatchError);
+	if (!Matched)
 	{
-		FString MatchError;
-		FString MatchNote;
-		Matched = MakeRestHandsCopy(Retargeter, SourceMesh->GetRefSkeleton(), TargetMesh->GetRefSkeleton(), MatchNote, MatchError);
-		if (!Matched)
-		{
-			OutError = FString::Printf(TEXT("the retargeter's rest hands could not be matched (%s): enable the IK Rig plugin and restart the editor."), *MatchError);
-			return false;
-		}
-		if (OutHandsNote)
-		{
-			*OutHandsNote = TEXT("Emote rest hands: ") + MatchNote;
-		}
+		OutError = FString::Printf(TEXT("the retargeter's rest hands could not be matched (%s): enable the IK Rig plugin and restart the editor."), *MatchError);
+		return false;
+	}
+	if (OutHandsNote)
+	{
+		*OutHandsNote = TEXT("Emote rest hands: ") + MatchNote;
 	}
 	ON_SCOPE_EXIT
 	{
 		ReleaseRestHandsCopy(Matched);
 	};
 	const double Frame = Contract.EmoteFrameRate > 0.0f ? 1.0 / Contract.EmoteFrameRate : 1.0 / 30.0;
-	return RetargetThrough(Sequence, SourceMesh, TargetMesh, Matched ? Matched : Retargeter, Frame,
+	return RetargetThrough(Sequence, SourceMesh, TargetMesh, Matched, Frame,
 		[&Contract, &OutClip, Sequence](UAnimSequence& Retargeted, FString& OutUseError)
 		{
 			FString SampleError;
