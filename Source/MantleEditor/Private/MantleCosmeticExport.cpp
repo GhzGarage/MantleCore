@@ -18,8 +18,7 @@
 #include "MantleGarmentFitter.h"
 #include "MantleHairCards.h"
 #include "MantleHairColor.h"
-#include "MantleHairPieceFit.h"
-#include "MantleHairScalpFit.h"
+#include "MantleHairHeadFit.h"
 #include "MantleNativeHairProfile.h"
 #include "GroomAsset.h"
 #include "MantleHairSourceDiscovery.h"
@@ -3023,7 +3022,7 @@ namespace MantleCosmeticExportPrivate
 	 * Sizes and seats a bought cards pack on the authoring head (stage 1, the whole-piece fit), then settles it on
 	 * the scalp (stage 2, the smoothed offset field and the last-resort lift). Positions only; topology, UVs and normals are
 	 * untouched. A failure leaves the cards as they were and says so in a warning, it never blocks the upload. The pack's
-	 * solid cap, if it has one, is not a separate source in this path, so the cards-only route applies.
+	 * solid cap, if it has one, is found in the mesh and split from the cards (FMantleHairHeadFit).
 	 */
 	void FitThirdPartyHairCardsToHead(FMeshSource& Cards, const FMeshSource& Face, FMantleCosmeticPackage& Package)
 	{
@@ -3041,48 +3040,29 @@ namespace MantleCosmeticExportPrivate
 		// A head with no section named as skin: the whole face mesh is the surface.
 		const TArray<uint32>& HeadIndices = SkinIndices.IsEmpty() ? AllFaceIndices : SkinIndices;
 
-		FString Error;
-		FMantleHairHeadSamples Samples;
-		FMantleScalpHeadSurface Surface;
-		if (!Samples.Build(Face.Glb.Positions, HeadIndices, Error) || !Surface.Build(Face.Glb.Positions, HeadIndices, Error))
-		{
-			Package.Issues.Add(FMantleCosmeticChecks::Warning(FString::Printf(TEXT("the hair could not be fitted to the head (%s), so it uploads as it is."), *Error)));
-			return;
-		}
-		FMantleHairPieceFit::FResult Piece;
-		if (!FMantleHairPieceFit::Fit(Samples, Cards.Glb.Positions, Piece, Error))
-		{
-			Package.Issues.Add(FMantleCosmeticChecks::Warning(FString::Printf(TEXT("the hair could not be fitted to the head (%s), so it uploads as it is."), *Error)));
-			return;
-		}
-		FMantleHairPieceFit::ApplyTo(Piece, Cards.Glb.Positions);
-		Package.Notes.Add(Piece.Describe());
-		if (!Piece.bMeetsOutsideBar)
-		{
-			Package.Notes.Add(TEXT("We couldn't find a size and position that keeps this hair outside the head, so check that it sits on the head."));
-		}
-
-		TArray<uint32> CardIndices;
+		// The hair's triangles, each with its section, so the cap can be told from the cards and a baked-in head from both.
+		TArray<uint32> HairIndices;
+		TArray<int32> TriangleSections;
 		for (const FMantleGlbPrimitive& Primitive : Cards.Glb.Primitives)
 		{
-			for (const uint32 Index : Primitive.Indices) CardIndices.Add(Index + static_cast<uint32>(Primitive.FirstVertex));
+			for (const uint32 Index : Primitive.Indices) HairIndices.Add(Index + static_cast<uint32>(Primitive.FirstVertex));
+			for (int32 T = 0; T < Primitive.Indices.Num() / 3; ++T) TriangleSections.Add(Primitive.MaterialIndex);
 		}
-		FMantleScalpFit::FMesh CardMesh;
-		CardMesh.Positions = Cards.Glb.Positions;
-		CardMesh.Indices = CardIndices;
-		FMantleScalpFit::FResult Scalp;
-		if (!FMantleScalpFit::Run(Surface, CardMesh, nullptr, Scalp, Error))
-		{
-			Package.Issues.Add(FMantleCosmeticChecks::Warning(FString::Printf(TEXT("the hair could not be settled on the scalp (%s), so it keeps the size and position it was given."), *Error)));
-		}
-		else
-		{
-			Cards.Glb.Positions = Scalp.CardPositions;
-			const FMantleScalpFit::FMetrics& M = Scalp.Metrics;
-			Package.Notes.Add(FString::Printf(TEXT("Hair scalp fit: %d cards, roots within 5 mm of the skin %.0f%% to %.0f%%, %d vertices lifted off the skin (largest %.1f cm)"),
-				M.CardCount, M.RootsWithin5mmBefore, M.RootsWithin5mmAfter, M.CardLifted, M.CardLiftMaxCm));
-			if (Scalp.bCheckFit) Package.Notes.Add(Scalp.CheckFitNote);
-		}
+
+		FMantleHairHeadFit::FInput Input;
+		Input.HeadPositions = Face.Glb.Positions;
+		Input.HeadIndices = HeadIndices;
+		Input.HairPositions = Cards.Glb.Positions;
+		Input.HairIndices = HairIndices;
+		Input.TriangleSections = TriangleSections;
+		Input.SectionNames = Cards.Glb.MaterialNames;
+		const FMantleHairHeadFit::FResult Fit = FMantleHairHeadFit::Run(Input);
+		for (const FString& Warning : Fit.Warnings) Package.Issues.Add(FMantleCosmeticChecks::Warning(Warning));
+		Package.Notes.Append(Fit.Notes);
+		if (!Fit.bFitted) return;
+		Cards.Glb.Positions = Fit.Positions;
+		Package.HairHeadFit = Fit.Report;
+		Package.bHairHeadFitted = true;
 		Cards.Bounds = FBox3f(ForceInit);
 		for (const FVector3f& P : Cards.Glb.Positions) Cards.Bounds += P;
 	}
@@ -5732,7 +5712,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 			}
 			// Bought cards are made for another head. Size and seat them on this one before anything measures them
 			// (the preview, the LODs and the upload all read the fitted positions). MetaHuman's own hair is never touched.
-			if (bHair && bHairCards && bFace && ShouldFitThirdPartyHairCardsToHead(Source))
+			if (bHair && bHairCards && bFace && !Draft.bPlaceHairByHand && ShouldFitThirdPartyHairCardsToHead(Source))
 			{
 				FitThirdPartyHairCardsToHead(Mesh, FaceMesh, Package);
 			}

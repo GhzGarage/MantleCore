@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "MantleApiClient.h"
 #include "MantleCosmeticValidation.h"
+#include "MantleHairFitReport.h"
 #include "MantleNativeEye.h"
 #include "MantleNativeHair.h"
 #include "MantleClothingColor.h"
@@ -231,6 +232,10 @@ struct MANTLEEDITOR_API FMantleCosmeticPackage
 
 	/** What the export did and measured, one line each, for the panel's details and the log. */
 	TArray<FString> Notes;
+
+	/** #51, local only: bought hair was sized to the standard head, and the words the preview shows for it. */
+	bool bHairHeadFitted = false;
+	FMantleHairFitReport::FResult HairHeadFit;
 
 	bool HasErrors() const { return FMantleCosmeticChecks::HasErrors(Issues); }
 
