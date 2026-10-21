@@ -956,16 +956,16 @@ USkeletalMesh* FMantleParametricOutfit::FindBodyBeside(USkeletalMesh* Garment)
 			if (!Body || Body == Garment) { continue; }
 			const FString Worn = FMantleGarmentOutfit::WornClothing(*Body);
 			if (!Worn.IsEmpty()) { UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: wears %s"), *Body->GetName(), *Worn); continue; }
-			// A bare body: named for a body, or every section skin; never a head (the Convert list's own test, which also takes a body with eyes and teeth).
+			// A bare body: no clothing sections (WornClothing, above), a skin section or a name for a body, never a head; the whole-body height below rules out a part such as feet or a torso.
 			TArray<int32> Slots;
 			const TArray<FMantleOutfitSection> Sections = FMantleCosmeticExport::ReadOutfitSections(Body, 0, Slots);
-			bool bAllSkin = Sections.Num() > 0;
-			for (const FMantleOutfitSection& Section : Sections) { bAllSkin &= FMantleOutfitSections::Classify(Section) == EMantleOutfitPiece::Skin; }
+			bool bHasSkin = false;
+			for (const FMantleOutfitSection& Section : Sections) { bHasSkin |= FMantleOutfitSections::Classify(Section) == EMantleOutfitPiece::Skin; }
 			const TArray<FString> Words = FMantleOutfitSections::Words(Body->GetName());
 			const bool bNamedBody = Words.Contains(TEXT("body")) || Words.Contains(TEXT("nude")) || Words.Contains(TEXT("naked"));
-			if (!(bAllSkin || bNamedBody) || Words.Contains(TEXT("head")) || Words.Contains(TEXT("face")))
+			if (!(bHasSkin || bNamedBody) || Words.Contains(TEXT("head")) || Words.Contains(TEXT("face")))
 			{
-				UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: not a bare body (all skin %d)"), *Body->GetName(), bAllSkin ? 1 : 0);
+				UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: not a bare body (has skin %d)"), *Body->GetName(), bHasSkin ? 1 : 0);
 				continue;
 			}
 			// A whole body: feet, hands or a torso alone are not the body the clothing was made for.
