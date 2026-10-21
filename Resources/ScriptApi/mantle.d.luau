@@ -444,7 +444,7 @@ end
 --- Spawn the place's own meshes at runtime (server only). Change any mesh's look through its Entity.
 declare extern type AssetsService with
 	--- Spawn one of the place's StaticMesh assets (any mesh its asset list names, placed or not) that every player sees, and return it as an Entity. props sets how it starts: Rotation, Scale (a Vector3, or one number for all three), Material (one of the place's Material assets, for every slot), Color, Transparency, Collision ("Blocking" by default, "Overlap" or "None"), CastShadow (true by default) and Anchored (spawned meshes stay where scripts put them; false is refused). A mesh uploaded with the place may take a moment to appear on a player's screen while it downloads. Spawned meshes count towards the same limit as Entity:Clone; Destroy one to make room. (server only)
-	function Spawn(self, assetId: string, position: Vector3, props: {Rotation: Vector3?, Scale: Vector3?, Material: string?, Color: string?, Transparency: number?, Collision: string?, CastShadow: boolean?, Anchored: boolean?}?): Entity
+	function Spawn(self, assetId: string, position: Vector3, props: {Rotation: Vector3?, Scale: Vector3 | number?, Material: string?, Color: string?, Transparency: number?, Collision: string?, CastShadow: boolean?, Anchored: boolean?}?): Entity
 end
 declare Assets: AssetsService
 
