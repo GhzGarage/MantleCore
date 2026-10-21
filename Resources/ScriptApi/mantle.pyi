@@ -449,24 +449,19 @@ class _AvatarService:
 Avatar: _AvatarService
 
 class _BackpackService:
-    """Give players the built-in Tools and weapons, take them away, and equip them (server only)."""
+    """Give players weapons, take them away, and equip them (server only)."""
+    item_used: Signal
     def clear(self, player: Player, /) -> float:
         """Empty the player's Backpack, leaving only fists. Returns how many Tools were removed."""
         ...
     def equip_slot(self, player: Player, slot: float, /) -> bool:
         """Put the Tool in this Backpack slot in the player's hands. Slots count from 0, so the hotbar key 1 is slot 0. Returns false when the slot is empty or the player is dead."""
         ...
-    def get_built_in_tools(self) -> list[str]:
-        """The ids GrantBuiltIn accepts in this build: 'grenade', 'healthpack' and 'spawnpad'. 'fists' is never listed. No weapon is built in (editor test sessions also list their test guns)."""
-        ...
     def get_tools(self, player: Player, /) -> list[str]:
         """The ids of the Tools in the player's Backpack, in slot order. Fists, which every player always has, is never listed. Empty while the player has no character (respawning)."""
         ...
     def grant(self, player: Player, item: str, /) -> str:
-        """Give the player a weapon this place stores: item is the library item id Storage:Get returns for one of the place's storage names. Returns the new Tool's stable id. Errors for anything else -- an asset id, a built-in tool's name, an object path, an item the place does not store, or a vehicle. Also errors if the stored weapon has not finished preparing or the player cannot receive it."""
-        ...
-    def grant_built_in(self, player: Player, tool: str, /) -> Optional[str]:
-        """Give the player one of the built-in Tools: 'grenade', 'healthpack' or 'spawnpad'. Returns the new Tool's id, or nil when the player has no character right now, already has that Tool, or has a full Backpack. A player holding nothing equips it at once. 'fists' is accepted and does nothing: every player always has fists. No weapon is built in: give one from the place's storage with Grant. (Editor test sessions also take the test guns GetBuiltInTools lists there.)"""
+        """Give the player a weapon this place stores: item is the library item id Storage:Get returns for one of the place's storage names. Returns the new Tool's stable id. Errors for anything else -- an asset id, an object path, an item the place does not store, or a vehicle. Also errors if the stored weapon has not finished preparing or the player cannot receive it."""
         ...
     def remove(self, player: Player, toolId: str, /) -> bool:
         """Take the Tool with this id out of the player's Backpack (unequipping it first). Returns false when the player does not have it. Fists can never be removed."""
