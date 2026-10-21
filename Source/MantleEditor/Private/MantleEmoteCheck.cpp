@@ -24,6 +24,7 @@
 #include "AnimationRuntime.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/SkeletalMeshSocket.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
@@ -906,6 +907,30 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 		const FMantleBodyMatch BodyMatch = CompareBodies(SourcePoses, HandsSource->GetRefSkeleton(), Shown, ShownBones);
 		Say(FString::Printf(TEXT("Body as shown on %s: %s"), *BodyMesh->GetName(), *BodyMatch.Describe()));
 		SaveBody(BodyMatch, FPaths::Combine(Directory, Label + TEXT("_body_shown.csv")));
+		// Where a held thing sits, every frame: the hands and the body's hand sockets in component space, so two runs (one
+		// retargeter against another) can be compared frame for frame.
+		TArray<FString> Grips = { TEXT("frame,item,x,y,z,qx,qy,qz,qw") };
+		for (const TCHAR* Hand : { TEXT("hand_r"), TEXT("hand_l") })
+		{
+			const int32 Bone = ShownBones.FindRawBoneIndex(FName(Hand));
+			const USkeletalMeshSocket* Socket = BodyMesh->FindSocket(FName(FString(Hand) + TEXT("Socket")));
+			for (int32 Frame = 0; Bone != INDEX_NONE && Frame < Shown.Num(); ++Frame)
+			{
+				const FTransform HandPose = Shown[Frame][Bone];
+				const FTransform SocketPose = Socket ? Socket->GetSocketLocalTransform() * HandPose : FTransform::Identity;
+				for (const TPair<FString, FTransform>& Item : { TPair<FString, FTransform>(Hand, HandPose), TPair<FString, FTransform>(FString(Hand) + TEXT("Socket"), SocketPose) })
+				{
+					if (Item.Key.EndsWith(TEXT("Socket")) && !Socket)
+					{
+						continue;
+					}
+					const FVector At = Item.Value.GetLocation();
+					const FQuat Turn = Item.Value.GetRotation();
+					Grips.Add(FString::Printf(TEXT("%d,%s,%.3f,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f"), Frame, *Item.Key, At.X, At.Y, At.Z, Turn.X, Turn.Y, Turn.Z, Turn.W));
+				}
+			}
+		}
+		FFileHelper::SaveStringArrayToFile(Grips, *FPaths::Combine(Directory, Label + TEXT("_grips_shown.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 	}
 	const FString SheetFile = FPaths::Combine(Directory, Label + TEXT("_sheet.png"));
