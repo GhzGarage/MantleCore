@@ -14,6 +14,7 @@
 #include "MantleCosmeticPreviewRetarget.h"
 #include "MantleCosmeticThumbnail.h"
 #include "MantleEditorActions.h"
+#include "MantleEmoteRetarget.h"
 #include "MantleFitBodies.h"
 #include "MantlePng.h"
 
@@ -126,6 +127,128 @@ namespace MantleEmoteCheckPrivate
 		Component->UpdateBounds();
 		Component->MarkRenderTransformDirty();
 		Component->MarkRenderDynamicDataDirty();
+	}
+
+	/** A standing body's whole height from the floor, with room around it to move, the same at every moment. */
+	FBox StandingFrame(const USkeletalMesh* Mesh)
+	{
+		const FBox Bounds = Mesh->GetImportedBounds().GetBox();
+		const FVector Center = Bounds.GetCenter();
+		const double Top = FMath::Max(Bounds.Max.Z, 50.0);
+		UE_LOG(LogMantleCheckEmote, Log, TEXT("MANTLE_CHECK_EMOTE frame of %s from bounds %s"), *Mesh->GetName(), *Bounds.ToString());
+		return FBox(FVector(Center.X - 60.0, Center.Y - 60.0, 0.0), FVector(Center.X + 60.0, Center.Y + 60.0, Top + 15.0));
+	}
+
+	/** "0.00 s, 0.37 s, ...". */
+	FString DescribeTimes(const TArray<float>& Times)
+	{
+		TArray<FString> Out;
+		for (const float Time : Times)
+		{
+			Out.Add(FString::Printf(TEXT("%.2f s"), Time));
+		}
+		return FString::Join(Out, TEXT(", "));
+	}
+
+	/**
+	 * Players' clients' pose at Time: the hidden UEFN driver plays Clip held at Time (the client's emote layer, the root left
+	 * out), and the body (Components[0]) copies it through Retargeter; its face (Components[1]) follows by leader pose.
+	 */
+	void PoseOnBody(FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, USkeletalMesh* Driver, UObject* Retargeter,
+		const TSharedRef<const FMantleAnimClip>& Clip, const float Time)
+	{
+		USkeletalMeshComponent* BodyComponent = Components.IsValidIndex(0) ? Components[0] : nullptr;
+		if (!BodyComponent)
+		{
+			return;
+		}
+		USkeletalMeshComponent* DriverComponent = NewObject<USkeletalMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+		DriverComponent->SetVisibility(false);
+		DriverComponent->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+		DriverComponent->SetSkeletalMeshAsset(Driver);
+		Scene.AddComponent(DriverComponent, FTransform::Identity);
+		DriverComponent->SetAnimationMode(EAnimationMode::AnimationBlueprint);
+		DriverComponent->SetAnimInstanceClass(UMantleClipAnimInstance::StaticClass());
+		if (UMantleClipAnimInstance* ClipInstance = Cast<UMantleClipAnimInstance>(DriverComponent->GetAnimInstance()))
+		{
+			FMantleClipPlayback Playback;
+			Playback.bLoop = false;
+			Playback.PlayRate = 0.0;
+			Playback.StartOffset = Time;
+			ClipInstance->SetApplyRootTranslation(false);
+			ClipInstance->SetTimeSource([] { return 0.0; });
+			ClipInstance->SetClip(Clip, Playback);
+		}
+		BodyComponent->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+		BodyComponent->SetAnimationMode(EAnimationMode::AnimationBlueprint);
+		BodyComponent->SetAnimInstanceClass(UMantlePreviewRetargetAnimInstance::StaticClass());
+		if (UMantlePreviewRetargetAnimInstance* Instance = Cast<UMantlePreviewRetargetAnimInstance>(BodyComponent->GetAnimInstance()))
+		{
+			Instance->Retargeter = Retargeter;
+			Instance->Source = DriverComponent;
+		}
+		USkeletalMeshComponent* FaceComponent = Components.IsValidIndex(1) ? Components[1] : nullptr;
+		if (FaceComponent)
+		{
+			FaceComponent->SetLeaderPoseComponent(BodyComponent, /*bForceUpdate*/ true);
+		}
+		// Twice: the retarget node reads the driver's pose before it evaluates, and sets itself up on its first update.
+		for (int32 Pass = 0; Pass < 2; ++Pass)
+		{
+			Evaluate(DriverComponent);
+			Evaluate(BodyComponent);
+		}
+		if (FaceComponent)
+		{
+			FaceComponent->SetLeaderPoseComponent(BodyComponent, /*bForceUpdate*/ true);
+			FaceComponent->UpdateBounds();
+			FaceComponent->MarkRenderDynamicDataDirty();
+		}
+		if (UWorld* World = Scene.GetWorld())
+		{
+			World->SendAllEndOfFrameUpdates();
+		}
+	}
+
+	/** The original clip on its own mesh (Components[0]) at Time, as the animation editor plays it. */
+	void PoseSource(FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, UAnimSequence* Sequence, const float Time)
+	{
+		USkeletalMeshComponent* Component = Components.IsValidIndex(0) ? Components[0] : nullptr;
+		if (!Component)
+		{
+			return;
+		}
+		Component->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+		Component->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+		Component->SetAnimation(Sequence);
+		Component->SetPosition(FMath::Min(Time, Sequence->GetPlayLength()), /*bFireNotifies*/ false);
+		Evaluate(Component);
+		if (UWorld* World = Scene.GetWorld())
+		{
+			World->SendAllEndOfFrameUpdates();
+		}
+	}
+
+	/** One capture of Subject per time (SetPose sets its Pose), tiled into File. Problems: one clause per moment that could not be drawn. */
+	bool DrawSheet(FMantleThumbnailSubject Subject, const TArray<float>& Times, TFunctionRef<void(FMantleThumbnailSubject&, float)> SetPose, const int32 TileSize,
+		const FString& File, FString& OutProblems)
+	{
+		TArray<TArray<FColor>> Tiles;
+		for (const float Time : Times)
+		{
+			SetPose(Subject, Time);
+			TArray<FColor> Pixels;
+			FString Error;
+			if (!FMantleCosmeticThumbnail::Capture(Subject, TileSize, Pixels, Error))
+			{
+				OutProblems += FString::Printf(TEXT("; the moment at %.2f s could not be drawn (%s)"), Time, *Error);
+			}
+			Tiles.Add(MoveTemp(Pixels));
+		}
+		int32 Width = 0;
+		int32 Height = 0;
+		const TArray<FColor> Sheet = FMantleEmoteCheck::Tile(Tiles, TileSize, FMantleEmoteCheck::SheetColumns, Width, Height);
+		return FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Width, Height, Sheet), *File);
 	}
 }
 
@@ -320,87 +443,40 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 	const TSharedRef<const FMantleAnimClip> Played = WithoutRoot(Clip, Driver->GetRefSkeleton().GetBoneName(0));
 
 	FMantleThumbnailSubject Subject = FMantleCosmeticThumbnail::AvatarSubject(BodyMesh, FaceMesh);
-	// The whole standing body with room to move, the same frame at every moment, on the thumbnail scene's floor.
-	Subject.Frame = BodyMesh->GetImportedBounds().GetBox().ExpandBy(FVector(45.0, 45.0, 10.0));
+	Subject.Frame = StandingFrame(BodyMesh);
 	Subject.bFloor = true;
 	const TArray<float> Times = Moments(Clip.GetDuration(), SheetMoments);
-	TArray<TArray<FColor>> Tiles;
-	TArray<FString> Shown;
-	for (const float Time : Times)
-	{
-		UObject* const Retargeter = Inputs.Retargeter;
-		Subject.Pose = [Driver, Retargeter, Played, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components)
-		{
-			USkeletalMeshComponent* BodyComponent = Components.IsValidIndex(0) ? Components[0] : nullptr;
-			if (!BodyComponent)
-			{
-				return;
-			}
-			// The hidden UEFN driver plays the clip, held at Time (the client's emote layer, the root left out).
-			USkeletalMeshComponent* DriverComponent = NewObject<USkeletalMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
-			DriverComponent->SetVisibility(false);
-			DriverComponent->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-			DriverComponent->SetSkeletalMeshAsset(Driver);
-			Scene.AddComponent(DriverComponent, FTransform::Identity);
-			DriverComponent->SetAnimationMode(EAnimationMode::AnimationBlueprint);
-			DriverComponent->SetAnimInstanceClass(UMantleClipAnimInstance::StaticClass());
-			if (UMantleClipAnimInstance* ClipInstance = Cast<UMantleClipAnimInstance>(DriverComponent->GetAnimInstance()))
-			{
-				FMantleClipPlayback Playback;
-				Playback.bLoop = false;
-				Playback.PlayRate = 0.0;
-				Playback.StartOffset = Time;
-				ClipInstance->SetApplyRootTranslation(false);
-				ClipInstance->SetTimeSource([] { return 0.0; });
-				ClipInstance->SetClip(Played, Playback);
-			}
-			// The body copies the driver through its retargeter, as every avatar does.
-			BodyComponent->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-			BodyComponent->SetAnimationMode(EAnimationMode::AnimationBlueprint);
-			BodyComponent->SetAnimInstanceClass(UMantlePreviewRetargetAnimInstance::StaticClass());
-			if (UMantlePreviewRetargetAnimInstance* Instance = Cast<UMantlePreviewRetargetAnimInstance>(BodyComponent->GetAnimInstance()))
-			{
-				Instance->Retargeter = Retargeter;
-				Instance->Source = DriverComponent;
-			}
-			USkeletalMeshComponent* FaceComponent = Components.IsValidIndex(1) ? Components[1] : nullptr;
-			if (FaceComponent)
-			{
-				FaceComponent->SetLeaderPoseComponent(BodyComponent, /*bForceUpdate*/ true);
-			}
-			// Twice: the retarget node reads the driver's pose before it evaluates, and sets itself up on its first update.
-			for (int32 Pass = 0; Pass < 2; ++Pass)
-			{
-				MantleEmoteCheckPrivate::Evaluate(DriverComponent);
-				MantleEmoteCheckPrivate::Evaluate(BodyComponent);
-			}
-			if (FaceComponent)
-			{
-				FaceComponent->SetLeaderPoseComponent(BodyComponent, /*bForceUpdate*/ true);
-				FaceComponent->UpdateBounds();
-				FaceComponent->MarkRenderDynamicDataDirty();
-			}
-			if (UWorld* World = Scene.GetWorld())
-			{
-				World->SendAllEndOfFrameUpdates();
-			}
-		};
-		TArray<FColor> Pixels;
-		FString Error;
-		if (!FMantleCosmeticThumbnail::Capture(Subject, TileSize, Pixels, Error))
-		{
-			Say(FString::Printf(TEXT("Sheet: the moment at %.2f s could not be drawn (%s)"), Time, *Error));
-		}
-		Tiles.Add(MoveTemp(Pixels));
-		Shown.Add(FString::Printf(TEXT("%.2f s"), Time));
-	}
-	int32 Width = 0;
-	int32 Height = 0;
-	const TArray<FColor> Sheet = Tile(Tiles, TileSize, SheetColumns, Width, Height);
+	UObject* const Retargeter = Inputs.Retargeter;
 	const FString SheetFile = FPaths::Combine(Directory, Label + TEXT("_sheet.png"));
-	const bool bWritten = FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Width, Height, Sheet), *SheetFile);
-	Say(FString::Printf(TEXT("Sheet: %s, %s, moments left to right then down: %s"), bWritten ? *SheetFile : TEXT("NOT WRITTEN"), *BodyDescribe,
-		*FString::Join(Shown, TEXT(", "))));
+	FString Problems;
+	const bool bWritten = DrawSheet(Subject, Times, [Driver, Retargeter, Played](FMantleThumbnailSubject& Shot, const float Time)
+	{
+		Shot.Pose = [Driver, Retargeter, Played, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components)
+		{
+			PoseOnBody(Scene, Components, Driver, Retargeter, Played, Time);
+		};
+	}, TileSize, SheetFile, Problems);
+	Say(FString::Printf(TEXT("Sheet: %s, %s, moments left to right then down: %s%s"), bWritten ? *SheetFile : TEXT("NOT WRITTEN"), *BodyDescribe,
+		*DescribeTimes(Times), *Problems));
+
+	// The clip as it was made, on the body it was made on, at the same moments: what the sheet above should look like.
+	if (USkeletalMesh* SourceMesh = FMantleEmoteRetarget::ChooseSourceMesh(Sequence, nullptr))
+	{
+		FMantleThumbnailSubject Source = FMantleCosmeticThumbnail::AvatarSubject(SourceMesh, nullptr);
+		Source.Frame = StandingFrame(SourceMesh);
+		Source.bFloor = true;
+		const FString SourceFile = FPaths::Combine(Directory, Label + TEXT("_source.png"));
+		FString SourceProblems;
+		const bool bSourceWritten = DrawSheet(Source, Times, [Sequence](FMantleThumbnailSubject& Shot, const float Time)
+		{
+			Shot.Pose = [Sequence, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components)
+			{
+				PoseSource(Scene, Components, Sequence, Time);
+			};
+		}, TileSize, SourceFile, SourceProblems);
+		Say(FString::Printf(TEXT("Source: %s, the original clip on %s (root motion and all), same moments%s"), bSourceWritten ? *SourceFile : TEXT("NOT WRITTEN"),
+			*SourceMesh->GetPathName(), *SourceProblems));
+	}
 	return true;
 }
 

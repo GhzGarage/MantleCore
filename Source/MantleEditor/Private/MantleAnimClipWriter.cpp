@@ -22,6 +22,9 @@ namespace MantleAnimClipWriterPrivate
 	constexpr double MaxTranslationCm = 10000.0;
 	constexpr double QuaternionTolerance = 0.01;
 
+	/** How long the end of a looping emote blends into its loop_start pose (CloseLoopSeam). */
+	constexpr float LoopSeamBlendSeconds = 0.25f;
+
 	void WriteU32(TArray<uint8>& Out, uint32 Value)
 	{
 		Out.Add(static_cast<uint8>(Value));
@@ -372,29 +375,48 @@ bool FMantleAnimClipWriter::Sample(const UAnimSequence* Sequence, const FMantleA
 			Track.Rotations.Add(FQuat4f(Rotation));
 			Track.Translations.Add(FVector3f(Translation));
 		}
+	}
 
-		// A translation that stays at the bone's reference translation is what the node does with
-		// no translation track: leave it out (MAN1's size cap is 512 KiB).
-		const int32 BoneIndex = Reference ? Reference->FindBoneIndex(TrackName) : INDEX_NONE;
-		if (BoneIndex != INDEX_NONE)
+	// Players' clients hold the root still: what it does moves onto its children (the pelvis), so it still shows.
+	if (Reference && Reference->GetNum() > 0)
+	{
+		TArray<FName> Children;
+		for (int32 Bone = 1; Bone < Reference->GetNum(); ++Bone)
 		{
-			const FVector3f RefTranslation(Reference->GetRefBonePose()[BoneIndex].GetTranslation());
-			bool bAtReference = true;
-			for (const FVector3f& Translation : Track.Translations)
+			if (Reference->GetParentIndex(Bone) == 0)
 			{
-				if (FVector3f::Distance(Translation, RefTranslation) > 0.01f)
-				{
-					bAtReference = false;
-					break;
-				}
+				Children.Add(Reference->GetBoneName(Bone));
 			}
-			if (bAtReference)
+		}
+		MoveRootOntoChildren(OutClip, Reference->GetBoneName(0), Children, Reference->GetRefBonePose()[0], Contract.EmoteMaxRootCm);
+	}
+
+	// A translation that stays at the bone's reference translation is what the node does with
+	// no translation track: leave it out (MAN1's size cap is 512 KiB).
+	for (FMantleAnimClipTrackData& Track : OutClip.Tracks)
+	{
+		const int32 BoneIndex = Reference ? Reference->FindBoneIndex(Track.Bone) : INDEX_NONE;
+		if (BoneIndex == INDEX_NONE)
+		{
+			continue;
+		}
+		const FVector3f RefTranslation(Reference->GetRefBonePose()[BoneIndex].GetTranslation());
+		bool bAtReference = true;
+		for (const FVector3f& Translation : Track.Translations)
+		{
+			if (FVector3f::Distance(Translation, RefTranslation) > 0.01f)
 			{
-				Track.Translations.Reset();
+				bAtReference = false;
+				break;
 			}
+		}
+		if (bAtReference)
+		{
+			Track.Translations.Reset();
 		}
 	}
 
+	float LoopStart = -1.0f;
 	for (const FAnimNotifyEvent& Notify : Sequence->Notifies)
 	{
 		const FString Name = Notify.NotifyName.ToString();
@@ -403,11 +425,142 @@ bool FMantleAnimClipWriter::Sample(const UAnimSequence* Sequence, const FMantleA
 			FMantleAnimClipEventData& Event = OutClip.Events.AddDefaulted_GetRef();
 			Event.Name = Name;
 			Event.TimeSeconds = FMath::Clamp(Notify.GetTime(), 0.0f, static_cast<float>(OutClip.DurationSeconds()));
+			if (Name == TEXT("loop_start") && LoopStart < 0.0f)
+			{
+				LoopStart = Event.TimeSeconds;
+			}
 		}
+		else
+		{
+			// Sounds, effects and the creator's own notifies: no event carries them (the allowlist is the cook's).
+			OutClip.DroppedNotifies.AddUnique(Name.IsEmpty() || Name == TEXT("None") ? FString(TEXT("(unnamed)")) : Name);
+		}
+	}
+	OutClip.DroppedCurves = Model->GetNumberOfFloatCurves();
+	if (LoopStart >= 0.0f)
+	{
+		CloseLoopSeam(OutClip, LoopStart, MantleAnimClipWriterPrivate::LoopSeamBlendSeconds);
 	}
 
 	Canonicalize(OutClip);
 	return true;
+}
+
+void FMantleAnimClipWriter::MoveRootOntoChildren(FMantleAnimClipData& Clip, const FName Root, TConstArrayView<FName> Children, const FTransform& RootReference,
+	const double MaxTravelCm)
+{
+	Clip.RootMotion = FMantleAnimClipData::FRootMotion();
+	FMantleAnimClipTrackData* RootTrack = Clip.Tracks.FindByPredicate([Root](const FMantleAnimClipTrackData& Track) { return Track.Bone == Root; });
+	if (!RootTrack || Clip.FrameCount < 1 || RootTrack->Rotations.Num() == 0)
+	{
+		return;
+	}
+	const int32 Frames = Clip.FrameCount;
+	auto RootAt = [RootTrack, &RootReference](const int32 Frame)
+	{
+		const FQuat4f Rotation = RootTrack->Rotations[FMath::Min(Frame, RootTrack->Rotations.Num() - 1)];
+		const FVector3f Translation = RootTrack->Translations.Num() > 0 ? RootTrack->Translations[FMath::Min(Frame, RootTrack->Translations.Num() - 1)]
+			: FVector3f(RootReference.GetTranslation());
+		return FTransform(FQuat(Rotation).GetNormalized(), FVector(Translation));
+	};
+
+	// What the root does, from its first key: across the floor, up and down, and its turn.
+	const FTransform First = RootAt(0);
+	double Lowest = First.GetTranslation().Z;
+	double Highest = Lowest;
+	bool bOffReference = !First.Equals(RootReference, 0.01);
+	for (int32 Frame = 0; Frame < Frames; ++Frame)
+	{
+		const FTransform At = RootAt(Frame);
+		Clip.RootMotion.TravelCm = FMath::Max(Clip.RootMotion.TravelCm, FVector::Dist2D(At.GetTranslation(), First.GetTranslation()));
+		Lowest = FMath::Min(Lowest, At.GetTranslation().Z);
+		Highest = FMath::Max(Highest, At.GetTranslation().Z);
+		Clip.RootMotion.TurnDegrees = FMath::Max(Clip.RootMotion.TurnDegrees, FMath::RadiansToDegrees(At.GetRotation().AngularDistance(First.GetRotation())));
+	}
+	Clip.RootMotion.RiseCm = Highest - Lowest;
+	Clip.RootMotion.bInPlace = Clip.RootMotion.TravelCm > MaxTravelCm;
+	Clip.RootMotion.bMoved = bOffReference || Clip.RootMotion.TravelCm > 0.01 || Clip.RootMotion.RiseCm > 0.01 || Clip.RootMotion.TurnDegrees > 0.01;
+	if (!Clip.RootMotion.bMoved)
+	{
+		return;
+	}
+
+	const FTransform ReferenceInverse = RootReference.Inverse();
+	TArray<FTransform> RootKeys;
+	for (int32 Frame = 0; Frame < Frames; ++Frame)
+	{
+		FTransform At = RootAt(Frame);
+		if (Clip.RootMotion.bInPlace)
+		{
+			// On the spot: the root's travel across the floor is taken out, its height and turn kept.
+			At.SetTranslation(FVector(RootReference.GetTranslation().X, RootReference.GetTranslation().Y, At.GetTranslation().Z));
+		}
+		RootKeys.Add(At * ReferenceInverse);
+	}
+	for (FMantleAnimClipTrackData& Track : Clip.Tracks)
+	{
+		if (!Children.Contains(Track.Bone) || Track.Rotations.Num() == 0 || Track.Translations.Num() == 0)
+		{
+			continue;
+		}
+		TArray<FQuat4f> Rotations;
+		TArray<FVector3f> Translations;
+		for (int32 Frame = 0; Frame < Frames; ++Frame)
+		{
+			const FTransform Child(FQuat(Track.Rotations[FMath::Min(Frame, Track.Rotations.Num() - 1)]),
+				FVector(Track.Translations[FMath::Min(Frame, Track.Translations.Num() - 1)]));
+			const FTransform Moved = Child * RootKeys[Frame];
+			Rotations.Add(FQuat4f(Moved.GetRotation().GetNormalized()));
+			Translations.Add(FVector3f(Moved.GetTranslation()));
+		}
+		Track.Rotations = MoveTemp(Rotations);
+		Track.Translations = MoveTemp(Translations);
+	}
+	RootTrack->Rotations = { FQuat4f(RootReference.GetRotation().GetNormalized()) };
+	RootTrack->Translations = { FVector3f(RootReference.GetTranslation()) };
+}
+
+void FMantleAnimClipWriter::CloseLoopSeam(FMantleAnimClipData& Clip, const float LoopStartSeconds, const float BlendSeconds)
+{
+	Clip.LoopSeamDegrees = 0.0;
+	Clip.LoopSeamCm = 0.0;
+	const int32 Last = Clip.FrameCount - 1;
+	const int32 Loop = FMath::RoundToInt32(LoopStartSeconds * Clip.FrameRate);
+	if (Loop < 0 || Loop >= Last - 1)
+	{
+		return;
+	}
+	// The blend: at most BlendSeconds and at most half the loop, and at least one frame.
+	const int32 Window = FMath::Clamp(FMath::RoundToInt32(BlendSeconds * Clip.FrameRate), 1, FMath::Max(1, (Last - Loop) / 2));
+	for (FMantleAnimClipTrackData& Track : Clip.Tracks)
+	{
+		if (Track.Rotations.Num() == Clip.FrameCount)
+		{
+			FQuat4f Gap = Track.Rotations[Loop] * Track.Rotations[Last].Inverse();
+			if (Gap.W < 0.0f)
+			{
+				Gap = FQuat4f(-Gap.X, -Gap.Y, -Gap.Z, -Gap.W);
+			}
+			Gap.Normalize();
+			Clip.LoopSeamDegrees = FMath::Max(Clip.LoopSeamDegrees, static_cast<double>(FMath::RadiansToDegrees(Gap.GetAngle())));
+			for (int32 Step = 1; Step <= Window; ++Step)
+			{
+				const int32 Frame = Last - Window + Step;
+				const float Alpha = static_cast<float>(Step) / Window;
+				Track.Rotations[Frame] = (FQuat4f::Slerp(FQuat4f::Identity, Gap, Alpha) * Track.Rotations[Frame]).GetNormalized();
+			}
+		}
+		if (Track.Translations.Num() == Clip.FrameCount)
+		{
+			const FVector3f Gap = Track.Translations[Loop] - Track.Translations[Last];
+			Clip.LoopSeamCm = FMath::Max(Clip.LoopSeamCm, static_cast<double>(Gap.Size()));
+			for (int32 Step = 1; Step <= Window; ++Step)
+			{
+				const int32 Frame = Last - Window + Step;
+				Track.Translations[Frame] += Gap * (static_cast<float>(Step) / Window);
+			}
+		}
+	}
 }
 
 bool FMantleAnimClipWriter::SampleOnMesh(const UAnimSequence* Sequence, const USkeletalMesh* Mesh, const float FrameRate, FMantleAnimClipData& OutClip,

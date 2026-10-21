@@ -28,8 +28,9 @@ struct FMantleEmoteMotion
  * clients do (FMantleAnimClipReader); and draws a picture sheet of that clip on a standard Mantle body at several moments with
  * the catalog thumbnail capture (FMantleCosmeticThumbnail::Capture, the engine's thumbnail scene), posed as the client poses
  * it: the clip on the hidden UEFN driver (UMantleClipAnimInstance, the root held still), the body copying it through its
- * retargeter (UMantlePreviewRetargetAnimInstance). Writes <Label>_notes.txt and <Label>_sheet.png into Directory. Nothing is
- * saved or uploaded. Logs MANTLE_CHECK_EMOTE lines.
+ * retargeter (UMantlePreviewRetargetAnimInstance). Writes <Label>_notes.txt and <Label>_sheet.png into Directory, and
+ * <Label>_source.png: the original clip on the mesh it was made on at the same moments, to compare. Nothing is saved or
+ * uploaded. Logs MANTLE_CHECK_EMOTE lines.
  */
 struct FMantleEmoteCheck
 {
