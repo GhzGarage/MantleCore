@@ -1,6 +1,8 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleWaterMaterial.h"
 
+#include "Materials/MaterialExpressionSingleLayerWaterMaterialOutput.h"
+
 #include "Materials/Material.h"
 #include "Materials/MaterialExpression.h"
 #include "Materials/MaterialExpressionAbs.h"
@@ -1221,6 +1223,70 @@ namespace MantleWaterMaterialPrivate
 	};
 }
 
+namespace MantleWaterMaterialPrivate
+{
+	/** The deep colour and the normal samples, as every water material is read (a depth fade or Single Layer Water). */
+	void ReadSurface(const UMaterialInterface* Context, const FExpressionInput* BaseColor, const FExpressionInput* Normal, FMantleWaterBake& Out)
+	{
+		if (BaseColor && BaseColor->Expression)
+		{
+			FFarEvaluator Colour;
+			Colour.Context = Context;
+			FValue Deep;
+			if (Colour.Input(*BaseColor, false, 0.0, Deep) && Deep.N >= 3)
+			{
+				Out.bColour = true;
+				for (int32 Channel = 0; Channel < 3; ++Channel)
+				{
+					Out.Colour[Channel] = FMath::Clamp(Deep.V[Channel], 0.0, 1.0);
+				}
+			}
+			else if (Out.Why.IsEmpty())
+			{
+				Out.Why = FString::Printf(TEXT("colour: %s"), Colour.Failure.IsEmpty() ? TEXT("not a colour") : *Colour.Failure);
+			}
+		}
+
+
+		if (Normal && Normal->Expression)
+		{
+			FNormalFinder Finder;
+			Finder.Context = Context;
+			if (Finder.Visit(*Normal) && Finder.Found.Num() > 0)
+			{
+				// What the water key carries: every sample, in the graph's order, with the strength FlattenNormal and a called function give.
+				Out.Normals = Finder.Found;
+				Out.NormalSamples = Finder.Found.Num();
+				Out.NormalScale = Finder.Scale * Finder.Found[0].Strength;
+
+				// What a document without the water key can carry (translucent water, or a client that lacks the key): one panned
+				// sample on the first UV set. Two samples blended cannot be one texture, so the fastest stands for the water's motion.
+				const FMantleWaterNormalLayer* Dominant = nullptr;
+				for (const FMantleWaterNormalLayer& Candidate : Finder.Found)
+				{
+					if (!Candidate.bWorld && (!Dominant || FMath::Square(Candidate.Speed[0]) + FMath::Square(Candidate.Speed[1]) > FMath::Square(Dominant->Speed[0]) + FMath::Square(Dominant->Speed[1])))
+					{
+						Dominant = &Candidate;
+					}
+				}
+				if (Dominant && Dominant->Moves())
+				{
+					Out.bNormalPanned = true;
+					Out.NormalTexture = Dominant->Texture;
+					Out.NormalTiling[0] = Dominant->Tiling[0];
+					Out.NormalTiling[1] = Dominant->Tiling[1];
+					Out.NormalSpeed[0] = Dominant->Speed[0];
+					Out.NormalSpeed[1] = Dominant->Speed[1];
+				}
+			}
+			else
+			{
+				Out.Why += FString::Printf(TEXT("%snormal: %s"), Out.Why.IsEmpty() ? TEXT("") : TEXT("; "), Finder.Failure.IsEmpty() ? TEXT("no panned sample") : *Finder.Failure);
+			}
+		}
+	}
+}
+
 bool FMantleWaterMaterial::Recognise(const UMaterialInterface* Context, const FExpressionInput* Opacity, const FExpressionInput* BaseColor, const FExpressionInput* Normal, FMantleWaterBake& Out)
 {
 	using namespace MantleWaterMaterialPrivate;
@@ -1266,62 +1332,55 @@ bool FMantleWaterMaterial::Recognise(const UMaterialInterface* Context, const FE
 		Out.Why = Evaluator.Failure.IsEmpty() ? FString::Printf(TEXT("the far opacity reads %.3f"), Value.Lane(0)) : Evaluator.Failure;
 	}
 
-	if (BaseColor && BaseColor->Expression)
+	MantleWaterMaterialPrivate::ReadSurface(Context, BaseColor, Normal, Out);
+	return true;
+}
+
+bool FMantleWaterMaterial::RecogniseSingleLayer(const UMaterialInterface* Context, const FExpressionInput* BaseColor, const FExpressionInput* Normal, FMantleWaterBake& Out)
+{
+	using namespace MantleWaterMaterialPrivate;
+	Out = FMantleWaterBake();
+	if (!Context)
 	{
-		FFarEvaluator Colour;
-		Colour.Context = Context;
-		FValue Deep;
-		if (Colour.Input(*BaseColor, false, 0.0, Deep) && Deep.N >= 3)
-		{
-			Out.bColour = true;
-			for (int32 Channel = 0; Channel < 3; ++Channel)
-			{
-				Out.Colour[Channel] = FMath::Clamp(Deep.V[Channel], 0.0, 1.0);
-			}
-		}
-		else if (Out.Why.IsEmpty())
-		{
-			Out.Why = FString::Printf(TEXT("colour: %s"), Colour.Failure.IsEmpty() ? TEXT("not a colour") : *Colour.Failure);
-		}
+		return false;
 	}
+	Out.bFound = true;
+	Out.bSingleLayer = true;
+	Out.bOpacityRead = true;
+	Out.Opacity = 1.0;
 
-
-	if (Normal && Normal->Expression)
+	// The output node's own coefficients, where the graph is constants and parameters; else the deep colour derives them.
+	if (const UMaterial* Base = Context->GetMaterial())
 	{
-		FNormalFinder Finder;
-		Finder.Context = Context;
-		if (Finder.Visit(*Normal) && Finder.Found.Num() > 0)
+		for (const UMaterialExpression* Expression : Base->GetExpressionCollection().Expressions)
 		{
-			// What the water key carries: every sample, in the graph's order, with the strength FlattenNormal and a called function give.
-			Out.Normals = Finder.Found;
-			Out.NormalSamples = Finder.Found.Num();
-			Out.NormalScale = Finder.Scale * Finder.Found[0].Strength;
-
-			// What a document without the water key can carry (translucent water, or a client that lacks the key): one panned
-			// sample on the first UV set. Two samples blended cannot be one texture, so the fastest stands for the water's motion.
-			const FMantleWaterNormalLayer* Dominant = nullptr;
-			for (const FMantleWaterNormalLayer& Candidate : Finder.Found)
+			const UMaterialExpressionSingleLayerWaterMaterialOutput* Output = Cast<UMaterialExpressionSingleLayerWaterMaterialOutput>(Expression);
+			if (!Output)
 			{
-				if (!Candidate.bWorld && (!Dominant || FMath::Square(Candidate.Speed[0]) + FMath::Square(Candidate.Speed[1]) > FMath::Square(Dominant->Speed[0]) + FMath::Square(Dominant->Speed[1])))
+				continue;
+			}
+			FFarEvaluator Far;
+			Far.Context = Context;
+			FValue Scattering;
+			FValue Absorption;
+			if (Far.Input(Output->ScatteringCoefficients, false, 0.0, Scattering) && Scattering.N >= 3
+				&& Far.Input(Output->AbsorptionCoefficients, false, 0.0, Absorption) && Absorption.N >= 3)
+			{
+				Out.bVolume = true;
+				for (int32 Channel = 0; Channel < 3; ++Channel)
 				{
-					Dominant = &Candidate;
+					Out.Volume.Scattering[Channel] = FMath::Max(Scattering.V[Channel], 0.0);
+					Out.Volume.Absorption[Channel] = FMath::Max(Absorption.V[Channel], 0.0);
 				}
 			}
-			if (Dominant && Dominant->Moves())
+			else
 			{
-				Out.bNormalPanned = true;
-				Out.NormalTexture = Dominant->Texture;
-				Out.NormalTiling[0] = Dominant->Tiling[0];
-				Out.NormalTiling[1] = Dominant->Tiling[1];
-				Out.NormalSpeed[0] = Dominant->Speed[0];
-				Out.NormalSpeed[1] = Dominant->Speed[1];
+				Out.Why = Far.Failure.IsEmpty() ? FString(TEXT("the water output's coefficients are not constants")) : Far.Failure;
 			}
-		}
-		else
-		{
-			Out.Why += FString::Printf(TEXT("%snormal: %s"), Out.Why.IsEmpty() ? TEXT("") : TEXT("; "), Finder.Failure.IsEmpty() ? TEXT("no panned sample") : *Finder.Failure);
+			break;
 		}
 	}
+	ReadSurface(Context, BaseColor, Normal, Out);
 	return true;
 }
 

@@ -2660,8 +2660,16 @@ FMantleMaterialAnalysis FMantlePlaceAssets::AnalyzeMaterial(const UMaterialInter
 
 		// #628: a depth-faded translucent material (water): the bake sees the fade's near end and writes opacity 0, so its
 		// opacity (and deep colour, when the graph gives one) is carried as constants read at the far end.
-		if (bCarries && bLit && Walk.bTranslucent && !Fidelity.bWind && FMantleWaterMaterial::Recognise(Material, Roots.Opacity, Roots.BaseColor, Roots.Normal, Fidelity.Water))
+		// GhzGarage/mantle#818: a Single Layer Water material (a Water plugin body's) is water already.
+		const bool bSingleLayerWater = bCarries && bLit && !Walk.bTranslucent && !Fidelity.bWind && Models.HasOnlyShadingModel(MSM_SingleLayerWater);
+		if ((bCarries && bLit && Walk.bTranslucent && !Fidelity.bWind && FMantleWaterMaterial::Recognise(Material, Roots.Opacity, Roots.BaseColor, Roots.Normal, Fidelity.Water))
+			|| (bSingleLayerWater && FMantleWaterMaterial::RecogniseSingleLayer(Material, Roots.BaseColor, Roots.Normal, Fidelity.Water)))
 		{
+			if (Fidelity.Water.bSingleLayer)
+			{
+				// Published as Mantle's water, which is Single Layer Water: no longer a loss of special shading.
+				Out.Losses &= ~EMantleMaterialLoss::SpecialShading;
+			}
 			Carry({ MP_Opacity });
 			if (Fidelity.Water.bColour)
 			{

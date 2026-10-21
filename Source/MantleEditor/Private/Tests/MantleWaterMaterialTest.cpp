@@ -27,6 +27,7 @@
 #include "Materials/MaterialExpressionSaturate.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionSceneDepth.h"
+#include "Materials/MaterialExpressionSingleLayerWaterMaterialOutput.h"
 #include "Materials/MaterialExpressionStaticSwitchParameter.h"
 #include "Materials/MaterialExpressionSubtract.h"
 #include "Materials/MaterialExpressionTextureCoordinate.h"
@@ -1087,6 +1088,51 @@ bool FMantleWaterMasterChainTest::RunTest(const FString& Parameters)
 			TestFalse(TEXT("the textured colour is not read"), Water.bColour);
 		}
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleWaterSingleLayerTest,
+	"Mantle.Editor.Water.SingleLayerWaterMaterialPublishesAsWater",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleWaterSingleLayerTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleWaterMaterialTestPrivate;
+
+	// A Water plugin body's material: Single Layer Water shading, opaque blend, coefficients on the output node, no depth fade.
+	UMaterial* Material = NewObject<UMaterial>(GetTransientPackage());
+	Material->SetShadingModel(MSM_SingleLayerWater);
+	UMaterialExpressionSingleLayerWaterMaterialOutput* Output = AddExpression<UMaterialExpressionSingleLayerWaterMaterialOutput>(Material);
+	Output->ScatteringCoefficients.Connect(0, AddColour(Material, FLinearColor(0.01f, 0.02f, 0.03f)));
+	Output->AbsorptionCoefficients.Connect(0, AddColour(Material, FLinearColor(0.2f, 0.1f, 0.05f)));
+	Material->GetEditorOnlyData()->BaseColor.Connect(0, AddColour(Material, FLinearColor(0.0f, 0.2f, 0.25f)));
+
+	const FMantleMaterialAnalysis Analysis = FMantlePlaceAssets::AnalyzeMaterial(Material);
+	const FMantleWaterBake& Water = Analysis.Fidelity2.Water;
+	if (!TestTrue(TEXT("a Single Layer Water material is found as water"), Water.bFound && Water.bSingleLayer))
+	{
+		return false;
+	}
+	TestTrue(TEXT("it publishes opaque with the water key"), Water.PublishesOpaque());
+	TestTrue(TEXT("its own coefficients are read"), Water.bVolume);
+	TestFalse(TEXT("and its shading is no longer a loss"), Analysis.Has(EMantleMaterialLoss::SpecialShading));
+
+	// The bake of an opaque water surface has no alpha blend; the document is still a water document, with the node's coefficients.
+	FMantleGlbDocument Flattened = BakedWater();
+	Flattened.Json->GetArrayField(TEXT("materials"))[0]->AsObject()->SetStringField(TEXT("alphaMode"), TEXT("OPAQUE"));
+	FMantleMaterialExtras Extras;
+	Extras.Fidelity = Analysis.Fidelity2;
+	FMantlePlaceAssetSet Set;
+	const FMantlePlaceMaterialDocument Doc = FMantlePlaceAssetConverter::MaterialFromGltf(Flattened, 0, TEXT("WaterMID_0"), FMantlePlaceAssetLimits(), false, Set, Extras);
+	TestTrue(TEXT("the document writes the water key"), Doc.WritesWater());
+	TestEqual(TEXT("with the node's absorption"), Doc.WaterAbsorption[0], 0.2, 1.0e-4);
+	TestEqual(TEXT("and its scattering"), Doc.WaterScattering[2], 0.03, 1.0e-4);
+	TestEqual(TEXT("and the deep colour"), Doc.BaseColorFactor[2], 0.25, 1.0e-4);
+
+	// An ordinary lit material stays ordinary.
+	UMaterial* Plain = NewObject<UMaterial>(GetTransientPackage());
+	TestFalse(TEXT("a plain material is not water"), FMantlePlaceAssets::AnalyzeMaterial(Plain).Fidelity2.Water.bFound);
 	return true;
 }
 

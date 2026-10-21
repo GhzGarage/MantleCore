@@ -3685,7 +3685,7 @@ FMantlePlaceMaterialDocument FMantlePlaceAssetConverter::MaterialFromGltf(const 
 	}
 
 	// #628: a depth-faded translucent material (water) publishes its far-end opacity in place of the bake's.
-	const bool bWater = Fidelity.Water.bFound && Doc.AlphaMode == TEXT("blend");
+	const bool bWater = Fidelity.Water.bFound && (Doc.AlphaMode == TEXT("blend") || Fidelity.Water.bSingleLayer);
 
 	// #628: near-opaque water publishes with the water key (Single Layer Water, M_MantlePlace_Water): the surface colour, the
 	// roughness, the normal maps with their layout and pan, and coefficients from the deep colour and the fade distance. A client
@@ -3733,7 +3733,7 @@ FMantlePlaceMaterialDocument FMantlePlaceAssetConverter::MaterialFromGltf(const 
 		{
 			Deep[Channel] = FMath::Clamp(Doc.BaseColorFactor[Channel], 0.0, 1.0);
 		}
-		const FMantleWaterCoefficients Coefficients = FMantleWaterMaterial::Coefficients(Deep, Water.bFadeDistance ? Water.FadeDistanceCm : 0.0);
+		const FMantleWaterCoefficients Coefficients = Water.bVolume ? Water.Volume : FMantleWaterMaterial::Coefficients(Deep, Water.bFadeDistance ? Water.FadeDistanceCm : 0.0);
 		for (int32 Channel = 0; Channel < 3; ++Channel)
 		{
 			Doc.WaterScattering[Channel] = Coefficients.Scattering[Channel];

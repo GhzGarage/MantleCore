@@ -51,8 +51,18 @@ struct MANTLEEDITOR_API FMantleWaterCoefficients
  */
 struct MANTLEEDITOR_API FMantleWaterBake
 {
-	/** Opacity reaches a depth fade. */
+	/** Opacity reaches a depth fade, or the material's shading model is Single Layer Water (bSingleLayer). */
 	bool bFound = false;
+
+	/**
+	 * The material is already Single Layer Water (a Water plugin body's material, GhzGarage/mantle#818): opaque in blend mode, with no
+	 * depth fade to read. Opacity is 1 and read, so it publishes with the water key; the colour and normals are read as for a fade.
+	 */
+	bool bSingleLayer = false;
+
+	/** The Single Layer Water output node's scattering and absorption (1/cm), when its graph evaluated; they stand in for the derived coefficients. */
+	bool bVolume = false;
+	FMantleWaterCoefficients Volume;
 
 	/** The opacity at the far end of the fade, 0..1: read from the graph, or EstimatedOpacity when the graph could not be evaluated. */
 	double Opacity = 0.0;
@@ -126,6 +136,13 @@ struct MANTLEEDITOR_API FMantleWaterMaterial
 	 * null) is read for its panned samples (FMantleWaterBake::bNormalPanned).
 	 */
 	static bool Recognise(const UMaterialInterface* Context, const FExpressionInput* Opacity, const FExpressionInput* BaseColor, const FExpressionInput* Normal, FMantleWaterBake& Out);
+
+	/**
+	 * Out.bFound for a material whose shading model is Single Layer Water (GhzGarage/mantle#818): it is water already, so there is no
+	 * fade to find; opacity is 1 and the water publishes opaque with the water key. BaseColor and Normal are read as Recognise reads them,
+	 * and the Single Layer Water output node's absorption and scattering, when its graph evaluates, become Out.Volume.
+	 */
+	static bool RecogniseSingleLayer(const UMaterialInterface* Context, const FExpressionInput* BaseColor, const FExpressionInput* Normal, FMantleWaterBake& Out);
 
 	/** The fade distance the coefficients assume when the source has none (a Scene Depth fade, Camera Depth Fade). */
 	static constexpr double DefaultFadeDistanceCm = 100.0;
