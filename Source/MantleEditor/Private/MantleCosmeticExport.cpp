@@ -2876,8 +2876,8 @@ namespace MantleCosmeticExportPrivate
 		}
 		if (Root.bMoved)
 		{
-			Package.Notes.Add(FString::Printf(TEXT("Emote root motion moved onto the pelvis, as players' clients hold the root still: %.1f cm across the floor%s, %.1f cm up and down, %.1f degrees of turn"),
-				Root.TravelCm, Root.bInPlace ? TEXT(" (taken out: in place)") : TEXT(""), Root.RiseCm, Root.TurnDegrees));
+			Package.Notes.Add(FString::Printf(TEXT("Emote root motion moved onto the pelvis, as players' clients hold the root still: %.1f cm across the floor%s, %.1f cm up and down, %.1f degrees of turn, starting %.1f cm and %.1f degrees off the root's reference"),
+				Root.TravelCm, Root.bInPlace ? TEXT(" (taken out: in place)") : TEXT(""), Root.RiseCm, Root.TurnDegrees, Root.OffsetCm, Root.OffsetDegrees));
 		}
 		if (Clip.DroppedNotifies.Num() > 0)
 		{
