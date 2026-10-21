@@ -18,7 +18,7 @@
 #include "MantleGarmentFitter.h"
 #include "MantleHairCards.h"
 #include "MantleHairColor.h"
-#include "MantleHairHeadFit.h"
+#include "MantleHairCardsFit.h"
 #include "MantleNativeHairProfile.h"
 #include "GroomAsset.h"
 #include "MantleHairSourceDiscovery.h"
@@ -3022,7 +3022,7 @@ namespace MantleCosmeticExportPrivate
 	 * Sizes and seats a bought cards pack on the authoring head (stage 1, the whole-piece fit), then settles it on
 	 * the scalp (stage 2, the smoothed offset field and the last-resort lift). Positions only; topology, UVs and normals are
 	 * untouched. A failure leaves the cards as they were and says so in a warning, it never blocks the upload. The pack's
-	 * solid cap, if it has one, is found in the mesh and split from the cards (FMantleHairHeadFit).
+	 * solid cap, if it has one, is found in the mesh and split from the cards (FMantleHairCardsFit).
 	 */
 	void FitThirdPartyHairCardsToHead(FMeshSource& Cards, const FMeshSource& Face, FMantleCosmeticPackage& Package)
 	{
@@ -3049,14 +3049,14 @@ namespace MantleCosmeticExportPrivate
 			for (int32 T = 0; T < Primitive.Indices.Num() / 3; ++T) TriangleSections.Add(Primitive.MaterialIndex);
 		}
 
-		FMantleHairHeadFit::FInput Input;
+		FMantleHairCardsFit::FInput Input;
 		Input.HeadPositions = Face.Glb.Positions;
 		Input.HeadIndices = HeadIndices;
 		Input.HairPositions = Cards.Glb.Positions;
 		Input.HairIndices = HairIndices;
 		Input.TriangleSections = TriangleSections;
 		Input.SectionNames = Cards.Glb.MaterialNames;
-		const FMantleHairHeadFit::FResult Fit = FMantleHairHeadFit::Run(Input);
+		const FMantleHairCardsFit::FResult Fit = FMantleHairCardsFit::Run(Input);
 		for (const FString& Warning : Fit.Warnings) Package.Issues.Add(FMantleCosmeticChecks::Warning(Warning));
 		Package.Notes.Append(Fit.Notes);
 		if (!Fit.bFitted) return;

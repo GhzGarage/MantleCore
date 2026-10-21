@@ -10,7 +10,7 @@
  * wrapped (FMantleScalpFit, stage 2), and word the result for the preview (FMantleHairFitReport). Positions only; topology,
  * UVs and normals are untouched. A failure leaves the positions as they were and says so in Warnings. Pure: no UObjects.
  */
-struct MANTLEEDITOR_API FMantleHairHeadFit
+struct MANTLEEDITOR_API FMantleHairCardsFit
 {
 	struct FInput
 	{

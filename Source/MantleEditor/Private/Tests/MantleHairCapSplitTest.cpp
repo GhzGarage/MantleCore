@@ -1,7 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleHairCapSplit.h"
 #include "MantleHairFitReport.h"
-#include "MantleHairHeadFit.h"
+#include "MantleHairCardsFit.h"
 
 #include "Misc/AutomationTest.h"
 
@@ -204,11 +204,11 @@ bool FMantleHairFitReportTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FMantleHairHeadFitRunTest,
-	"Mantle.Editor.HairHeadFit.CapReachesTheFitAndABakedHeadIsLeftOut",
+	FMantleHairCardsFitRunTest,
+	"Mantle.Editor.HairCardsFit.CapReachesTheFitAndABakedHeadIsLeftOut",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FMantleHairHeadFitRunTest::RunTest(const FString& Parameters)
+bool FMantleHairCardsFitRunTest::RunTest(const FString& Parameters)
 {
 	using namespace MantleHairCapSplitTestPrivate;
 	TArray<FVector3f> HeadP; TArray<uint32> HeadI;
@@ -222,10 +222,10 @@ bool FMantleHairHeadFitRunTest::RunTest(const FString& Parameters)
 	while (Sections.Num() < I.Num() / 3) Sections.Add(1);
 	const TArray<FString> Names = {TEXT("Cards"), TEXT("Hair_Cap"), TEXT("Head_Mat")};
 
-	FMantleHairHeadFit::FInput Input;
+	FMantleHairCardsFit::FInput Input;
 	Input.HeadPositions = HeadP; Input.HeadIndices = HeadI;
 	Input.HairPositions = P; Input.HairIndices = I; Input.TriangleSections = Sections; Input.SectionNames = Names;
-	const FMantleHairHeadFit::FResult Plain = FMantleHairHeadFit::Run(Input);
+	const FMantleHairCardsFit::FResult Plain = FMantleHairCardsFit::Run(Input);
 	TestTrue(TEXT("fit ran"), Plain.bFitted);
 	TestEqual(TEXT("positions keep their count"), Plain.Positions.Num(), P.Num());
 	TestTrue(TEXT("the cap reached the scalp fit"), Plain.bCapFound);
@@ -235,9 +235,9 @@ bool FMantleHairHeadFitRunTest::RunTest(const FString& Parameters)
 	TArray<FVector3f> P2 = P; TArray<uint32> I2 = I; TArray<int32> Sections2 = Sections;
 	CapTestSphere(80.f, 12, 16, P2, I2);
 	while (Sections2.Num() < I2.Num() / 3) Sections2.Add(2);
-	FMantleHairHeadFit::FInput Baked = Input;
+	FMantleHairCardsFit::FInput Baked = Input;
 	Baked.HairPositions = P2; Baked.HairIndices = I2; Baked.TriangleSections = Sections2;
-	const FMantleHairHeadFit::FResult WithHead = FMantleHairHeadFit::Run(Baked);
+	const FMantleHairCardsFit::FResult WithHead = FMantleHairCardsFit::Run(Baked);
 	TestTrue(TEXT("fit ran with a built-in head"), WithHead.bFitted);
 	TestTrue(TEXT("the built-in head is reported"), WithHead.Report.bBakedHead);
 	TestEqual(TEXT("sizing is the same as without it (the head did not size the piece)"), WithHead.Notes[0], Plain.Notes[0]);

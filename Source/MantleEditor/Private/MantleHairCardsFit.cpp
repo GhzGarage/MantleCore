@@ -1,11 +1,11 @@
 // Copyright Joshua Eger. All Rights Reserved.
-#include "MantleHairHeadFit.h"
+#include "MantleHairCardsFit.h"
 
 #include "MantleHairCapSplit.h"
 #include "MantleHairPieceFit.h"
 #include "MantleHairScalpFit.h"
 
-FMantleHairHeadFit::FResult FMantleHairHeadFit::Run(const FInput& Input)
+FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 {
 	FResult Out;
 	Out.Positions = TArray<FVector3f>(Input.HairPositions.GetData(), Input.HairPositions.Num());
