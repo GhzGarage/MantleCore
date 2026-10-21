@@ -135,15 +135,23 @@ class Player:
     """A connected player."""
     armor: Optional[float]
     avatar: Optional[str]
+    breath: Optional[float]
+    breath_enabled: Optional[bool]
+    breath_regen: Optional[float]
+    breath_regen_delay: Optional[float]
     character: Optional[Entity]
     crouch_enabled: Optional[bool]
     crouch_speed: Optional[float]
+    drown_damage: Optional[float]
     health: Optional[float]
     is_crouched: Optional[bool]
     is_ragdolled: Optional[bool]
     is_sprinting: Optional[bool]
+    is_swimming: Optional[bool]
+    is_underwater: Optional[bool]
     jump_height: Optional[float]
     jump_stamina_cost: Optional[float]
+    max_breath: Optional[float]
     max_health: Optional[float]
     max_shield: Optional[float]
     max_stamina: Optional[float]
@@ -164,11 +172,14 @@ class Player:
     user_id: str
     walk_speed: Optional[float]
     wearing: dict[str, Any]
+    breath_changed: Signal
+    breath_restored: Signal
     crouch_started: Signal
     crouch_stopped: Signal
     damaged: Signal
     died: Signal
     health_changed: Signal
+    out_of_breath: Signal
     ragdolled: Signal
     recovered: Signal
     respawned: Signal
