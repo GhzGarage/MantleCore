@@ -227,20 +227,38 @@ const TCHAR* FMantleEmoteRetarget::RetargeterPathFor(const FString& SkeletonId)
 	return nullptr;
 }
 
-FString FMantleEmoteRetarget::IdentifySkeleton(const USkeleton* Skeleton, const FMantleAvatarContract& Contract)
+FString FMantleEmoteRetarget::IdentifySkeleton(const USkeleton* Skeleton, const FMantleAvatarContract& Contract, FString* OutWhy)
 {
 	using namespace MantleEmoteRetargetPrivate;
 	if (!Skeleton)
 	{
 		return FString();
 	}
-	return IdentifyJoints(FMantleCosmeticChecks::JointsOf(Skeleton->GetReferenceSkeleton()), Contract);
+	return IdentifyJoints(FMantleCosmeticChecks::JointsOf(Skeleton->GetReferenceSkeleton()), Contract, OutWhy);
 }
 
-FString FMantleEmoteRetarget::IdentifyJoints(TConstArrayView<FMantleSkinJointName> Joints, const FMantleAvatarContract& Contract)
+bool FMantleEmoteRetarget::IsBodyBone(const FName Bone)
+{
+	const FString Name = Bone.ToString();
+	static const TSet<FString> NotBody = { TEXT("interaction"), TEXT("center_of_mass"), TEXT("attach"), TEXT("props_root"), TEXT("prop_01"), TEXT("poi") };
+	return !Name.StartsWith(TEXT("ik_"), ESearchCase::IgnoreCase) && !Name.StartsWith(TEXT("VB "), ESearchCase::CaseSensitive)
+		&& !Name.Contains(TEXT("corrective"), ESearchCase::IgnoreCase) && !NotBody.Contains(Name);
+}
+
+FString FMantleEmoteRetarget::IdentifyJoints(TConstArrayView<FMantleSkinJointName> Joints, const FMantleAvatarContract& Contract, FString* OutWhy)
 {
 	using namespace MantleEmoteRetargetPrivate;
-	for (const FString& Id : { Contract.EmoteSkeleton, FString(EmoteMetaHumanId), FString(EmoteUE5MannequinId), FString(EmoteUE4MannequinId) })
+	auto Say = [OutWhy](const FString& Why)
+	{
+		if (OutWhy)
+		{
+			*OutWhy = Why;
+		}
+	};
+	Say(FString());
+	const FString Ids[] = { Contract.EmoteSkeleton, FString(EmoteMetaHumanId), FString(EmoteUE5MannequinId), FString(EmoteUE4MannequinId) };
+	// Exactly one of them: every bone is one of its bones, under the same parent.
+	for (const FString& Id : Ids)
 	{
 		const FMantleContractSkeleton* Fixture = Contract.FindSkeleton(Id);
 		FString Error;
@@ -249,6 +267,83 @@ FString FMantleEmoteRetarget::IdentifyJoints(TConstArrayView<FMantleSkinJointNam
 			return Id;
 		}
 	}
+
+	// One of them with bones of its own (extra twist, prop or IK bones, a tail): it carries every body bone of the
+	// skeleton under the same parents. The retarget reads only the skeleton's chains, so the extra bones are left out.
+	// The most specific skeleton wins (the most body bones carried); on a tie a retargeted one, so the clip's proportions
+	// are carried over (the UEFN mannequin's body bones are the UE5 Mannequin's).
+	const FString CarryIds[] = { FString(EmoteMetaHumanId), FString(EmoteUE5MannequinId), FString(EmoteUE4MannequinId), Contract.EmoteSkeleton };
+	TMap<FName, FName> ParentOf;
+	for (const FMantleSkinJointName& Joint : Joints)
+	{
+		ParentOf.Add(Joint.Name, Joints.IsValidIndex(Joint.Parent) ? Joints[Joint.Parent].Name : NAME_None);
+	}
+	FString Best;
+	int32 BestCarried = 0;
+	FString Nearest;
+	FString NearestWhy;
+	double NearestShare = -1.0;
+	for (const FString& Id : CarryIds)
+	{
+		const FMantleContractSkeleton* Fixture = Contract.FindSkeleton(Id);
+		if (!Fixture)
+		{
+			continue;
+		}
+		int32 Body = 0;
+		int32 Carried = 0;
+		FString FirstMiss;
+		for (int32 Bone = 0; Bone < Fixture->Bones.Num(); ++Bone)
+		{
+			const FName Name = Fixture->Bones[Bone];
+			if (!IsBodyBone(Name))
+			{
+				continue;
+			}
+			++Body;
+			const FName* Parent = ParentOf.Find(Name);
+			const FName Want = Fixture->Parents.IsValidIndex(Bone) && Fixture->Bones.IsValidIndex(Fixture->Parents[Bone]) ? Fixture->Bones[Fixture->Parents[Bone]] : NAME_None;
+			if (Parent && *Parent == Want)
+			{
+				++Carried;
+			}
+			else if (FirstMiss.IsEmpty())
+			{
+				FirstMiss = Parent ? FString::Printf(TEXT("its %s is under %s, not %s"), *Name.ToString(), Parent->IsNone() ? TEXT("nothing") : *Parent->ToString(),
+					Want.IsNone() ? TEXT("nothing") : *Want.ToString())
+					: FString::Printf(TEXT("it has no %s"), *Name.ToString());
+			}
+		}
+		if (Body > 0 && Carried == Body && Carried > BestCarried)
+		{
+			Best = Id;
+			BestCarried = Carried;
+		}
+		const double Share = Body > 0 ? static_cast<double>(Carried) / Body : 0.0;
+		if (Share > NearestShare)
+		{
+			NearestShare = Share;
+			Nearest = Id;
+			NearestWhy = FString::Printf(TEXT("it is nearest the %s skeleton (%d of its %d body bones), but %s"), *Id, Carried, Body, *FirstMiss);
+		}
+	}
+	if (!Best.IsEmpty())
+	{
+		const FMantleContractSkeleton* Fixture = Contract.FindSkeleton(Best);
+		TArray<FString> Extra;
+		for (const FMantleSkinJointName& Joint : Joints)
+		{
+			if (Fixture->Find(Joint.Name) == INDEX_NONE)
+			{
+				Extra.Add(Joint.Name.ToString());
+			}
+		}
+		const int32 Shown = FMath::Min(6, Extra.Num());
+		Say(FString::Printf(TEXT("read as the %s skeleton; its %d bone(s) of its own (%s%s) are left out"), *Best, Extra.Num(),
+			*FString::Join(TArrayView<const FString>(Extra.GetData(), Shown), TEXT(", ")), Extra.Num() > Shown ? TEXT(", ...") : TEXT("")));
+		return Best;
+	}
+	Say(NearestWhy);
 	return FString();
 }
 

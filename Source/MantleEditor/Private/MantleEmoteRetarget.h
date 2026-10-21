@@ -45,12 +45,18 @@ struct FMantleEmoteRetarget
 
 	/**
 	 * Which contract skeleton Skeleton is, by its bones and their parents (FMantleCosmeticChecks::MatchSkeleton): the
-	 * emote skeleton (uefn: no retarget) first, then metahuman, ue5mannequin and ue4mannequin. Empty when it is none of them.
+	 * emote skeleton (uefn: no retarget) first, then metahuman, ue5mannequin and ue4mannequin. Then, for a skeleton
+	 * with bones of its own (extra twist, prop or IK bones), the one whose every body bone (IsBodyBone) it carries under
+	 * the same parent, the most specific first; its own bones are left out. Empty when it is none of them. OutWhy: how it
+	 * was read when it has bones of its own, or, when it is none, the nearest skeleton and the first difference.
 	 */
-	static FString IdentifySkeleton(const USkeleton* Skeleton, const FMantleAvatarContract& Contract);
+	static FString IdentifySkeleton(const USkeleton* Skeleton, const FMantleAvatarContract& Contract, FString* OutWhy = nullptr);
 
 	/** IdentifySkeleton on a joint table (FMantleCosmeticChecks::JointsOf). Pure. */
-	static FString IdentifyJoints(TConstArrayView<FMantleSkinJointName> Joints, const FMantleAvatarContract& Contract);
+	static FString IdentifyJoints(TConstArrayView<FMantleSkinJointName> Joints, const FMantleAvatarContract& Contract, FString* OutWhy = nullptr);
+
+	/** A bone of the body itself: not an IK, virtual, corrective, prop or helper bone (interaction, center_of_mass, attach, poi). */
+	static bool IsBodyBone(FName Bone);
 
 	/**
 	 * A mesh on Skeleton to retarget from (its proportions): the skeleton's preview mesh, else a skeletal mesh in the

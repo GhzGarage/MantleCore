@@ -317,13 +317,32 @@ bool FMantleEmoteIdentifySkeletonTest::RunTest(const FString& Parameters)
 		}
 		TestEqual(TEXT("the UE5 Mannequin's deforming bones are identified as ue5mannequin"), FMantleEmoteRetarget::IdentifyJoints(Joints, *C), FString(TEXT("ue5mannequin")));
 	}
-	// A skeleton with a bone none of them has is none of them: it is refused with the retarget hint.
+	// A skeleton with bones of its own on top of one of them (a tail, a weapon bone) is read as that one; its own bones stay behind.
 	if (const FMantleContractSkeleton* UE4 = C->FindSkeleton(TEXT("ue4mannequin")))
 	{
 		TArray<FMantleSkinJointName> Joints = JointsOf(*UE4);
 		Joints.Add({ FName(TEXT("tail_01")), 0 });
-		TestEqual(TEXT("an unknown bone is no contract skeleton"), FMantleEmoteRetarget::IdentifyJoints(Joints, *C), FString());
+		FString Why;
+		TestEqual(TEXT("the UE4 Mannequin with a tail is the UE4 Mannequin"), FMantleEmoteRetarget::IdentifyJoints(Joints, *C, &Why), FString(TEXT("ue4mannequin")));
+		TestTrue(FString::Printf(TEXT("the note names the extra bone (%s)"), *Why), Why.Contains(TEXT("tail_01")));
 	}
+	if (const FMantleContractSkeleton* UE5 = C->FindSkeleton(TEXT("ue5mannequin")))
+	{
+		TArray<FMantleSkinJointName> Joints = JointsOf(*UE5);
+		const int32 Hand = UE5->Find(TEXT("hand_r"));
+		Joints.Add({ FName(TEXT("weapon_r")), Hand });
+		TestEqual(TEXT("the UE5 Mannequin with a weapon bone is the UE5 Mannequin, not the UEFN mannequin it shares its body bones with"),
+			FMantleEmoteRetarget::IdentifyJoints(Joints, *C), FString(TEXT("ue5mannequin")));
+	}
+	// A skeleton of its own (another naming) is none of them, and the reason names the nearest and the first difference.
+	{
+		const TArray<FMantleSkinJointName> Joints = { { FName(TEXT("Hips")), INDEX_NONE }, { FName(TEXT("Spine")), 0 }, { FName(TEXT("Head")), 1 } };
+		FString Why;
+		TestEqual(TEXT("another rig is no contract skeleton"), FMantleEmoteRetarget::IdentifyJoints(Joints, *C, &Why), FString());
+		TestTrue(FString::Printf(TEXT("the reason names the nearest skeleton (%s)"), *Why), Why.Contains(TEXT("nearest")));
+	}
+	TestFalse(TEXT("an IK bone is no body bone"), FMantleEmoteRetarget::IsBodyBone(TEXT("ik_hand_gun")));
+	TestTrue(TEXT("the pelvis is a body bone"), FMantleEmoteRetarget::IsBodyBone(TEXT("pelvis")));
 	// The plugin's own UEFN mannequin is the emote skeleton: its clips need no retarget.
 	FString Error;
 	if (USkeletalMesh* Mannequin = FMantleBuiltInMannequin::Get(&Error))
@@ -497,6 +516,202 @@ bool FMantleEmoteCheckSheetTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("the pelvis drifts 80 cm (%.1f)"), Motion.PelvisDriftCm), FMath::IsNearlyEqual(Motion.PelvisDriftCm, 80.0, 0.5));
 	TestTrue(FString::Printf(TEXT("the root travels 20 cm (%.1f)"), Motion.RootTravelCm), FMath::IsNearlyEqual(Motion.RootTravelCm, 20.0, 0.5));
 	TestTrue(FString::Printf(TEXT("the root turns 90 degrees (%.1f)"), Motion.RootTurnDegrees), FMath::IsNearlyEqual(Motion.RootTurnDegrees, 90.0, 0.5));
+	return true;
+}
+
+namespace MantleEmoteTestPrivate
+{
+	/** 31 frames: the root walks Travel cm along x, bobs 10 cm up and turns 90 degrees; the pelvis stands 95 cm up, still. */
+	FMantleAnimClipData RootMotionClip(const float Travel)
+	{
+		FMantleAnimClipData Clip;
+		Clip.FrameCount = 31;
+		FMantleAnimClipTrackData& Root = Clip.Tracks.AddDefaulted_GetRef();
+		Root.Bone = TEXT("root");
+		FMantleAnimClipTrackData& Pelvis = Clip.Tracks.AddDefaulted_GetRef();
+		Pelvis.Bone = TEXT("pelvis");
+		for (int32 Frame = 0; Frame < Clip.FrameCount; ++Frame)
+		{
+			const float Alpha = Frame / 30.0f;
+			Root.Rotations.Add(FQuat4f(FVector3f::UpVector, FMath::DegreesToRadians(90.0f * Alpha)));
+			Root.Translations.Add(FVector3f(Travel * Alpha, 0.0f, 10.0f * FMath::Sin(Alpha * UE_PI)));
+			Pelvis.Rotations.Add(FQuat4f::Identity);
+			Pelvis.Translations.Add(FVector3f(0.0f, 0.0f, 95.0f));
+		}
+		return Clip;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleEmoteRootMotionTest, "Mantle.Editor.Emote.RootMotion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMantleEmoteRootMotionTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleEmoteTestPrivate;
+	const TArray<FName> Children = { TEXT("pelvis") };
+	{
+		// Within the limit: the pelvis does what the root did; the root holds still, as players' clients hold it.
+		FMantleAnimClipData Clip = RootMotionClip(30.0f);
+		FMantleAnimClipWriter::MoveRootOntoChildren(Clip, TEXT("root"), Children, FTransform::Identity, 50.0);
+		TestTrue(TEXT("the root's motion is found"), Clip.RootMotion.bMoved);
+		TestFalse(TEXT("30 cm stays a sway"), Clip.RootMotion.bInPlace);
+		TestTrue(FString::Printf(TEXT("it travels 30 cm (%.1f)"), Clip.RootMotion.TravelCm), FMath::IsNearlyEqual(Clip.RootMotion.TravelCm, 30.0, 0.01));
+		TestTrue(FString::Printf(TEXT("it rises 10 cm (%.1f)"), Clip.RootMotion.RiseCm), FMath::IsNearlyEqual(Clip.RootMotion.RiseCm, 10.0, 0.05));
+		TestTrue(FString::Printf(TEXT("it turns 90 degrees (%.1f)"), Clip.RootMotion.TurnDegrees), FMath::IsNearlyEqual(Clip.RootMotion.TurnDegrees, 90.0, 0.01));
+		const FMantleAnimClipTrackData& Root = Clip.Tracks[0];
+		TestTrue(TEXT("the root holds its reference"), Root.Rotations.Num() == 1 && Root.Translations.Num() == 1 && Root.Translations[0].IsNearlyZero());
+		const FMantleAnimClipTrackData& Pelvis = Clip.Tracks[1];
+		TestTrue(FString::Printf(TEXT("the pelvis ends 30 cm on, 95 cm up (%s)"), *Pelvis.Translations.Last().ToString()),
+			Pelvis.Translations.Last().Equals(FVector3f(30.0f, 0.0f, 95.0f), 0.01f));
+		TestTrue(TEXT("the pelvis is 10 cm higher mid-way"), FMath::IsNearlyEqual(Pelvis.Translations[15].Z, 105.0f, 0.05f));
+		TestTrue(TEXT("the pelvis ends turned 90 degrees"), FMath::IsNearlyEqual(FMath::RadiansToDegrees(Pelvis.Rotations.Last().GetAngle()), 90.0f, 0.01f));
+	}
+	{
+		// Past the limit: in place. The travel goes; the bob and the turn stay.
+		FMantleAnimClipData Clip = RootMotionClip(80.0f);
+		FMantleAnimClipWriter::MoveRootOntoChildren(Clip, TEXT("root"), Children, FTransform::Identity, 50.0);
+		TestTrue(TEXT("80 cm plays in place"), Clip.RootMotion.bInPlace);
+		const FMantleAnimClipTrackData& Pelvis = Clip.Tracks[1];
+		TestTrue(FString::Printf(TEXT("the pelvis stays over the spot (%s)"), *Pelvis.Translations.Last().ToString()),
+			Pelvis.Translations.Last().Equals(FVector3f(0.0f, 0.0f, 95.0f), 0.01f));
+		TestTrue(TEXT("the bob stays"), FMath::IsNearlyEqual(Pelvis.Translations[15].Z, 105.0f, 0.05f));
+		TestTrue(TEXT("the turn stays"), FMath::IsNearlyEqual(FMath::RadiansToDegrees(Pelvis.Rotations.Last().GetAngle()), 90.0f, 0.01f));
+		TArray<FMantleCosmeticIssue> Issues;
+		if (const FMantleAvatarContract* C = Contract(*this))
+		{
+			FMantleAnimClipWriter::Validate(Clip, *C, Issues);
+			TestFalse(TEXT("the root no longer moves past the cook's limit"), HasError(Issues, TEXT("the root moves")));
+		}
+	}
+	{
+		// A still root changes nothing.
+		FMantleAnimClipData Clip = RootMotionClip(0.0f);
+		for (FQuat4f& Rotation : Clip.Tracks[0].Rotations)
+		{
+			Rotation = FQuat4f::Identity;
+		}
+		for (FVector3f& Translation : Clip.Tracks[0].Translations)
+		{
+			Translation = FVector3f::ZeroVector;
+		}
+		const FMantleAnimClipData Before = Clip;
+		FMantleAnimClipWriter::MoveRootOntoChildren(Clip, TEXT("root"), Children, FTransform::Identity, 50.0);
+		TestFalse(TEXT("a still root is no motion"), Clip.RootMotion.bMoved);
+		TestEqual(TEXT("the pelvis is untouched"), Clip.Tracks[1].Translations, Before.Tracks[1].Translations);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleEmoteLoopSeamTest, "Mantle.Editor.Emote.LoopSeam",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMantleEmoteLoopSeamTest::RunTest(const FString& Parameters)
+{
+	// Two seconds; the pelvis turns 2 degrees and rises 1 cm a frame. loop_start at 1 s: the end (120 degrees) jumps back to 60.
+	auto Make = []
+	{
+		FMantleAnimClipData Clip;
+		Clip.FrameCount = 61;
+		FMantleAnimClipTrackData& Pelvis = Clip.Tracks.AddDefaulted_GetRef();
+		Pelvis.Bone = TEXT("pelvis");
+		FMantleAnimClipTrackData& Head = Clip.Tracks.AddDefaulted_GetRef();
+		Head.Bone = TEXT("head");
+		Head.Rotations.Add(FQuat4f::Identity);
+		for (int32 Frame = 0; Frame < Clip.FrameCount; ++Frame)
+		{
+			Pelvis.Rotations.Add(FQuat4f(FVector3f::UpVector, FMath::DegreesToRadians(2.0f * Frame)));
+			Pelvis.Translations.Add(FVector3f(0.0f, 0.0f, 90.0f + Frame));
+		}
+		return Clip;
+	};
+	FMantleAnimClipData Clip = Make();
+	const FMantleAnimClipData Before = Clip;
+	FMantleAnimClipWriter::CloseLoopSeam(Clip, 1.0f, 0.25f);
+	const FMantleAnimClipTrackData& Pelvis = Clip.Tracks[0];
+	TestTrue(FString::Printf(TEXT("the seam was 60 degrees (%.2f)"), Clip.LoopSeamDegrees), FMath::IsNearlyEqual(Clip.LoopSeamDegrees, 60.0, 0.01));
+	TestTrue(FString::Printf(TEXT("and 30 cm (%.2f)"), Clip.LoopSeamCm), FMath::IsNearlyEqual(Clip.LoopSeamCm, 30.0, 0.01));
+	TestTrue(TEXT("the last frame is the loop_start pose"), FMath::Abs(Pelvis.Rotations.Last() | Pelvis.Rotations[30]) > 1.0f - 1e-6f
+		&& Pelvis.Translations.Last().Equals(Pelvis.Translations[30], 1e-3f));
+	TestEqual(TEXT("frames before the blend are untouched"), Pelvis.Rotations[52], Before.Tracks[0].Rotations[52]);
+	TestFalse(TEXT("frames in the blend move toward it"), Pelvis.Rotations[57] == Before.Tracks[0].Rotations[57]);
+	TestEqual(TEXT("a constant track is untouched"), Clip.Tracks[1].Rotations.Num(), 1);
+
+	FMantleAnimClipData AtEnd = Make();
+	FMantleAnimClipWriter::CloseLoopSeam(AtEnd, 2.0f, 0.25f);
+	TestEqual(TEXT("a loop_start at the end changes nothing"), AtEnd.Tracks[0].Rotations, Before.Tracks[0].Rotations);
+	TestEqual(TEXT("and has no seam"), AtEnd.LoopSeamDegrees, 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleEmoteSampleTest, "Mantle.Editor.Emote.Sample",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMantleEmoteSampleTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleEmoteTestPrivate;
+	const FMantleAvatarContract* C = Contract(*this);
+	FString Error;
+	USkeletalMesh* Mannequin = FMantleBuiltInMannequin::Get(&Error);
+	if (!C || !TestNotNull(FString::Printf(TEXT("the built-in UEFN mannequin is made (%s)"), *Error), Mannequin))
+	{
+		return false;
+	}
+	// One second on the UEFN mannequin: the root walks 20 cm, the pelvis turns; a sound notify and loop_start.
+	UPackage* Package = CreatePackage(TEXT("/Game/__MantleEmoteTest/AS_EmoteSample"));
+	UAnimSequence* Sequence = NewObject<UAnimSequence>(Package, TEXT("AS_EmoteSample"), RF_Public | RF_Standalone | RF_Transient);
+	Sequence->SetSkeleton(Mannequin->GetSkeleton());
+	const FReferenceSkeleton& Reference = Mannequin->GetRefSkeleton();
+	const int32 Frames = 30;
+	{
+		IAnimationDataController& Controller = Sequence->GetController();
+		Controller.InitializeModel();
+		Controller.OpenBracket(FText::FromString(TEXT("Emote sample test")), false);
+		Controller.SetFrameRate(FFrameRate(30, 1), false);
+		Controller.SetNumberOfFrames(FFrameNumber(Frames), false);
+		for (const TCHAR* Bone : { TEXT("root"), TEXT("pelvis") })
+		{
+			const FTransform Ref = Reference.GetRawRefBonePose()[Reference.FindRawBoneIndex(FName(Bone))];
+			TArray<FVector> Positions;
+			TArray<FQuat> Rotations;
+			TArray<FVector> Scales;
+			for (int32 Key = 0; Key <= Frames; ++Key)
+			{
+				const bool bRoot = FCString::Strcmp(Bone, TEXT("root")) == 0;
+				Positions.Add(bRoot ? Ref.GetTranslation() + FVector(20.0 * Key / Frames, 0.0, 0.0) : Ref.GetTranslation());
+				Rotations.Add(bRoot ? Ref.GetRotation() : FQuat(FVector::UpVector, FMath::DegreesToRadians(30.0 * Key / Frames)) * Ref.GetRotation());
+				Scales.Add(FVector::OneVector);
+			}
+			Controller.AddBoneCurve(FName(Bone), false);
+			Controller.SetBoneTrackKeys(FName(Bone), Positions, Rotations, Scales, false);
+		}
+		Controller.NotifyPopulated();
+		Controller.CloseBracket(false);
+	}
+	for (const TPair<const TCHAR*, float>& Notify : { TPair<const TCHAR*, float>(TEXT("PlaySound"), 0.2f), TPair<const TCHAR*, float>(TEXT("loop_start"), 0.5f) })
+	{
+		FAnimNotifyEvent& Event = Sequence->Notifies.AddDefaulted_GetRef();
+		Event.NotifyName = FName(Notify.Key);
+		Event.Link(Sequence, Notify.Value);
+	}
+
+	FMantleAnimClipData Clip;
+	const bool bSampled = FMantleAnimClipWriter::Sample(Sequence, *C, Clip, Error);
+	Sequence->ClearFlags(RF_Public | RF_Standalone);
+	Sequence->MarkAsGarbage();
+	if (!TestTrue(FString::Printf(TEXT("the clip samples (%s)"), *Error), bSampled))
+	{
+		return false;
+	}
+	TestEqual(TEXT("the sound notify is reported as left out"), Clip.DroppedNotifies, TArray<FString>({ TEXT("PlaySound") }));
+	TestTrue(TEXT("loop_start is an event"), Clip.Events.Num() == 1 && Clip.Events[0].Name == TEXT("loop_start"));
+	TestTrue(FString::Printf(TEXT("the root's 20 cm walk is found (%.1f)"), Clip.RootMotion.TravelCm), FMath::IsNearlyEqual(Clip.RootMotion.TravelCm, 20.0, 0.1));
+	const FMantleAnimClipTrackData* Root = Find(Clip, TEXT("root"));
+	TestTrue(TEXT("the root is constant"), Root && Root->Rotations.Num() == 1 && Root->Translations.Num() <= 1);
+	const FMantleAnimClipTrackData* Pelvis = Find(Clip, TEXT("pelvis"));
+	TestTrue(TEXT("the pelvis carries the walk"), Pelvis && Pelvis->Translations.Num() == Clip.FrameCount);
+	TArray<FMantleCosmeticIssue> Issues;
+	FMantleAnimClipWriter::Validate(Clip, *C, Issues);
+	TestFalse(FString::Printf(TEXT("it is a valid emote (%s)"), Issues.Num() > 0 ? *Issues[0].ToString() : TEXT("")), FMantleCosmeticChecks::HasErrors(Issues));
 	return true;
 }
 
