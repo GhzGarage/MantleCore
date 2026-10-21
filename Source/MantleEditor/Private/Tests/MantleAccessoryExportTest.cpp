@@ -1,10 +1,15 @@
 // Copyright Joshua Eger. All Rights Reserved.
+#include "MantleAccessorySettings.h"
 #include "MantleAvatarContract.h"
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticPackage.h"
 #include "MantleMeshReduce.h"
+#include "MantlePng.h"
 
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialExpressionTextureSampleParameter2D.h"
 #include "Materials/MaterialInterface.h"
 #include "MeshDescription.h"
 #include "Misc/AutomationTest.h"
@@ -23,7 +28,7 @@
 namespace MantleAccessoryExportTestPrivate
 {
 	/** A transient one-material static mesh of Rings x Segments quads over a 10 cm radius disc, gently waved. */
-	UStaticMesh* MakeDisc(const int32 Rings, const int32 Segments, UMaterialInterface* Material)
+	UStaticMesh* MakeDisc(const int32 Rings, const int32 Segments, UMaterialInterface* Material, const FVector3f Offset = FVector3f::ZeroVector, const float RadiusCm = 10.0f)
 	{
 		FMeshDescription Description;
 		FStaticMeshAttributes Attributes(Description);
@@ -43,10 +48,10 @@ namespace MantleAccessoryExportTestPrivate
 		{
 			for (int32 Segment = 0; Segment <= Segments; ++Segment)
 			{
-				const float Radius = 10.0f * Ring / Rings;
+				const float Radius = RadiusCm * Ring / Rings;
 				const float Angle = 2.0f * PI * Segment / Segments;
 				const FVertexID Vertex = Description.CreateVertex();
-				Positions[Vertex] = FVector3f(Radius * FMath::Cos(Angle), Radius * FMath::Sin(Angle), 0.5f * FMath::Sin(Radius) * FMath::Cos(3.0f * Angle));
+				Positions[Vertex] = Offset + FVector3f(Radius * FMath::Cos(Angle), Radius * FMath::Sin(Angle), 0.5f * FMath::Sin(Radius) * FMath::Cos(3.0f * Angle));
 				Vertices.Add(Vertex);
 			}
 		}
@@ -61,7 +66,7 @@ namespace MantleAccessoryExportTestPrivate
 				Tangents[Instance] = FVector3f(1.0f, 0.0f, 0.0f);
 				BinormalSigns[Instance] = 1.0f;
 				Colors[Instance] = FVector4f(1.0f, 1.0f, 1.0f, 1.0f);
-				UVs.Set(Instance, 0, FVector2f(0.5f + Position.X / 20.0f, 0.5f + Position.Y / 20.0f));
+				UVs.Set(Instance, 0, FVector2f(0.5f + (Position.X - Offset.X) / (2.0f * RadiusCm), 0.5f + (Position.Y - Offset.Y) / (2.0f * RadiusCm)));
 				Corners.Add(Instance);
 			}
 			Description.CreateTriangle(Group, Corners);
@@ -107,6 +112,56 @@ namespace MantleAccessoryExportTestPrivate
 	bool HasNote(const FMantleCosmeticPackage& Package, const TCHAR* Text)
 	{
 		return Package.Notes.ContainsByPredicate([Text](const FString& Note) { return Note.Contains(Text); });
+	}
+
+	/** A transient square texture of one flat colour (a normal map when bNormal). */
+	UTexture2D* MakeTexture(const int32 Size, const FColor Colour, const bool bNormal)
+	{
+		TArray<FColor> Pixels;
+		Pixels.Init(Colour, Size * Size);
+		UTexture2D* Texture = NewObject<UTexture2D>(GetTransientPackage(), NAME_None, RF_Transient);
+		Texture->SRGB = !bNormal;
+		if (bNormal)
+		{
+			Texture->CompressionSettings = TC_Normalmap;
+		}
+		Texture->Source.Init(Size, Size, 1, 1, TSF_BGRA8, reinterpret_cast<const uint8*>(Pixels.GetData()));
+		return Texture;
+	}
+
+	/** A material with a BaseColor texture parameter and, when NormalSize > 0, a Normal one of that size. */
+	UMaterial* MakeMaterial(const int32 NormalSize)
+	{
+		UMaterial* Material = NewObject<UMaterial>(GetTransientPackage(), NAME_None, RF_Transient);
+		auto AddSample = [Material](const TCHAR* Name, UTexture2D* Texture, const EMaterialSamplerType Type) -> UMaterialExpressionTextureSampleParameter2D*
+		{
+			UMaterialExpressionTextureSampleParameter2D* Sample = NewObject<UMaterialExpressionTextureSampleParameter2D>(Material);
+			Sample->Material = Material;
+			Sample->ParameterName = Name;
+			Sample->Texture = Texture;
+			Sample->SamplerType = Type;
+			Sample->UpdateParameterGuid(true, false);
+			Sample->UpdateMaterialExpressionGuid(true, false);
+			Material->GetExpressionCollection().AddExpression(Sample);
+			return Sample;
+		};
+		UMaterialEditorOnlyData* Editor = Material->GetEditorOnlyData();
+		Editor->BaseColor.Connect(0, AddSample(TEXT("BaseColor"), MakeTexture(256, FColor(200, 160, 60, 255), false), SAMPLERTYPE_Color));
+		if (NormalSize > 0)
+		{
+			Editor->Normal.Connect(0, AddSample(TEXT("Normal"), MakeTexture(NormalSize, FColor(128, 128, 255, 255), true), SAMPLERTYPE_Normal));
+		}
+		Material->UpdateCachedExpressionData();
+		return Material;
+	}
+
+	/** The width of an uploaded texture, or 0 when the package has no such texture. */
+	int32 UploadedWidth(const FMantleCosmeticPackage& Package, const FString& Key)
+	{
+		const FMantleCosmeticUploadAsset* Asset = Package.FindAsset(Key);
+		int32 Width = 0, Height = 0;
+		bool bAlpha = false;
+		return Asset && FMantlePng::ReadHeader(Asset->Bytes, Width, Height, bAlpha) ? Width : 0;
 	}
 
 	FMantleCosmeticDraft NeckDraft(UStaticMesh* Mesh)
@@ -167,6 +222,131 @@ bool FMantleAccessoryReduceTest::RunTest(const FString& Parameters)
 	const FMantleCosmeticPackage Kept = FMantleCosmeticExport::BuildCore(NeckDraft(Light.Get()), *Contract);
 	TestFalse(TEXT("an under-limit accessory exports without errors"), Kept.HasErrors());
 	TestFalse(TEXT("an under-limit accessory is not reduced"), HasNote(Kept, TEXT("reduced from")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleAccessoryUnderLimitTest, "Mantle.Cosmetics.Accessory.UnderLimitUnchanged",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMantleAccessoryUnderLimitTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleAccessoryExportTestPrivate;
+	FString ContractError;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+	if (!TestNotNull(TEXT("the avatar contract loads"), Contract))
+	{
+		AddError(ContractError);
+		return false;
+	}
+	FMantleMeshReduce::ClearCache();
+	ON_SCOPE_EXIT { FMantleMeshReduce::ClearCache(); };
+	TStrongObjectPtr<UMaterialInterface> Material(MakeMaterial(0));
+	TStrongObjectPtr<UStaticMesh> Light(MakeDisc(30, 30, Material.Get()));
+	const int32 Before = Triangles(*Light);
+	const FBox BoundsBefore = Light->GetBoundingBox();
+	TestTrue(TEXT("the disc is under the limit"), Before > 0 && Before <= Contract->RigidAccessory.MaxTriangles);
+	const FMantleCosmeticPackage First = FMantleCosmeticExport::BuildCore(NeckDraft(Light.Get()), *Contract);
+	const FMantleCosmeticPackage Second = FMantleCosmeticExport::BuildCore(NeckDraft(Light.Get()), *Contract);
+	TestFalse(TEXT("it exports without errors"), First.HasErrors());
+	TestFalse(TEXT("it is not reduced"), HasNote(First, TEXT("reduced from")));
+	TestFalse(TEXT("its pivot is not moved"), HasNote(First, TEXT("centred on the socket")));
+	TestTrue(TEXT("the preview shows the source itself"), FMantleAccessorySettings::UploadMesh(Light.Get(), Contract->RigidAccessory) == Light.Get());
+	const FMantleCosmeticUploadAsset* A = First.FindAsset(TEXT("mesh"));
+	const FMantleCosmeticUploadAsset* B = Second.FindAsset(TEXT("mesh"));
+	if (TestTrue(TEXT("it uploads a mesh"), A && B))
+	{
+		TestTrue(TEXT("the same mesh uploads each time"), A->Bytes == B->Bytes);
+	}
+	TestEqual(TEXT("the source's triangles are untouched"), Triangles(*Light), Before);
+	TestTrue(TEXT("the source's bounds are untouched"), Light->GetBoundingBox().Equals(BoundsBefore, 1e-4));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleAccessoryFeetPivotTest, "Mantle.Cosmetics.Accessory.PivotAtFeetExports",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMantleAccessoryFeetPivotTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleAccessoryExportTestPrivate;
+	FString ContractError;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+	if (!TestNotNull(TEXT("the avatar contract loads"), Contract))
+	{
+		AddError(ContractError);
+		return false;
+	}
+	FMantleMeshReduce::ClearCache();
+	ON_SCOPE_EXIT { FMantleMeshReduce::ClearCache(); };
+	TStrongObjectPtr<UMaterialInterface> Material(MakeMaterial(0));
+
+	// A 20 cm item modelled 150 cm up from a pivot at the feet: out of reach of the neck, small enough for it.
+	TStrongObjectPtr<UStaticMesh> Chain(MakeDisc(30, 30, Material.Get(), FVector3f(0.0f, 0.0f, 150.0f)));
+	const FBox BoundsBefore = Chain->GetBoundingBox();
+	const FMantleCosmeticPackage Package = FMantleCosmeticExport::BuildCore(NeckDraft(Chain.Get()), *Contract);
+	for (const FMantleCosmeticIssue& Issue : Package.Issues)
+	{
+		if (Issue.Severity == EMantleCosmeticSeverity::Error)
+		{
+			AddError(FString::Printf(TEXT("pivot at the feet: %s"), *Issue.ToString()));
+		}
+	}
+	TestFalse(TEXT("an accessory with its pivot at the feet exports for acc_neck"), Package.HasErrors());
+	TestTrue(TEXT("its notes say it was centred"), HasNote(Package, TEXT("centred on the socket")));
+	TestTrue(TEXT("the source's bounds are untouched"), Chain->GetBoundingBox().Equals(BoundsBefore, 1e-4));
+
+	// Too big for the slot either way: still refused, not quietly moved.
+	TStrongObjectPtr<UStaticMesh> Huge(MakeDisc(30, 30, Material.Get(), FVector3f(0.0f, 0.0f, 150.0f), 40.0f));
+	const FMantleCosmeticPackage Refused = FMantleCosmeticExport::BuildCore(NeckDraft(Huge.Get()), *Contract);
+	TestTrue(TEXT("an accessory too big for the slot is still refused"), Refused.HasErrors());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleAccessoryNormalMapTest, "Mantle.Cosmetics.Accessory.NormalMap",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMantleAccessoryNormalMapTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleAccessoryExportTestPrivate;
+	FString ContractError;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+	if (!TestNotNull(TEXT("the avatar contract loads"), Contract))
+	{
+		AddError(ContractError);
+		return false;
+	}
+	if (!TestEqual(TEXT("rigid accessories take a 1024 normal map"), Contract->RigidAccessory.NormalMax, 1024))
+	{
+		return false;
+	}
+	FMantleMeshReduce::ClearCache();
+	ON_SCOPE_EXIT { FMantleMeshReduce::ClearCache(); };
+
+	auto Export = [&](const int32 NormalSize, FMantleCosmeticPackage& Out) -> bool
+	{
+		TStrongObjectPtr<UMaterialInterface> Material(MakeMaterial(NormalSize));
+		TStrongObjectPtr<UStaticMesh> Mesh(MakeDisc(30, 30, Material.Get()));
+		Out = FMantleCosmeticExport::BuildCore(NeckDraft(Mesh.Get()), *Contract);
+		return !Out.HasErrors() && Out.Materials.Num() == 1;
+	};
+
+	FMantleCosmeticPackage With, Without, Over;
+	if (TestTrue(TEXT("an accessory with a 1024 normal map exports"), Export(1024, With)))
+	{
+		TestEqual(TEXT("the normal uploads at 1024"), UploadedWidth(With, With.Materials[0].NormalKey), 1024);
+	}
+	if (TestTrue(TEXT("an accessory with no normal map exports"), Export(0, Without)))
+	{
+		TestTrue(TEXT("and has no normal"), Without.Materials[0].NormalKey.IsEmpty());
+		TestTrue(TEXT("its colour uploads as before"), UploadedWidth(Without, Without.Materials[0].AlbedoKey) > 0);
+		if (With.Materials.Num() == 1)
+		{
+			TestEqual(TEXT("its colour is the same with or without a normal"), Without.Materials[0].AlbedoKey, With.Materials[0].AlbedoKey);
+		}
+	}
+	if (TestTrue(TEXT("an accessory with a 2048 normal map exports, not refused"), Export(2048, Over)))
+	{
+		TestEqual(TEXT("the normal is resized to 1024"), UploadedWidth(Over, Over.Materials[0].NormalKey), 1024);
+	}
 	return true;
 }
 
