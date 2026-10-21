@@ -787,6 +787,13 @@ bool FMantleParametricOutfit::FindSourceBody(const USkeletalMesh* AuthoringBody,
 		OutError = TEXT("the authoring body is not one Mantle converted from a MetaHuman Creator character");
 		return false;
 	}
+	if (Built->Left(Cut).Contains(TEXT("/Converted/")))
+	{
+		// A third-party character's body conformed to a MetaHuman: its clothing goes through Make Outfit from garment, which
+		// poses and fits the garment to that body, not straight onto it.
+		OutError = TEXT("the authoring body is a third-party character's, converted to a MetaHuman");
+		return false;
+	}
 	FARFilter Filter;
 	Filter.PackagePaths.Add(FName(*Built->Left(Cut)));
 	Filter.ClassPaths.Add(UMetaHumanCharacter::StaticClass()->GetClassPathName());
