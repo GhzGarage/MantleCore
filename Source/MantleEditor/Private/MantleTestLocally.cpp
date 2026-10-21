@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleTestLocally.h"
 
+#include "MantlePlaceSecrets.h"
 #include "MantlePreviewExport.h"
 #include "MantleRuntime.h"
 #include "MantleSettings.h"
@@ -294,6 +295,7 @@ void FMantleTestLocally::SetNotice(const FString& Text, bool bError)
 
 void FMantleTestLocally::ResetRun()
 {
+	MantlePlaceSecrets::RemoveFromBundle(BundleDirectory);
 	State = EMantleTestLocallyState::Idle;
 	ErrorText.Reset();
 	Notice.Reset();
@@ -314,6 +316,7 @@ void FMantleTestLocally::ResetRun()
 
 bool FMantleTestLocally::Failed(const FString& Why, FString& OutError)
 {
+	MantlePlaceSecrets::RemoveFromBundle(BundleDirectory);
 	State = EMantleTestLocallyState::Failed;
 	ErrorText = Why;
 	OutError = Why;
@@ -575,6 +578,8 @@ void FMantleTestLocally::Stop()
 		ReadStatusFile();
 	}
 	MantlePreviewClient::Stop();
+	// #1011: the creator's secrets.local.json must not stay behind in the preview folder.
+	MantlePlaceSecrets::RemoveFromBundle(BundleDirectory);
 	if (State == EMantleTestLocallyState::Starting || State == EMantleTestLocallyState::Ready)
 	{
 		State = EMantleTestLocallyState::Stopped;
@@ -696,6 +701,7 @@ bool FMantleTestLocally::Poll()
 	bool bChanged = ReadStatusFile();
 	if (!bAlive)
 	{
+		MantlePlaceSecrets::RemoveFromBundle(BundleDirectory);
 		if (State == EMantleTestLocallyState::Ready)
 		{
 			State = EMantleTestLocallyState::Closed;

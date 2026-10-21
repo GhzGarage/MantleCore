@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantlePreviewExport.h"
+#include "MantlePlaceSecrets.h"
 #include "MantleAssetStore.h"
 #include "MantlePlaceAssetConverter.h"
 #include "MantlePlaceExporter.h"
@@ -1095,6 +1096,16 @@ namespace MantlePreviewExportPrivate
 		{
 			Result.Errors.Add(TEXT("Could not write place.json."));
 			return false;
+		}
+		// #1011: the creator's local test secrets go next to place.json, where the preview reads them. TestLocally deletes the copy
+		// when the preview ends; it is never part of anything uploaded.
+		{
+			FString SecretsError;
+			if (!MantlePlaceSecrets::CopyToBundle(MantlePlaceSecrets::LocalFilePathFor(World->GetName()), State.BundleDir, SecretsError))
+			{
+				Result.Errors.Add(SecretsError);
+				return false;
+			}
 		}
 		// #628: the coverage report beside the manifest. Not part of the bundle's contract, so a failure to write it is a warning.
 		if (PreviewWriteText(State.BundleDir / TEXT("coverage.json"), Result.Coverage.ToJson()))
