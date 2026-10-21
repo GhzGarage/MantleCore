@@ -58,6 +58,9 @@ namespace MantleParametricOutfitPrivate
 	/** How far the closest twentieth of a garment's vertices may be from its authoring body's skin (cm). */
 	constexpr float WrapMaxCloseCm = 1.5f;
 
+	/** The least height (cm) a mesh spans, feet to head, to be a whole body; feet, hands and a torso alone fall short. */
+	constexpr float WholeBodyMinCm = 120.0f;
+
 	void Finish(USkinnedAsset* Asset)
 	{
 		USkinnedAsset* Assets[] = { Asset };
@@ -920,6 +923,14 @@ UChaosOutfitAsset* FMantleParametricOutfit::WrapOnAuthoringBody(const FMantleCos
 	return WrapGarment(Draft.Source.Get(), Draft.KeepSlots, SourceBody, KeepAlive, OutWhy);
 }
 
+bool FMantleParametricOutfit::IsWholeBody(TConstArrayView<FVector3f> Points)
+{
+	if (Points.IsEmpty()) { return false; }
+	float Low = Points[0].Z, High = Points[0].Z;
+	for (const FVector3f& Point : Points) { Low = FMath::Min(Low, Point.Z); High = FMath::Max(High, Point.Z); }
+	return High - Low >= MantleParametricOutfitPrivate::WholeBodyMinCm;
+}
+
 USkeletalMesh* FMantleParametricOutfit::FindBodyBeside(USkeletalMesh* Garment)
 {
 	if (!Garment) { return nullptr; }
@@ -957,6 +968,13 @@ USkeletalMesh* FMantleParametricOutfit::FindBodyBeside(USkeletalMesh* Garment)
 				UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: not a bare body (all skin %d)"), *Body->GetName(), bAllSkin ? 1 : 0);
 				continue;
 			}
+			// A whole body: feet, hands or a torso alone are not the body the clothing was made for.
+			TArray<FVector3f> BodyPoints;
+			if (!FMantleFitBodies::ReadVertices(Body, 0, BodyPoints) || !IsWholeBody(BodyPoints))
+			{
+				UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_BODY_BESIDE %s: not a whole body"), *Body->GetName());
+				continue;
+			}
 			// The body names this garment among its separate clothing (the Convert list's own matching).
 			TArray<FMantleConvertGarment> Garments;
 			TArray<FString> NotOffered;
@@ -976,7 +994,7 @@ UChaosOutfitAsset* FMantleParametricOutfit::MakeOutfitBeside(const FMantleCosmet
 {
 	USkeletalMesh* Garment = Cast<USkeletalMesh>(Draft.Source.Get());
 	USkeletalMesh* Body = FindBodyBeside(Garment);
-	if (!Body) { OutWhy = TEXT("no bare character body was found next to it"); return nullptr; }
+	if (!Body) { OutWhy = TEXT("no whole bare character body was found next to it"); return nullptr; }
 	if (Draft.KeepSlots.IsSet()) { OutWhy = TEXT("Make Outfit from garment takes the whole mesh, not chosen sections"); return nullptr; }
 	// Made once: an Outfit saved earlier from this garment is reused.
 	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();

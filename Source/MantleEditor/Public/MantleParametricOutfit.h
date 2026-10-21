@@ -55,6 +55,9 @@ struct MANTLEEDITOR_API FMantleParametricOutfit
 	static UChaosOutfitAsset* WrapOnAuthoringBody(const FMantleCosmeticDraft& Draft, TArray<TStrongObjectPtr<UObject>>& KeepAlive,
 		TSharedPtr<void>& Lease, FString& OutWhy);
 
+	/** Pure (tested): Points (component space, cm) span a whole body's height, feet to head. */
+	static bool IsWholeBody(TConstArrayView<FVector3f> Points);
+
 	/** The character's bare body beside Garment (its folder or up to two above) whose separate clothing, by the Convert list's matching, includes Garment. */
 	static USkeletalMesh* FindBodyBeside(USkeletalMesh* Garment);
 
