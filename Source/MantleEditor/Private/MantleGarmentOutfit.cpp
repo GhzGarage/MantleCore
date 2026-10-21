@@ -7,6 +7,7 @@
 #include "MantleAvatarReposeFixer.h"
 #include "MantleAvatarStripFixer.h"
 #include "MantleCosmeticExport.h"
+#include "MantleGarmentClearance.h"
 #include "MantleMetaHumanPose.h"
 #include "MantleNailSeating.h"
 #include "MantleOutfitSections.h"
@@ -224,32 +225,8 @@ namespace MantleGarmentOutfitPrivate
 	{
 		FMantleSkinnedMeshLOD Surface;
 		TArray<int32> PointOf;
-		TMap<FVector3f, int32> Welded;
-		for (const FVector3f& Position : Mesh.Positions)
-		{
-			const int32* Found = Welded.Find(Position);
-			PointOf.Add(Found ? *Found : Welded.Add(Position, Surface.Positions.Add(Position)));
-		}
-		Surface.Normals.Init(FVector3f::ZeroVector, Surface.Positions.Num());
-		for (int32 Vertex = 0; Vertex < Mesh.Positions.Num(); ++Vertex)
-		{
-			if (Mesh.Normals.IsValidIndex(Vertex))
-			{
-				Surface.Normals[PointOf[Vertex]] += Mesh.Normals[Vertex];
-			}
-		}
-		for (FVector3f& Normal : Surface.Normals)
-		{
-			Normal = Normal.GetSafeNormal();
-		}
-		for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives)
-		{
-			for (const uint32 Index : Primitive.Indices)
-			{
-				Surface.Indices.Add(static_cast<uint32>(PointOf[Primitive.FirstVertex + static_cast<int32>(Index)]));
-			}
-		}
-		if (!FMantleAvatarRefit::PushOutOfBody(Surface, Body, Out, OutError))
+		FMantleGarmentOutfit::WeldedSurface(Mesh, Surface, PointOf);
+		if (!FMantleAvatarRefit::PushOutOfBody(Surface, Body, Out, OutError, /*bCoverSkin*/ true))
 		{
 			return false;
 		}
@@ -382,6 +359,9 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 }
 
 const FName FMantleGarmentOutfit::MadeFromGarmentKey(TEXT("MantleMadeFromGarment"));
+const FName FMantleGarmentOutfit::MadeVersionKey(TEXT("MantleMadeFromGarmentVersion"));
+// 3: the garment is carried with the skin onto the MetaHuman (CarryWithSkin), and skin coming through it between its vertices is covered (CoverSkin); 4: CoverSkin only answers skin a little through it.
+const TCHAR* const FMantleGarmentOutfit::MadeVersion = TEXT("4");
 
 const TArray<TPair<FName, FName>>& FMantleGarmentOutfit::Limbs()
 {
@@ -671,6 +651,189 @@ bool FMantleGarmentOutfit::TransferWeights(FMantleGlbMesh& Garment, const FMantl
 	return true;
 }
 
+void FMantleGarmentOutfit::WeldedSurface(const FMantleGlbMesh& Mesh, FMantleSkinnedMeshLOD& Out, TArray<int32>& OutPointOf)
+{
+	Out = FMantleSkinnedMeshLOD();
+	OutPointOf.Reset();
+	TMap<FVector3f, int32> Welded;
+	for (const FVector3f& Position : Mesh.Positions)
+	{
+		const int32* Found = Welded.Find(Position);
+		OutPointOf.Add(Found ? *Found : Welded.Add(Position, Out.Positions.Add(Position)));
+	}
+	Out.Normals.Init(FVector3f::ZeroVector, Out.Positions.Num());
+	for (int32 Vertex = 0; Vertex < Mesh.Positions.Num(); ++Vertex)
+	{
+		if (Mesh.Normals.IsValidIndex(Vertex))
+		{
+			Out.Normals[OutPointOf[Vertex]] += Mesh.Normals[Vertex];
+		}
+	}
+	for (FVector3f& Normal : Out.Normals)
+	{
+		Normal = Normal.GetSafeNormal();
+	}
+	for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives)
+	{
+		for (const uint32 Index : Primitive.Indices)
+		{
+			Out.Indices.Add(static_cast<uint32>(OutPointOf[Primitive.FirstVertex + static_cast<int32>(Index)]));
+		}
+	}
+}
+
+bool FMantleGarmentOutfit::CarryWithSkin(TArray<FVector3f>& Garment, const FMantleSkinnedMeshLOD& From, const FMantleSkinnedMeshLOD& To, double& OutMeanMoveCm, FString& OutError)
+{
+	using namespace MantleGarmentOutfitPrivate;
+	OutMeanMoveCm = 0.0;
+	if (Garment.IsEmpty())
+	{
+		return true;
+	}
+	// Each original skin point onto its closest point of the MetaHuman's skin.
+	FMantleGarmentClearance SkinOnTo;
+	if (!FMantleGarmentClearance::Compute(From.Positions, To, SkinOnTo, FMantleGarmentClearance::DefaultSearchCm, &OutError))
+	{
+		return false;
+	}
+	const int32 NumPoints = From.Positions.Num();
+	TArray<FVector3f> Move;
+	TArray<bool> Known;
+	Move.Init(FVector3f::ZeroVector, NumPoints);
+	Known.Init(false, NumPoints);
+	for (int32 Point = 0; Point < NumPoints; ++Point)
+	{
+		if (!SkinOnTo.IsTracked(Point))
+		{
+			continue;
+		}
+		const int32 Triangle = SkinOnTo.Triangle[Point];
+		const FVector3f& Bary = SkinOnTo.Barycentrics[Point];
+		const FVector3f Closest = To.Positions[To.Indices[Triangle * 3]] * Bary.X + To.Positions[To.Indices[Triangle * 3 + 1]] * Bary.Y
+			+ To.Positions[To.Indices[Triangle * 3 + 2]] * Bary.Z;
+		Move[Point] = Closest - From.Positions[Point];
+		Known[Point] = true;
+	}
+	// Smoothed over the skin's edges: half its own move, half its neighbours' mean; a point with no move takes its known neighbours'.
+	TArray<TArray<int32>> Neighbours;
+	Neighbours.SetNum(NumPoints);
+	for (int32 First = 0; First + 2 < From.Indices.Num(); First += 3)
+	{
+		for (int32 Corner = 0; Corner < 3; ++Corner)
+		{
+			const int32 A = static_cast<int32>(From.Indices[First + Corner]);
+			const int32 B = static_cast<int32>(From.Indices[First + (Corner + 1) % 3]);
+			Neighbours[A].AddUnique(B);
+			Neighbours[B].AddUnique(A);
+		}
+	}
+	for (int32 Pass = 0; Pass < CarrySmoothIters; ++Pass)
+	{
+		TArray<FVector3f> Next = Move;
+		TArray<bool> NextKnown = Known;
+		for (int32 Point = 0; Point < NumPoints; ++Point)
+		{
+			FVector3f Sum = FVector3f::ZeroVector;
+			int32 Count = 0;
+			for (const int32 Neighbour : Neighbours[Point])
+			{
+				if (Known[Neighbour])
+				{
+					Sum += Move[Neighbour];
+					++Count;
+				}
+			}
+			if (Count == 0)
+			{
+				continue;
+			}
+			Next[Point] = Known[Point] ? 0.5f * Move[Point] + 0.5f * Sum / Count : Sum / Count;
+			NextKnown[Point] = true;
+		}
+		Move = MoveTemp(Next);
+		Known = MoveTemp(NextKnown);
+	}
+	// Each garment point takes the move of the skin under it.
+	FMantleGarmentClearance GarmentOnFrom;
+	if (!FMantleGarmentClearance::Compute(Garment, From, GarmentOnFrom, FMantleGarmentClearance::DefaultSearchCm, &OutError))
+	{
+		return false;
+	}
+	TArray<FVector3f> KnownPoints;
+	TArray<int32> KnownIndex;
+	for (int32 Point = 0; Point < NumPoints; ++Point)
+	{
+		if (Known[Point])
+		{
+			KnownPoints.Add(From.Positions[Point]);
+			KnownIndex.Add(Point);
+		}
+	}
+	const FGarmentPointGrid Grid(KnownPoints, 2.0);
+	TArray<TPair<double, int32>> Found;
+	double Total = 0.0;
+	for (int32 Vertex = 0; Vertex < Garment.Num(); ++Vertex)
+	{
+		FVector3f Shift = FVector3f::ZeroVector;
+		if (GarmentOnFrom.IsTracked(Vertex))
+		{
+			const int32 Triangle = GarmentOnFrom.Triangle[Vertex];
+			const FVector3f& Bary = GarmentOnFrom.Barycentrics[Vertex];
+			Shift = Move[From.Indices[Triangle * 3]] * Bary.X + Move[From.Indices[Triangle * 3 + 1]] * Bary.Y + Move[From.Indices[Triangle * 3 + 2]] * Bary.Z;
+		}
+		else
+		{
+			Grid.Nearest(Garment[Vertex], TransferNeighbours, 200.0, Found);
+			double Weights = 0.0;
+			for (const TPair<double, int32>& Near : Found)
+			{
+				const double Share = 1.0 / (Near.Key + 0.5);
+				Shift += Move[KnownIndex[Near.Value]] * static_cast<float>(Share);
+				Weights += Share;
+			}
+			Shift = Weights > 0.0 ? Shift / static_cast<float>(Weights) : FVector3f::ZeroVector;
+		}
+		Garment[Vertex] += Shift;
+		Total += Shift.Size();
+	}
+	OutMeanMoveCm = Total / Garment.Num();
+	return true;
+}
+
+FString FMantleGarmentOutfit::DescribeClearance(TConstArrayView<FVector3f> Points, const FMantleSkinnedMeshLOD& Surface)
+{
+	FMantleGarmentClearance Clearance;
+	FString Error;
+	if (!FMantleGarmentClearance::Compute(Points, Surface, Clearance, FMantleGarmentClearance::DefaultSearchCm, &Error))
+	{
+		return FString::Printf(TEXT("not measured: %s"), *Error);
+	}
+	TArray<float> Tracked;
+	int32 Under = 0;
+	int32 Within = 0;
+	double Sum = 0.0;
+	for (int32 Point = 0; Point < Points.Num(); ++Point)
+	{
+		if (!Clearance.IsTracked(Point))
+		{
+			continue;
+		}
+		const float Cm = Clearance.ClearanceCm[Point];
+		Tracked.Add(Cm);
+		Under += Cm < -0.05f ? 1 : 0;
+		Within += FMath::Abs(Cm) <= 1.0f ? 1 : 0;
+		Sum += Cm;
+	}
+	if (Tracked.IsEmpty())
+	{
+		return FString::Printf(TEXT("tracked 0/%d"), Points.Num());
+	}
+	Tracked.Sort();
+	const auto Percentile = [&Tracked](const int32 Percent) { return Tracked[FMath::Min(Tracked.Num() - 1, Tracked.Num() * Percent / 100)]; };
+	return FString::Printf(TEXT("tracked %d/%d, under %d, mean %.2f, p10 %.2f p50 %.2f p90 %.2f cm, within 1 cm %d%%"), Tracked.Num(), Points.Num(), Under,
+		Sum / Tracked.Num(), Percentile(10), Percentile(50), Percentile(90), FMath::RoundToInt32(100.0 * Within / Tracked.Num()));
+}
+
 bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletalMesh*> Garments, const FString& TurnOff, const FString& Confirm,
 	FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal)
 {
@@ -935,6 +1098,57 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT k=%.5f offset=%s body gap %.3f cm"), OutResult.InputScale, *OutResult.Offset.ToString(), OutResult.BodyGapCm);
 	OutResult.Notes.Add(FString::Printf(TEXT("The MetaHuman's skin is on average %.2f cm from the original body's (after the A-pose and the scale %.4f)."), OutResult.BodyGapCm, OutResult.InputScale));
 
+	// The original body (posed, on the MetaHuman) and the conformed MetaHuman as surfaces, for the fit log: how far the
+	// original skin is outside the MetaHuman's, by the bone it follows (positive: the MetaHuman is smaller there).
+	FMantleGlbMesh OriginalBody = PosedBody;
+	for (FVector3f& Position : OriginalBody.Positions)
+	{
+		Position += OutResult.Offset;
+	}
+	FMantleSkinnedMeshLOD OriginalSurface, TwinSurface;
+	TArray<int32> OriginalPointOf, TwinPointOf;
+	WeldedSurface(OriginalBody, OriginalSurface, OriginalPointOf);
+	WeldedSurface(MetaHumanSkin, TwinSurface, TwinPointOf);
+	{
+		FMantleGarmentClearance Gap;
+		if (FMantleGarmentClearance::Compute(OriginalSurface.Positions, TwinSurface, Gap))
+		{
+			TMap<FName, TPair<double, int32>> ByBone;
+			TBitArray<> Seen(false, OriginalSurface.Positions.Num());
+			for (int32 Vertex = 0; Vertex < OriginalPointOf.Num(); ++Vertex)
+			{
+				const int32 Point = OriginalPointOf[Vertex];
+				if (!Gap.IsTracked(Point) || Seen[Point])
+				{
+					continue;
+				}
+				Seen[Point] = true;
+				int32 Best = 0;
+				for (int32 Slot = 1; Slot < OriginalBody.NumInfluences; ++Slot)
+				{
+					Best = OriginalBody.InfluenceWeights[Vertex * OriginalBody.NumInfluences + Slot] > OriginalBody.InfluenceWeights[Vertex * OriginalBody.NumInfluences + Best] ? Slot : Best;
+				}
+				const int32 Joint = OriginalBody.InfluenceJoints[Vertex * OriginalBody.NumInfluences + Best];
+				TPair<double, int32>& Entry = ByBone.FindOrAdd(OriginalBody.Joints.IsValidIndex(Joint) ? OriginalBody.Joints[Joint].Name : NAME_None);
+				Entry.Key += Gap.ClearanceCm[Point];
+				++Entry.Value;
+			}
+			TArray<TPair<FName, double>> Means;
+			for (const TPair<FName, TPair<double, int32>>& Entry : ByBone)
+			{
+				if (Entry.Value.Value >= 20) { Means.Emplace(Entry.Key, Entry.Value.Key / Entry.Value.Value); }
+			}
+			Means.Sort([](const TPair<FName, double>& A, const TPair<FName, double>& B) { return FMath::Abs(A.Value) > FMath::Abs(B.Value); });
+			TArray<FString> Lines;
+			for (int32 Index = 0; Index < Means.Num() && Index < 14; ++Index)
+			{
+				Lines.Add(FString::Printf(TEXT("%s %+.2f"), *Means[Index].Key.ToString(), Means[Index].Value));
+			}
+			UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT original skin over the MetaHuman: %s; by bone (cm): %s"),
+				*DescribeClearance(OriginalSurface.Positions, TwinSurface), *FString::Join(Lines, TEXT(", ")));
+		}
+	}
+
 	// 3 and 4, per garment.
 	for (USkeletalMesh* Garment : Garments)
 	{
@@ -967,6 +1181,17 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		{
 			Position += OutResult.Offset;
 		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the original body: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, OriginalSurface));
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman as posed: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, TwinSurface));
+		// The MetaHuman is the body's shape only roughly (a fuller bust, a rounder seat): the garment follows its skin onto it.
+		double CarriedCm = 0.0;
+		if (!CarryWithSkin(Geometry->Positions, OriginalSurface, TwinSurface, CarriedCm, Error))
+		{
+			Piece.Error = Error;
+			continue;
+		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s carried with the skin (%.2f cm on average): %s"), *Garment->GetName(), CarriedCm,
+			*DescribeClearance(Geometry->Positions, TwinSurface));
 		if (!TransferWeights(*Geometry, MetaHumanSkin, Piece.FarVertices, Piece.MeanSkinCm, Error))
 		{
 			Piece.Error = Error;
@@ -978,12 +1203,14 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 			Piece.Error = Error;
 			continue;
 		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman in its A-pose: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, AuthoringSurface));
 		FMantleRefitPushOut Pushed;
 		if (!GarmentPushOut(*Geometry, AuthoringSurface, Pushed, Error))
 		{
 			Piece.Error = Error;
 			continue;
 		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s pushed out: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, AuthoringSurface));
 		Piece.PushOut = Pushed.ToString();
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT push out %s: %s"), *Garment->GetName(), *Piece.PushOut);
 		Piece.Vertices = Geometry->Positions.Num();
@@ -1004,6 +1231,7 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		}
 		FAssetRegistryModule::AssetCreated(Outfit);
 		Package->GetMetaData().SetValue(Outfit, MadeFromGarmentKey, *Garment->GetPathName());
+		Package->GetMetaData().SetValue(Outfit, MadeVersionKey, MadeVersion);
 		if (!GarmentSave(Outfit))
 		{
 			Piece.Error = FString::Printf(TEXT("the Outfit was made but %s could not be saved"), *PackageName);

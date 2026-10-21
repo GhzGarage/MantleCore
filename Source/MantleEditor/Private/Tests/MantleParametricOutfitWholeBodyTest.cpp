@@ -2,6 +2,8 @@
 #include "MantleOutfitSections.h"
 #include "MantleParametricOutfit.h"
 
+#include "Engine/SkeletalMesh.h"
+#include "MetaHumanCharacter.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -47,6 +49,21 @@ bool FMantleParametricOutfitBareBodyTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("a body with a pants section is not"), FMantleParametricOutfit::IsBareBody(
 		{ Section(TEXT("Body"), TEXT("M_Skin")), Section(TEXT("Pants"), TEXT("M_Pants")) }, TEXT("SK_Dressed")));
 	TestFalse(TEXT("a head is not a body"), FMantleParametricOutfit::IsBareBody({ Section(TEXT("Head"), TEXT("M_Skin")) }, TEXT("SK_Head")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleParametricOutfitThirdPartyTest,
+	"Mantle.Editor.ParametricOutfit.ThirdPartyConversion",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleParametricOutfitThirdPartyTest::RunTest(const FString& Parameters)
+{
+	// A body converted from a MetaHuman Creator character (Aera, saved under Aera/Converted/Aera) is the wrap route's; one
+	// converted from a third-party character's mesh is not; one from no asset (an assembly folder) is not refused.
+	TestFalse(TEXT("a Creator character's conversion"), FMantleParametricOutfit::IsThirdPartyConversion(UMetaHumanCharacter::StaticClass()->GetClassPathName()));
+	TestTrue(TEXT("a third-party mesh's conversion"), FMantleParametricOutfit::IsThirdPartyConversion(USkeletalMesh::StaticClass()->GetClassPathName()));
+	TestFalse(TEXT("no source asset"), FMantleParametricOutfit::IsThirdPartyConversion(FTopLevelAssetPath()));
 	return true;
 }
 

@@ -4,7 +4,7 @@
 // Fits an Outfit onto the standard bodies exactly as CheckCosmetic does (FMantleEditorActions::MakeCosmeticDraft, then
 // FMantleParametricOutfit::Prepare per fit body) and renders each fit as the catalog thumbnail does (FMantleCosmeticThumbnail,
 // GarmentSubject: the engine's thumbnail scene, reference pose, framed on the garment, on that size's own body and face), from
-// the front and from the back, into <Directory>/<Outfit>_<size id>_{front,back}.png. Nothing is saved or uploaded. Logs
+// the front, a quarter turn, the side and the back, into <Directory>/<Outfit>_<size id>_{front,quarter,side,back}.png. Nothing is saved or uploaded. Logs
 // MANTLE_RENDER_FITS lines.
 // With an accessory slot it makes the rigid piece as CheckCosmetic does (FMantleParametricOutfit::PrepareRigid) and renders
 // the catalog thumbnail itself (AccessorySubject, <Outfit>_<slot>_thumbnail.png, and from behind, _thumbnail_back.png) and the piece worn on the body it was made on,
@@ -13,9 +13,12 @@
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticThumbnail.h"
 #include "MantleEditorActions.h"
+#include "MantleGarmentOutfit.h"
 #include "MantleParametricOutfit.h"
 #include "MantlePng.h"
 
+#include "Animation/Skeleton.h"
+#include "ChaosOutfitAsset/OutfitAsset.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
 #include "Engine/StaticMesh.h"
@@ -24,6 +27,10 @@
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
+#include "SkinnedAssetCompiler.h"
+#include "UObject/MetaData.h"
+#include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMantleRenderOutfitFits, Log, All);
@@ -31,6 +38,13 @@ DEFINE_LOG_CATEGORY_STATIC(LogMantleRenderOutfitFits, Log, All);
 // Named, not anonymous: MantleEditor builds as a unity build.
 namespace MantleDevRenderOutfitFitsPrivate
 {
+	/** A garment fit's views: name and turn from the front (degrees). */
+	const TArray<TPair<const TCHAR*, float>>& FitViews()
+	{
+		static const TArray<TPair<const TCHAR*, float>> Views = { { TEXT("front"), 0.0f }, { TEXT("quarter"), 35.0f }, { TEXT("side"), 90.0f }, { TEXT("back"), 180.0f } };
+		return Views;
+	}
+
 	bool Save(const FMantleThumbnailSubject& Shot, int32 Size, const FString& File, FString& OutError)
 	{
 		TArray<FColor> Pixels;
@@ -154,6 +168,53 @@ namespace MantleDevRenderOutfitFitsPrivate
 				return;
 			}
 			Draft = MoveTemp(Wrapped);
+			// Made with Make Outfit from garment: the stages before the resize too, the garment on its own character's body and the
+			// Outfit's authored size on the MetaHuman made from that body (<Garment>_original_*, <Garment>_twin_*).
+			UChaosOutfitAsset* Made = Cast<UChaosOutfitAsset>(Draft.Source.Get());
+			USkeletalMesh* Body = FMantleParametricOutfit::FindBodyBeside(Cast<USkeletalMesh>(Outfit));
+			TArray<FMantleOutfitSourceSize> Sizes;
+			FString SizesError;
+			USkeletalMesh* Twin = Made && FMantleParametricOutfit::ListSizes(Made, Sizes, SizesError) && Sizes[0].BodyParts.Num() > 0
+				? Cast<USkeletalMesh>(Sizes[0].BodyParts[0].TryLoad()) : nullptr;
+			USkeletalMesh* Authored = NewObject<USkeletalMesh>();
+			WrapKeepAlive.Emplace(Authored);
+			FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("ChaosClothAssetTools"));
+			if (Made && Twin && Made->ExportToSkeletalMesh(*Authored))
+			{
+				USkinnedAsset* Compiling[] = { Authored };
+				FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
+				if (!Authored->GetSkeleton())
+				{
+					USkeleton* Skeleton = NewObject<USkeleton>();
+					WrapKeepAlive.Emplace(Skeleton);
+					Skeleton->MergeAllBonesToBoneTree(Authored, false);
+					Authored->SetSkeleton(Skeleton);
+				}
+			}
+			else
+			{
+				Authored = nullptr;
+			}
+			const bool bMade = Body && Authored && Made->GetPackage()->GetMetaData().FindValue(Made, FMantleGarmentOutfit::MadeFromGarmentKey);
+			for (const TCHAR* Stage : { TEXT("original"), TEXT("twin") })
+			{
+				if (!bMade)
+				{
+					break;
+				}
+				const bool bOriginal = FCString::Strcmp(Stage, TEXT("original")) == 0;
+				const FMantleThumbnailSubject Subject = bOriginal ? FMantleCosmeticThumbnail::GarmentSubject(Cast<USkeletalMesh>(Outfit), Body, nullptr)
+					: FMantleCosmeticThumbnail::GarmentSubject(Authored, Twin, nullptr);
+				for (const TPair<const TCHAR*, float>& FitView : FitViews())
+				{
+					const TCHAR* View = FitView.Key;
+					FMantleThumbnailSubject Shot = Subject;
+					Shot.View.Yaw += FitView.Value;
+					const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), Stage, View));
+					const bool bWritten = Save(Shot, Size, File, Why);
+					UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s %s %s"), Stage, View, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Why);
+				}
+			}
 		}
 		UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s: %d fit bodies (%s)"), *Outfit->GetPathName(), Draft.OutfitTargets.Num(), *Draft.FitBodiesStatus);
 		for (const FMantleOutfitAuthoringTarget& Target : Draft.OutfitTargets)
@@ -177,13 +238,11 @@ namespace MantleDevRenderOutfitFitsPrivate
 			}
 			// The catalog thumbnail's subject: the garment on this size's own body and face.
 			FMantleThumbnailSubject Subject = FMantleCosmeticThumbnail::GarmentSubject(Garment, Target.Body.Get(), Target.Face.Get());
-			for (const TCHAR* View : { TEXT("front"), TEXT("back") })
+			for (const TPair<const TCHAR*, float>& FitView : FitViews())
 			{
+				const TCHAR* View = FitView.Key;
 				FMantleThumbnailSubject Shot = Subject;
-				if (FCString::Strcmp(View, TEXT("back")) == 0)
-				{
-					Shot.View.Yaw += 180.0f;
-				}
+				Shot.View.Yaw += FitView.Value;
 				TArray<FColor> Pixels;
 				const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), *Target.Id, View));
 				const bool bWritten = FMantleCosmeticThumbnail::Capture(Shot, Size, Pixels, Error)

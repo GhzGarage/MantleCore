@@ -1,6 +1,8 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleGarmentOutfit.h"
+#include "MantleAvatarRefitFixer.h"
 #include "MantleOutfitSections.h"
+#include "MantleSkinnedMesh.h"
 
 #include "Math/RandomStream.h"
 #include "ReferenceSkeleton.h"
@@ -26,6 +28,32 @@ namespace MantleGarmentOutfitTestPrivate
 		Mesh.InfluenceJoints = { 0, 1 };
 		Mesh.InfluenceWeights = { 1.0f, 1.0f };
 		return Mesh;
+	}
+
+	/** A Size x Size cm sheet of skin at height Z (1 cm grid, two triangles per square, normals up); Raise lifts points by (x, y). */
+	FMantleSkinnedMeshLOD SkinSheet(const int32 Size, const float Z, TFunction<float(float, float)> Raise = nullptr)
+	{
+		FMantleSkinnedMeshLOD Sheet;
+		for (int32 Y = 0; Y <= Size; ++Y)
+		{
+			for (int32 X = 0; X <= Size; ++X)
+			{
+				Sheet.Positions.Add(FVector3f(X, Y, Z + (Raise ? Raise(X, Y) : 0.0f)));
+				Sheet.Normals.Add(FVector3f(0, 0, 1));
+			}
+		}
+		for (int32 Y = 0; Y < Size; ++Y)
+		{
+			for (int32 X = 0; X < Size; ++X)
+			{
+				const uint32 A = Y * (Size + 1) + X;
+				const uint32 B = A + 1;
+				const uint32 C = A + Size + 1;
+				const uint32 D = C + 1;
+				Sheet.Indices.Append({ A, B, D, A, D, C });
+			}
+		}
+		return Sheet;
 	}
 }
 
@@ -175,6 +203,126 @@ bool FMantleGarmentOutfitTurnTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("the elbow lands on the template's (%s)"), *Turned[2].GetLocation().ToString()), Turned[2].GetLocation().Equals(Wanted[2].GetLocation(), 1e-3));
 	TestTrue(TEXT("the hand follows"), Turned[3].GetLocation().Equals(Wanted[3].GetLocation(), 1e-3));
 	TestTrue(TEXT("the turn is reported"), Lines.Num() == 2 && Lines[0].StartsWith(TEXT("upperarm_l 45.0")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitCarryTest,
+	"Mantle.Editor.GarmentOutfit.CarryWithSkin",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitCarryTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleGarmentOutfitTestPrivate;
+	FString Error;
+	double MeanCm = 0.0;
+
+	// The MetaHuman's skin 2 cm below the original's: fabric 0.5 cm over the original skin ends 0.5 cm over the MetaHuman's,
+	// and fabric beyond the search (20 cm off) moves with its nearest skin too.
+	const FMantleSkinnedMeshLOD Original = SkinSheet(20, 0.0f);
+	const FMantleSkinnedMeshLOD Smaller = SkinSheet(20, -2.0f);
+	TArray<FVector3f> Garment = { FVector3f(10, 10, 0.5f), FVector3f(5.5f, 14.2f, 0.5f), FVector3f(10, 10, 20.0f) };
+	TestTrue(TEXT("carries onto a smaller body"), FMantleGarmentOutfit::CarryWithSkin(Garment, Original, Smaller, MeanCm, Error));
+	TestTrue(TEXT("fabric keeps its clearance"), Garment[0].Equals(FVector3f(10, 10, -1.5f), 1e-3f) && Garment[1].Equals(FVector3f(5.5f, 14.2f, -1.5f), 1e-3f));
+	TestTrue(TEXT("far fabric moves with its nearest skin"), Garment[2].Equals(FVector3f(10, 10, 18.0f), 1e-3f));
+	TestEqual(TEXT("the average move"), MeanCm, 2.0, 1e-3);
+
+	// A bump in the MetaHuman (a fuller calf): fabric over it goes out with it, fabric away from it stays.
+	const FMantleSkinnedMeshLOD Bump = SkinSheet(20, 0.0f, [](const float X, const float Y)
+	{
+		return 2.0f * FMath::Max(0.0f, 1.0f - FVector2f::DistSquared(FVector2f(X, Y), FVector2f(10, 10)) / 36.0f);
+	});
+	TArray<FVector3f> OverBump = { FVector3f(10, 10, 0.3f), FVector3f(2, 2, 0.3f) };
+	TestTrue(TEXT("carries onto a bump"), FMantleGarmentOutfit::CarryWithSkin(OverBump, Original, Bump, MeanCm, Error));
+	TestTrue(TEXT("over the bump it goes out"), OverBump[0].Z > 1.8f);
+	TestTrue(TEXT("away from it it stays"), OverBump[1].Equals(FVector3f(2, 2, 0.3f), 1e-3f));
+
+	// A surface with no triangles is refused.
+	AddExpectedError(TEXT("MANTLE_GARMENTFIT FAIL clearance"), EAutomationExpectedErrorFlags::Contains, 1);
+	TArray<FVector3f> Any = { FVector3f::ZeroVector };
+	TestFalse(TEXT("no skin is refused"), FMantleGarmentOutfit::CarryWithSkin(Any, FMantleSkinnedMeshLOD(), Smaller, MeanCm, Error));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitClearanceTest,
+	"Mantle.Editor.GarmentOutfit.WeldedSurfaceAndClearance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitClearanceTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleGarmentOutfitTestPrivate;
+	// Two triangles sharing an edge, its two corners copied (a UV seam): four points, the copies welded.
+	FMantleGlbMesh Mesh;
+	Mesh.Positions = { FVector3f(0, 0, 0), FVector3f(1, 0, 0), FVector3f(0, 1, 0), FVector3f(1, 0, 0), FVector3f(0, 1, 0), FVector3f(1, 1, 0) };
+	Mesh.Normals.Init(FVector3f(0, 0, 1), 6);
+	FMantleGlbPrimitive& First = Mesh.Primitives.AddDefaulted_GetRef();
+	First.FirstVertex = 0;
+	First.NumVertices = 3;
+	First.Indices = { 0, 1, 2 };
+	FMantleGlbPrimitive& Second = Mesh.Primitives.AddDefaulted_GetRef();
+	Second.FirstVertex = 3;
+	Second.NumVertices = 3;
+	Second.Indices = { 0, 2, 1 };
+	FMantleSkinnedMeshLOD Surface;
+	TArray<int32> PointOf;
+	FMantleGarmentOutfit::WeldedSurface(Mesh, Surface, PointOf);
+	TestEqual(TEXT("seam copies are welded"), Surface.Positions.Num(), 4);
+	TestEqual(TEXT("a copy maps to its point"), PointOf[3], PointOf[1]);
+	TestEqual(TEXT("both triangles are kept"), Surface.Indices.Num(), 6);
+
+	// One point on the skin, one 2 cm out, one 1 cm under: one under, two thirds within 1 cm.
+	const FString Line = FMantleGarmentOutfit::DescribeClearance({ FVector3f(0.5f, 0.2f, 0.0f), FVector3f(0.2f, 0.2f, 2.0f), FVector3f(0.7f, 0.7f, -1.0f) }, SkinSheet(4, 0.0f));
+	TestTrue(TEXT("all three are tracked"), Line.StartsWith(TEXT("tracked 3/3, under 1,")));
+	TestTrue(TEXT("the share within 1 cm"), Line.Contains(TEXT("within 1 cm 67%")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitCoverSkinTest,
+	"Mantle.Editor.GarmentOutfit.CoverSkin",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitCoverSkinTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleGarmentOutfitTestPrivate;
+	// Skin with a 1.2 cm kneecap at (6, 3); a coarse garment square 1 cm over the flat skin, its vertices all well outside
+	// it, but the kneecap comes through the triangle (1, 1), (9, 1), (9, 9) between them.
+	const FMantleSkinnedMeshLOD Knee = SkinSheet(10, 0.0f, [](const float X, const float Y) { return X == 6.0f && Y == 3.0f ? 1.2f : 0.0f; });
+	auto Square = [](const float Z, const bool bFacingSkin)
+	{
+		FMantleSkinnedMeshLOD Garment;
+		Garment.Positions = { FVector3f(1, 1, Z), FVector3f(9, 1, Z), FVector3f(1, 9, Z), FVector3f(9, 9, Z) };
+		Garment.Normals.Init(FVector3f(0, 0, bFacingSkin ? -1.0f : 1.0f), 4);
+		Garment.Indices = { 0, 1, 3, 0, 3, 2 };
+		return Garment;
+	};
+	FMantleSkinnedMeshLOD Garment = Square(1.0f, false);
+	int32 After = 0;
+	const int32 Before = FMantleAvatarRefit::CoverSkin(Garment, Knee, After);
+	TestEqual(TEXT("the kneecap came through"), Before, 1);
+	TestEqual(TEXT("it is covered"), After, 0);
+	for (const int32 Corner : { 0, 1, 3 })
+	{
+		TestTrue(TEXT("the triangle over it went out by the cover"), FMath::IsNearlyEqual(Garment.Positions[Corner].Z, 1.2f + FMantleAvatarRefit::SkinCoverCm, 0.02f));
+	}
+	TestTrue(TEXT("the other corner stays"), FMath::IsNearlyEqual(Garment.Positions[2].Z, 1.0f, 1e-4f));
+
+	// The same square as an inner lining facing the skin: left alone.
+	FMantleSkinnedMeshLOD Lining = Square(1.0f, true);
+	FMantleAvatarRefit::CoverSkin(Lining, Knee, After);
+	TestTrue(TEXT("a lining facing the skin does not move"), Lining.Positions[0].Equals(FVector3f(1, 1, 1), 1e-4f) && Lining.Positions[3].Equals(FVector3f(9, 9, 1), 1e-4f));
+
+	// Skin far through it is beside the garment's edge, not under it (the chest above a neckline): left alone.
+	const FMantleSkinnedMeshLOD Beside = SkinSheet(10, 0.0f, [](const float X, const float Y) { return X == 6.0f && Y == 3.0f ? 2.5f : 0.0f; });
+	FMantleSkinnedMeshLOD Edge = Square(1.0f, false);
+	FMantleAvatarRefit::CoverSkin(Edge, Beside, After);
+	TestTrue(TEXT("skin far through does not move it"), Edge.Positions[1].Equals(FVector3f(9, 1, 1), 1e-4f));
+
+	// Skin well under the garment asks nothing of it.
+	FMantleSkinnedMeshLOD High = Square(1.6f, false);
+	TestEqual(TEXT("nothing through a garment over it"), FMantleAvatarRefit::CoverSkin(High, Knee, After), 0);
+	TestTrue(TEXT("and it does not move"), High.Positions[0].Equals(FVector3f(1, 1, 1.6f), 1e-4f));
 	return true;
 }
 

@@ -727,8 +727,17 @@ namespace MantleParametricOutfitPrivate
 			Description = Garment.CreateMeshDescription(0, MoveTemp(Converted));
 		}
 		if (!Description) { OutError = TEXT("the resized garment has no geometry to push out of the body"); return false; }
+		const auto Clearance = [Description, &Surface]()
+		{
+			TArray<FVector3f> Points;
+			const TVertexAttributesConstRef<FVector3f> Positions = Description->GetVertexPositions();
+			for (const FVertexID Vertex : Description->Vertices().GetElementIDs()) { Points.Add(Positions[Vertex]); }
+			return FMantleGarmentOutfit::DescribeClearance(Points, Surface);
+		};
+		const FString Before = Clearance();
 		FMantleRefitPushOut Pushed;
-		if (!FMantleAvatarRefit::PushOutOfBody(*Description, Surface, Pushed, OutError)) { return false; }
+		if (!FMantleAvatarRefit::PushOutOfBody(*Description, Surface, Pushed, OutError, /*bCoverSkin*/ true)) { return false; }
+		UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_GARMENT_FIT resized onto %s: %s; pushed out: %s"), *Body.GetName(), *Before, *Clearance());
 		OutNote = Pushed.ToString();
 		if (Pushed.Moved > 0)
 		{
@@ -791,7 +800,10 @@ bool FMantleParametricOutfit::FindSourceBody(const USkeletalMesh* AuthoringBody,
 		OutError = TEXT("the authoring body is not one Mantle converted from a MetaHuman Creator character");
 		return false;
 	}
-	if (Built->Left(Cut).Contains(TEXT("/Converted/")))
+	const FString* ConvertedFrom = AuthoringBody->GetPackage()->GetMetaData().FindValue(AuthoringBody, FMantleAvatarConverter::ConvertedFromKey);
+	const FAssetData Source = ConvertedFrom ? FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().GetAssetByObjectPath(FSoftObjectPath(*ConvertedFrom))
+		: FAssetData();
+	if (IsThirdPartyConversion(Source.IsValid() ? Source.AssetClassPath : FTopLevelAssetPath()))
 	{
 		// A third-party character's body conformed to a MetaHuman: its clothing goes through Make Outfit from garment, which
 		// poses and fits the garment to that body, not straight onto it.
@@ -923,6 +935,11 @@ UChaosOutfitAsset* FMantleParametricOutfit::WrapOnAuthoringBody(const FMantleCos
 	return WrapGarment(Draft.Source.Get(), Draft.KeepSlots, SourceBody, KeepAlive, OutWhy);
 }
 
+bool FMantleParametricOutfit::IsThirdPartyConversion(const FTopLevelAssetPath& SourceClass)
+{
+	return !SourceClass.IsNull() && SourceClass != UMetaHumanCharacter::StaticClass()->GetClassPathName();
+}
+
 bool FMantleParametricOutfit::IsWholeBody(TConstArrayView<FVector3f> Points)
 {
 	if (Points.IsEmpty()) { return false; }
@@ -1003,7 +1020,7 @@ UChaosOutfitAsset* FMantleParametricOutfit::MakeOutfitBeside(const FMantleCosmet
 	USkeletalMesh* Body = FindBodyBeside(Garment);
 	if (!Body) { OutWhy = TEXT("no whole bare character body was found next to it"); return nullptr; }
 	if (Draft.KeepSlots.IsSet()) { OutWhy = TEXT("Make Outfit from garment takes the whole mesh, not chosen sections"); return nullptr; }
-	// Made once: an Outfit saved earlier from this garment is reused.
+	// Made once: an Outfit saved earlier from this garment by this version of Make is reused.
 	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 	FARFilter Filter;
 	Filter.PackagePaths.Add(FName(*(FPackageName::GetLongPackagePath(Body->GetOutermost()->GetName()) / TEXT("Converted"))));
@@ -1015,7 +1032,8 @@ UChaosOutfitAsset* FMantleParametricOutfit::MakeOutfitBeside(const FMantleCosmet
 	{
 		UChaosOutfitAsset* Outfit = Cast<UChaosOutfitAsset>(Data.GetAsset());
 		const FString* MadeFrom = Outfit ? Outfit->GetPackage()->GetMetaData().FindValue(Outfit, FMantleGarmentOutfit::MadeFromGarmentKey) : nullptr;
-		if (MadeFrom && *MadeFrom == Garment->GetPathName())
+		const FString* Version = Outfit ? Outfit->GetPackage()->GetMetaData().FindValue(Outfit, FMantleGarmentOutfit::MadeVersionKey) : nullptr;
+		if (MadeFrom && *MadeFrom == Garment->GetPathName() && Version && *Version == FMantleGarmentOutfit::MadeVersion)
 		{
 			KeepAlive.Emplace(Outfit);
 			return Outfit;
