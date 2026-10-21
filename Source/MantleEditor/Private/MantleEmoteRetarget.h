@@ -91,6 +91,14 @@ struct FMantleEmoteRetarget
 	static void ReleaseRestHandsCopy(UObject* Copy);
 
 	/**
+	 * The same match on Retargeter itself (the game's RTG_UEFN_to_Mantle_* retargeters, Mantle.Dev.MatchRetargetHands),
+	 * fingers only: hand_l and hand_r keep their rest pose, so a weapon in a hand socket keeps its place and turn (turning
+	 * the hands tilted it 4.8 degrees). Its target retarget pose and finger chains are changed in memory and its package
+	 * dirtied; the caller saves it.
+	 */
+	static bool MatchRestHandsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError);
+
+	/**
 	 * A mesh on Skeleton to retarget from (its proportions): the skeleton's preview mesh, else a skeletal mesh in the
 	 * project on that skeleton, a "Body" first, then by package path. Null when there is none.
 	 */
