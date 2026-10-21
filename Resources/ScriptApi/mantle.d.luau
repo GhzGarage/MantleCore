@@ -368,15 +368,15 @@ end
 --- A named store of whole-number values for this place, read back sorted: a leaderboard. Get one with DataStore:GetOrderedDataStore (server only). Every method returns a Signal that fires once with a result table {ok, error?, ...}: call :Wait() on it straight away, or :Once(handler).
 declare extern type OrderedDataStore with
 	--- Read key's value: the result's value, nil when the store has no such key. (server only)
-	function GetAsync(self, key: string): Signal
+	function GetAsync(self, key: string): Signal<{ok: boolean, error: string?, value: number?}>
 	--- One page of the store in value order, highest first (lowest first when ascending): the result's entries is a list of {key, value}, up to pageSize (default 50, at most 100), ties in key order. Pass the result's nextCursor back, with the same ascending, for the next page; it is nil on the last one. (server only)
-	function GetSortedAsync(self, ascending: boolean, pageSize: number?, cursor: string?): Signal
+	function GetSortedAsync(self, ascending: boolean, pageSize: number?, cursor: string?): Signal<{ok: boolean, error: string?, entries: {{key: string, value: number}}?, nextCursor: string?}>
 	--- Add delta (default 1; may be negative) to key's value, a new key starting from 0. One step on the backend, so no server's increment is lost to another's. The result's value is the new total. (server only)
-	function IncrementAsync(self, key: string, delta: number?): Signal
+	function IncrementAsync(self, key: string, delta: number?): Signal<{ok: boolean, error: string?, value: number?}>
 	--- Delete key from the store. Removing a key the store doesn't have succeeds. (server only)
-	function RemoveAsync(self, key: string): Signal
+	function RemoveAsync(self, key: string): Signal<{ok: boolean, error: string?}>
 	--- Store a whole number (up to 2^53 - 1 either way) under key. The result's value is what was stored. (server only)
-	function SetAsync(self, key: string, value: number): Signal
+	function SetAsync(self, key: string, value: number): Signal<{ok: boolean, error: string?, value: number?}>
 end
 
 --- One sound Sounds:Play started. A server script's handle reaches every player who hears the sound.
@@ -444,7 +444,7 @@ end
 --- Spawn the place's own meshes at runtime (server only). Change any mesh's look through its Entity.
 declare extern type AssetsService with
 	--- Spawn one of the place's StaticMesh assets (any mesh its asset list names, placed or not) that every player sees, and return it as an Entity. props sets how it starts: Rotation, Scale (a Vector3, or one number for all three), Material (one of the place's Material assets, for every slot), Color, Transparency, Collision ("Blocking" by default, "Overlap" or "None"), CastShadow (true by default) and Anchored (spawned meshes stay where scripts put them; false is refused). A mesh uploaded with the place may take a moment to appear on a player's screen while it downloads. Spawned meshes count towards the same limit as Entity:Clone; Destroy one to make room. (server only)
-	function Spawn(self, assetId: string, position: Vector3, props: {Rotation: Vector3?, Scale: Vector3?, Material: string?, Color: string?, Transparency: number?, Collision: string?, CastShadow: boolean?, Anchored: boolean?}?): Entity
+	function Spawn(self, assetId: string, position: Vector3, props: {Rotation: Vector3?, Scale: Vector3 | number?, Material: string?, Color: string?, Transparency: number?, Collision: string?, CastShadow: boolean?, Anchored: boolean?}?): Entity
 end
 declare Assets: AssetsService
 

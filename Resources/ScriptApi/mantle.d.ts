@@ -369,15 +369,15 @@ interface NPC {
 /** A named store of whole-number values for this place, read back sorted: a leaderboard. Get one with DataStore:GetOrderedDataStore (server only). Every method returns a Signal that fires once with a result table {ok, error?, ...}: call :Wait() on it straight away, or :Once(handler). */
 interface OrderedDataStore {
 	/** Read key's value: the result's value, nil when the store has no such key. (server only) */
-	getAsync(key: string): Signal;
+	getAsync(key: string): Signal<[{ ok: boolean; error?: string | undefined; value?: number | undefined }]>;
 	/** One page of the store in value order, highest first (lowest first when ascending): the result's entries is a list of {key, value}, up to pageSize (default 50, at most 100), ties in key order. Pass the result's nextCursor back, with the same ascending, for the next page; it is nil on the last one. (server only) */
-	getSortedAsync(ascending: boolean, pageSize?: number | undefined, cursor?: string | undefined): Signal;
+	getSortedAsync(ascending: boolean, pageSize?: number | undefined, cursor?: string | undefined): Signal<[{ ok: boolean; error?: string | undefined; entries?: ({ key: string; value: number })[] | undefined; nextCursor?: string | undefined }]>;
 	/** Add delta (default 1; may be negative) to key's value, a new key starting from 0. One step on the backend, so no server's increment is lost to another's. The result's value is the new total. (server only) */
-	incrementAsync(key: string, delta?: number | undefined): Signal;
+	incrementAsync(key: string, delta?: number | undefined): Signal<[{ ok: boolean; error?: string | undefined; value?: number | undefined }]>;
 	/** Delete key from the store. Removing a key the store doesn't have succeeds. (server only) */
-	removeAsync(key: string): Signal;
+	removeAsync(key: string): Signal<[{ ok: boolean; error?: string | undefined }]>;
 	/** Store a whole number (up to 2^53 - 1 either way) under key. The result's value is what was stored. (server only) */
-	setAsync(key: string, value: number): Signal;
+	setAsync(key: string, value: number): Signal<[{ ok: boolean; error?: string | undefined; value?: number | undefined }]>;
 }
 
 /** One sound Sounds:Play started. A server script's handle reaches every player who hears the sound. */
@@ -445,7 +445,7 @@ interface UiNode {
 /** Spawn the place's own meshes at runtime (server only). Change any mesh's look through its Entity. */
 interface AssetsService {
 	/** Spawn one of the place's StaticMesh assets (any mesh its asset list names, placed or not) that every player sees, and return it as an Entity. props sets how it starts: Rotation, Scale (a Vector3, or one number for all three), Material (one of the place's Material assets, for every slot), Color, Transparency, Collision ("Blocking" by default, "Overlap" or "None"), CastShadow (true by default) and Anchored (spawned meshes stay where scripts put them; false is refused). A mesh uploaded with the place may take a moment to appear on a player's screen while it downloads. Spawned meshes count towards the same limit as Entity:Clone; Destroy one to make room. (server only) */
-	spawn(assetId: string, position: Vector3, props?: { rotation?: Vector3 | undefined; scale?: Vector3 | undefined; material?: string | undefined; color?: string | undefined; transparency?: number | undefined; collision?: string | undefined; castShadow?: boolean | undefined; anchored?: boolean | undefined } | undefined): Entity;
+	spawn(assetId: string, position: Vector3, props?: { rotation?: Vector3 | undefined; scale?: Vector3 | number | undefined; material?: string | undefined; color?: string | undefined; transparency?: number | undefined; collision?: string | undefined; castShadow?: boolean | undefined; anchored?: boolean | undefined } | undefined): Entity;
 }
 const Assets: AssetsService;
 
