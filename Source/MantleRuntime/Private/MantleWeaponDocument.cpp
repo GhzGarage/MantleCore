@@ -16,9 +16,10 @@ namespace MantleWeaponDocumentPrivate
 	};
 	const TCHAR* const GWeaponDocHoldNames[] = {
 		TEXT("pistol"), TEXT("revolver"), TEXT("rifle"), TEXT("smg"), TEXT("dmr"), TEXT("pump_shotgun"), TEXT("bolt_sniper"), TEXT("lmg"),
-		TEXT("melee_1h"), TEXT("melee_2h"), TEXT("spear"), TEXT("staff"), TEXT("bow"), TEXT("unarmed"), TEXT("shield"), TEXT("throwable")
+		TEXT("melee_1h"), TEXT("melee_2h"), TEXT("spear"), TEXT("staff"), TEXT("bow"), TEXT("unarmed"), TEXT("shield"), TEXT("throwable"),
+		TEXT("consumable")
 	};
-	const TCHAR* const GWeaponDocDeliveryNames[] = { TEXT("hitscan"), TEXT("projectile"), TEXT("sweep"), TEXT("beam") };
+	const TCHAR* const GWeaponDocDeliveryNames[] = { TEXT("hitscan"), TEXT("projectile"), TEXT("sweep"), TEXT("beam"), TEXT("use") };
 	const TCHAR* const GWeaponDocResourceNames[] = { TEXT("magazine"), TEXT("quiver"), TEXT("charges"), TEXT("none") };
 	// #904: the firearms' three, then the elements (EMantleWeaponDocEffects).
 	const TCHAR* const GWeaponDocEffectsNames[] = {
@@ -35,7 +36,7 @@ namespace MantleWeaponDocumentPrivate
 	const TCHAR* const GWeaponDocActionNames[] = {
 		TEXT("equip"), TEXT("holster"), TEXT("idle"), TEXT("fire"), TEXT("fire_last"), TEXT("reload_tactical"), TEXT("reload_empty"),
 		TEXT("reload_start"), TEXT("reload_start_empty"), TEXT("reload_loop"), TEXT("reload_end"), TEXT("reload_partial"), TEXT("attack"),
-		TEXT("heavy"), TEXT("block"), TEXT("throw"), TEXT("cast"), TEXT("nock"), TEXT("draw"), TEXT("release")
+		TEXT("heavy"), TEXT("block"), TEXT("throw"), TEXT("cast"), TEXT("nock"), TEXT("draw"), TEXT("release"), TEXT("use")
 	};
 	const TCHAR* const GWeaponDocSocketNames[] = {
 		TEXT("sight"), TEXT("muzzle"), TEXT("gripR"), TEXT("gripL"), TEXT("magazine"), TEXT("shellEject"), TEXT("edgeBase"), TEXT("edgeTip"),
@@ -44,7 +45,12 @@ namespace MantleWeaponDocumentPrivate
 	// #840: version 2's fields, which a version-1 document has none of.
 	const TCHAR* const GWeaponDocV2Fields[] = {
 		TEXT("hold"), TEXT("delivery"), TEXT("charge"), TEXT("block"), TEXT("resource"), TEXT("charges"), TEXT("projectile"), TEXT("sweep"),
-		TEXT("beam"), TEXT("effectsColor")
+		TEXT("beam"), TEXT("effectsColor"), TEXT("consumable")
+	};
+	// #1025: consumable.style, and what a consumable (delivery use) refuses: a weapon's numbers, and attachments (its mesh shows alone).
+	const TCHAR* const GWeaponDocUseStyleNames[] = { TEXT("eatDrink"), TEXT("use") };
+	const TCHAR* const GWeaponDocUseRefused[] = {
+		TEXT("fire"), TEXT("attachments"), TEXT("sounds"), TEXT("firstPerson"), TEXT("spread"), TEXT("sway"), TEXT("recoil")
 	};
 	const TCHAR* const GWeaponDocInterpNames[] = { TEXT("linear"), TEXT("constant"), TEXT("cubic") };
 
@@ -68,6 +74,7 @@ namespace MantleWeaponDocumentPrivate
 	static_assert(WeaponDocCount(GWeaponDocActionNames) == static_cast<int32>(EMantleWeaponDocAction::Count), "one name per action");
 	static_assert(WeaponDocCount(GWeaponDocSocketNames) == static_cast<int32>(EMantleWeaponDocSocket::Count), "one name per socket");
 	static_assert(WeaponDocCount(GWeaponDocInterpNames) == static_cast<int32>(EMantleWeaponDocInterp::Count), "one name per interpolation");
+	static_assert(WeaponDocCount(GWeaponDocUseStyleNames) == static_cast<int32>(EMantleWeaponDocUseStyle::Count), "one name per use style");
 
 	/** Names[Index], or "" past the table. */
 	template <int32 N>
@@ -382,6 +389,8 @@ namespace MantleWeaponDocumentPrivate
 		// throwable: one hand, thrown overhand; its projectile is the weapon itself (a press throws, no charge).
 		Table.Add(WeaponDocHold(false, { EAction::Equip, EAction::Holster, EAction::Idle, EAction::Throw }, { EDelivery::Projectile },
 			ECharge::None, { EResource::None }, EBlock::None, { ESocket::GripR }, { ESocket::Tip }));
+		// consumable (#1025): used on its holder, one hand; where the palm holds it is optional (grip).
+		Table.Add(WeaponDocHold(false, { EAction::Use }, { EDelivery::Use }, ECharge::None, { EResource::None }, EBlock::None, {}, { ESocket::Grip }));
 		check(Table.Num() == static_cast<int32>(EMantleWeaponDocHold::Count));
 		return Table;
 	}
@@ -1332,6 +1341,22 @@ namespace MantleWeaponDocumentPrivate
 			OptNumber(Obj, Path, TEXT("range"), 100.0, 100000.0, Out.Range);
 		}
 
+		void ReadConsumable(const TSharedPtr<FJsonObject>& Obj, const FString& Path, FMantleWeaponDocConsumable& Out)
+		{
+			Keys(Obj, Path, { TEXT("style"), TEXT("heal"), TEXT("healSeconds"), TEXT("uses"), TEXT("useSeconds"), TEXT("cooldownSeconds"), TEXT("moveWhileUsing") },
+				{ TEXT("style") });
+			if (const TSharedPtr<FJsonValue> Style = Field(Obj, TEXT("style")))
+			{
+				Choice(Style, At(Path, TEXT("style")), GWeaponDocUseStyleNames, Out.Style);
+			}
+			OptNumber(Obj, Path, TEXT("heal"), 0.0, 1000.0, Out.Heal);
+			OptNumber(Obj, Path, TEXT("healSeconds"), 0.0, 60.0, Out.HealSeconds);
+			OptInteger(Obj, Path, TEXT("uses"), 1, 100, Out.Uses);
+			OptNumber(Obj, Path, TEXT("useSeconds"), 0.5, 10.0, Out.UseSeconds);
+			OptNumber(Obj, Path, TEXT("cooldownSeconds"), 0.0, 600.0, Out.CooldownSeconds);
+			OptBoolean(Obj, Path, TEXT("moveWhileUsing"), Out.bMoveWhileUsing);
+		}
+
 		void ReadBlock(const TSharedPtr<FJsonObject>& Obj, const FString& Path, FMantleWeaponDocBlock& Out)
 		{
 			Keys(Obj, Path, { TEXT("enabled"), TEXT("breakOnHeavy") });
@@ -1378,6 +1403,17 @@ namespace MantleWeaponDocumentPrivate
 					{
 						Add(TEXT("archetype"), TEXT("mantle"), FString::Printf(TEXT("is %s, but hold is %s: archetype is the hold's alias; drop it"),
 							*ArchetypeValue->AsString(), FMantleWeaponDocument::HoldName(Hold)));
+					}
+				}
+			}
+			// #1025: a consumable is used, never fired: no weapon numbers, and its mesh alone.
+			if (D.GetDelivery() == EMantleWeaponDocDelivery::Use)
+			{
+				for (const TCHAR* Key : GWeaponDocUseRefused)
+				{
+					if (Field(Root, Key).IsValid())
+					{
+						Add(Key, TEXT("mantle"), FString::Printf(TEXT("is a weapon's, but a %s is used, not fired: drop it"), FMantleWeaponDocument::HoldName(Hold)));
 					}
 				}
 			}
@@ -1449,8 +1485,8 @@ namespace MantleWeaponDocumentPrivate
 				{ TEXT("schemaVersion"), TEXT("name"), TEXT("archetype"), TEXT("hold"), TEXT("delivery"), TEXT("twoHanded"), TEXT("effects"),
 				  TEXT("color"), TEXT("effectsColor"), TEXT("mesh"), TEXT("materials"), TEXT("sockets"), TEXT("parts"), TEXT("attachments"), TEXT("fire"),
 				  TEXT("charge"), TEXT("magazine"), TEXT("reload"), TEXT("resource"), TEXT("charges"), TEXT("projectile"), TEXT("sweep"), TEXT("beam"),
-				  TEXT("block"), TEXT("sounds"), TEXT("firstPerson"), TEXT("spread"), TEXT("sway"), TEXT("recoil") },
-				{ TEXT("schemaVersion"), TEXT("name"), TEXT("fire") });
+				  TEXT("consumable"), TEXT("block"), TEXT("sounds"), TEXT("firstPerson"), TEXT("spread"), TEXT("sway"), TEXT("recoil") },
+				{ TEXT("schemaVersion"), TEXT("name") });
 			// #840: 1 is the firearm document (archetype), 2 names the hold and the delivery; each requires its own fields.
 			int32 Version = 0;
 			if (const TSharedPtr<FJsonValue> VersionValue = Field(Root, TEXT("schemaVersion")))
@@ -1509,6 +1545,11 @@ namespace MantleWeaponDocumentPrivate
 					Out.Delivery.Set(Delivery);
 				}
 			}
+			// #1025: fire on every delivery but use (a version-1 document's hitscan included); use refuses it (CheckKeys).
+			if (!(Out.Delivery.bSet && Out.Delivery.Value == EMantleWeaponDocDelivery::Use))
+			{
+				Required(Root, Path, { TEXT("fire") });
+			}
 			OptBoolean(Root, Path, TEXT("twoHanded"), Out.bTwoHanded);
 			OptChoice(Root, Path, TEXT("effects"), GWeaponDocEffectsNames, Out.Effects);
 			OptColor(Root, TEXT("color"), Out.Color);
@@ -1554,6 +1595,7 @@ namespace MantleWeaponDocumentPrivate
 			OptBlock(Root, Path, TEXT("projectile"), Out.Projectile, &FWeaponDocReader::ReadProjectile);
 			OptBlock(Root, Path, TEXT("sweep"), Out.Sweep, &FWeaponDocReader::ReadSweep);
 			OptBlock(Root, Path, TEXT("beam"), Out.Beam, &FWeaponDocReader::ReadBeam);
+			OptBlock(Root, Path, TEXT("consumable"), Out.Consumable, &FWeaponDocReader::ReadConsumable);
 			OptBlock(Root, Path, TEXT("block"), Out.Block, &FWeaponDocReader::ReadBlock);
 			OptBlock(Root, Path, TEXT("sounds"), Out.Sounds, &FWeaponDocReader::ReadSounds);
 			OptBlock(Root, Path, TEXT("firstPerson"), Out.FirstPerson, &FWeaponDocReader::ReadFirstPerson);
@@ -2027,6 +2069,19 @@ namespace MantleWeaponDocumentPrivate
 			return Node;
 		}
 
+		static FWeaponDocNodePtr Consumable(const FMantleWeaponDocConsumable& In)
+		{
+			FWeaponDocNodePtr Node = WeaponDocObjectNode();
+			WeaponDocPut(Node, TEXT("style"), WeaponDocStringNode(WeaponDocNameAt(GWeaponDocUseStyleNames, static_cast<int32>(In.Style))));
+			Number(Node, TEXT("heal"), In.Heal);
+			Number(Node, TEXT("healSeconds"), In.HealSeconds);
+			Integer(Node, TEXT("uses"), In.Uses);
+			Number(Node, TEXT("useSeconds"), In.UseSeconds);
+			Number(Node, TEXT("cooldownSeconds"), In.CooldownSeconds);
+			Boolean(Node, TEXT("moveWhileUsing"), In.bMoveWhileUsing);
+			return Node;
+		}
+
 		static FWeaponDocNodePtr BlockSettings(const FMantleWeaponDocBlock& In)
 		{
 			FWeaponDocNodePtr Node = WeaponDocObjectNode();
@@ -2269,7 +2324,11 @@ namespace MantleWeaponDocumentPrivate
 				}
 				WeaponDocPut(Node, TEXT("attachments"), Attachments);
 			}
-			WeaponDocPut(Node, TEXT("fire"), Fire(D.Fire));
+			// #1025: a consumable has no fire.
+			if (D.GetDelivery() != EMantleWeaponDocDelivery::Use)
+			{
+				WeaponDocPut(Node, TEXT("fire"), Fire(D.Fire));
+			}
 			Block(Node, TEXT("charge"), D.Charge, &FWeaponDocWriter::Charge);
 			// The magazine and the reload exactly when the resource holds rounds (#840).
 			if (D.UsesRounds())
@@ -2285,6 +2344,7 @@ namespace MantleWeaponDocumentPrivate
 			Block(Node, TEXT("projectile"), D.Projectile, &FWeaponDocWriter::Projectile);
 			Block(Node, TEXT("sweep"), D.Sweep, &FWeaponDocWriter::Sweep);
 			Block(Node, TEXT("beam"), D.Beam, &FWeaponDocWriter::Beam);
+			Block(Node, TEXT("consumable"), D.Consumable, &FWeaponDocWriter::Consumable);
 			Block(Node, TEXT("block"), D.Block, &FWeaponDocWriter::BlockSettings);
 			Block(Node, TEXT("sounds"), D.Sounds, &FWeaponDocWriter::Sounds);
 			Block(Node, TEXT("firstPerson"), D.FirstPerson, &FWeaponDocWriter::FirstPerson);
@@ -2685,6 +2745,7 @@ void FMantleWeaponDocument::CheckRules(const FMantleWeaponDesc& D, TArray<FMantl
 		{ EMantleWeaponDocDelivery::Projectile, D.Projectile.bSet, TEXT("projectile") },
 		{ EMantleWeaponDocDelivery::Sweep, D.Sweep.bSet, TEXT("sweep") },
 		{ EMantleWeaponDocDelivery::Beam, D.Beam.bSet, TEXT("beam") },
+		{ EMantleWeaponDocDelivery::Use, D.Consumable.bSet, TEXT("consumable") },
 	};
 	for (const FWeaponDocDeliveryBlock& Block : Blocks)
 	{
@@ -2706,7 +2767,7 @@ void FMantleWeaponDocument::CheckRules(const FMantleWeaponDesc& D, TArray<FMantl
 		const bool bBesideBeam = bBoth && (Block.Delivery == EMantleWeaponDocDelivery::Beam || Block.Delivery == EMantleWeaponDocDelivery::Projectile);
 		if (!bBesideThrow && !bAsThrow && !bBesideBeam)
 		{
-			R.Add(Block.Key, TEXT("mantle"), FString::Printf(TEXT("is the %s delivery's, but the weapon's delivery is %s: drop it"), Block.Key,
+			R.Add(Block.Key, TEXT("mantle"), FString::Printf(TEXT("is the %s delivery's, but the weapon's delivery is %s: drop it"), DeliveryName(Block.Delivery),
 				DeliveryName(Delivery)));
 		}
 	}
@@ -2962,6 +3023,16 @@ const TCHAR* FMantleWeaponDocument::SocketName(const EMantleWeaponDocSocket Sock
 const TCHAR* FMantleWeaponDocument::ReloadStyleName(const EMantleWeaponDocReloadStyle Style)
 {
 	return MantleWeaponDocumentPrivate::WeaponDocNameAt(MantleWeaponDocumentPrivate::GWeaponDocReloadStyleNames, static_cast<int32>(Style));
+}
+
+const TCHAR* FMantleWeaponDocument::UseStyleName(const EMantleWeaponDocUseStyle Style)
+{
+	return MantleWeaponDocumentPrivate::WeaponDocNameAt(MantleWeaponDocumentPrivate::GWeaponDocUseStyleNames, static_cast<int32>(Style));
+}
+
+TConstArrayView<const TCHAR*> FMantleWeaponDocument::GetUseRefusedFields()
+{
+	return MantleWeaponDocumentPrivate::GWeaponDocUseRefused;
 }
 
 const TCHAR* FMantleWeaponDocument::EffectsName(const EMantleWeaponDocEffects Effects)
