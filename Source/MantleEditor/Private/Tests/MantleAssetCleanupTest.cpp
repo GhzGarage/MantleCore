@@ -1,8 +1,8 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAssetCleanup.h"
+#include "MantleVehicleSource.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
-#include "Engine/DataAsset.h"
 #include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
@@ -30,10 +30,10 @@ namespace MantleAssetCleanupTestPrivate
 			IFileManager::Get().DeleteDirectory(*FPaths::GetPath(File), false, true);
 		}
 
-		UPrimaryDataAsset* Save(const FName Name)
+		UMantleVehicleSource* Save(const FName Name)
 		{
 			UPackage* Package = CreatePackage(*PackageName);
-			UPrimaryDataAsset* Asset = NewObject<UPrimaryDataAsset>(Package, Name, RF_Public | RF_Standalone);
+			UMantleVehicleSource* Asset = NewObject<UMantleVehicleSource>(Package, Name, RF_Public | RF_Standalone);
 			Package->MarkPackageDirty();
 			FAssetRegistryModule::AssetCreated(Asset);
 			FSavePackageArgs Args;
@@ -54,7 +54,7 @@ bool FMantleAssetCleanupTest::RunTest(const FString& Parameters)
 	using namespace MantleAssetCleanupTestPrivate;
 
 	FSavedFixture Fixture;
-	UPrimaryDataAsset* Saved = Fixture.Save(TEXT("CleanupAsset"));
+	UMantleVehicleSource* Saved = Fixture.Save(TEXT("CleanupAsset"));
 	if (!TestNotNull(TEXT("the fixture saves"), Saved))
 	{
 		return false;
@@ -64,10 +64,10 @@ bool FMantleAssetCleanupTest::RunTest(const FString& Parameters)
 	FText Error;
 	TestTrue(TEXT("the saved package unloads"), FMantleAssetCleanup::UnloadPackagesClean({ Package }, Error));
 	TestTrue(TEXT("the file is kept"), IFileManager::Get().FileExists(*Fixture.File));
-	TestNull(TEXT("nothing of it is left in memory"), FindObject<UPrimaryDataAsset>(nullptr, *(Fixture.PackageName + TEXT(".CleanupAsset"))));
+	TestNull(TEXT("nothing of it is left in memory"), FindObject<UMantleVehicleSource>(nullptr, *(Fixture.PackageName + TEXT(".CleanupAsset"))));
 
 	UPackage* Reloaded = LoadPackage(nullptr, *Fixture.PackageName, LOAD_None);
-	UPrimaryDataAsset* ReloadedAsset = Reloaded ? FindObject<UPrimaryDataAsset>(Reloaded, TEXT("CleanupAsset")) : nullptr;
+	UMantleVehicleSource* ReloadedAsset = Reloaded ? FindObject<UMantleVehicleSource>(Reloaded, TEXT("CleanupAsset")) : nullptr;
 	if (TestNotNull(TEXT("a reload reads the file"), ReloadedAsset))
 	{
 		TestTrue(TEXT("as a new object"), ReloadedAsset != Saved);
