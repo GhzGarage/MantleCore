@@ -752,7 +752,7 @@ namespace MantleEmoteTestPrivate
 		{
 			FTransform Local = Skeleton.GetRawRefBonePose()[Bone];
 			const FMantleAnimClipTrackData* Track = Clip.Tracks.FindByPredicate([&](const FMantleAnimClipTrackData& Each) { return Each.Bone == Skeleton.GetBoneName(Bone); });
-			if (Track && Bone > 0)
+			if (Track && Bone > 0 && Track->Rotations.Num() > 0)
 			{
 				Local.SetRotation(FQuat(Track->Rotations[FMath::Min(Frame, Track->Rotations.Num() - 1)]));
 				if (Track->Translations.Num() > 0)

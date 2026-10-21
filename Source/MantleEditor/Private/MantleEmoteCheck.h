@@ -24,8 +24,8 @@ struct FMantleEmoteMotion
 /**
  * How the converted clip's hands compare with the source's over a clip (FMantleEmoteCheck::CompareHands): the bend of
  * each finger at its first two joints (the angle between one segment and the next, so it does not depend on either
- * skeleton's bone axes), and each wrist's place relative to the head, in the head's frame, the source's scaled to the
- * converted body's head height.
+ * skeleton's bone axes), and each wrist's place relative to the chest (the clavicles' parent), in the chest's frame, and
+ * its distance from the head, the source's scaled to the converted body's head height.
  */
 struct FMantleHandMatch
 {
@@ -40,7 +40,10 @@ struct FMantleHandMatch
 	double BendWorstDegrees = 0.0;
 	FName BendWorstJoint;
 
-	/** Mean distance between the converted and the source wrist-to-head vectors (cm). */
+	/** Per frame: mean of converted minus source bend over the joints (degrees). */
+	TArray<double> FrameBendBiasDegrees;
+
+	/** Mean distance between the converted and the source wrist-from-chest vectors, in the chest's frame (cm). */
 	double WristErrorCm = 0.0;
 
 	/** Mean of converted minus source wrist-to-head distance (cm): negative is hands closer to the head than the source's. */

@@ -71,8 +71,10 @@ struct FMantleEmoteRetarget
 	 * The target retarget pose's local rotation offsets (IK Rig's: retarget local = reference local * offset) that give
 	 * each of Bones the source retarget pose's component-space rotation, parent-first, so the two rest hands have the same
 	 * shape. Every Epic skeleton Mantle retargets from (UE4 and UE5 Mannequin, MetaHuman) shares the UEFN mannequin's bone
-	 * axes. Offsets are each skeleton's current ones by bone name (absent: identity); a bone missing on either skeleton is
-	 * left alone. OutLargestDegrees: the largest change from the target's current offset. Pure.
+	 * axes; a bone with one matched child is turned the little more that points it at that child as the source's points,
+	 * since the skeletons place a finger's next joint a little differently. Offsets are each skeleton's current ones by bone
+	 * name (absent: identity); a bone missing on either skeleton is left alone. OutLargestDegrees: the largest change from
+	 * the target's current offset. Pure.
 	 */
 	static TMap<FName, FQuat> MatchRestRotations(const FReferenceSkeleton& Source, const TMap<FName, FQuat>& SourceOffsets,
 		const FReferenceSkeleton& Target, const TMap<FName, FQuat>& TargetOffsets, TConstArrayView<FName> Bones, double* OutLargestDegrees = nullptr);
