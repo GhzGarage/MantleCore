@@ -5048,6 +5048,42 @@ void FMantleCosmeticExport::AddDetectedClothingColors(FMantleCosmeticPackage& Pa
 
 FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract, FMantleSkinnedMesh* OutHairPreview, FMantleSkinnedMesh* OutHairSourceFace)
 {
+	if (Draft.Class != EMantleCosmeticClass::Garment || !Draft.OutfitTargets.IsEmpty() || !FMantleParametricOutfit::IsGarmentSource(Draft.Source.Get()))
+	{
+		return BuildPrepared(Draft, Contract, OutHairPreview, OutHairSourceFace);
+	}
+	// A skeletal-mesh or cloth-asset garment: wrapped as an Outfit it gets the standard fit sizes like any Outfit.
+	FMantleCosmeticDraft Wrapped;
+	TArray<TStrongObjectPtr<UObject>> KeepAlive;
+	TSharedPtr<void> Lease;
+	FString Why, Route;
+	if (FMantleParametricOutfit::PrepareWrapped(Draft, Contract, Wrapped, KeepAlive, Lease, Why, &Route))
+	{
+		FMantleCosmeticPackage Result = BuildPrepared(Wrapped, Contract, OutHairPreview, OutHairSourceFace);
+		if (!Result.HasErrors()) { Result.Notes.Insert(FString::Printf(TEXT("Made as a MetaHuman Outfit (%s), so it uploads in Epic's standard body sizes."), *Route), 0); }
+		return Result;
+	}
+	// One size, as the garment is: a cloth asset as its render geometry.
+	FMantleCosmeticDraft Single = Draft;
+	FString MeshError;
+	USkeletalMesh* Mesh = FMantleParametricOutfit::GarmentMesh(Draft.Source.Get(), KeepAlive, MeshError);
+	if (!Mesh)
+	{
+		FMantleCosmeticPackage Result;
+		Result.Class = Draft.Class;
+		Result.Slot = Draft.Slot;
+		Result.Name = Draft.Name.TrimStartAndEnd();
+		Result.Issues.Add(FMantleCosmeticChecks::Error(MeshError));
+		return Result;
+	}
+	Single.Source = Mesh;
+	FMantleCosmeticPackage Result = BuildPrepared(Single, Contract, OutHairPreview, OutHairSourceFace);
+	Result.Notes.Insert(FString::Printf(TEXT("Uploads in one size: it could not be made in sizes (%s)."), *Why), 0);
+	return Result;
+}
+
+FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract, FMantleSkinnedMesh* OutHairPreview, FMantleSkinnedMesh* OutHairSourceFace)
+{
 	using namespace MantleCosmeticExportPrivate;
 	if (OutHairPreview) *OutHairPreview = FMantleSkinnedMesh();
 	if (OutHairSourceFace) *OutHairSourceFace = FMantleSkinnedMesh();
@@ -5107,7 +5143,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 			{
 				Result.Issues.Add(FMantleCosmeticChecks::Error(Target.Id + TEXT(": ") + Error)); return Result;
 			}
-			FMantleCosmeticPackage Part = Build(Prepared, Contract);
+			FMantleCosmeticPackage Part = BuildPrepared(Prepared, Contract);
 			if (Part.HasErrors()) { Result.Issues.Append(Part.Issues); return Result; }
 			if (!Result.GarmentVariants.IsEmpty() && Part.Materials.Num() == Result.Materials.Num())
 			{
@@ -5191,7 +5227,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 		FString Error, RigidNote;
 		if (FMantleParametricOutfit::PrepareRigid(Draft, Contract, Prepared, KeepAlive, Error, &RigidNote))
 		{
-			FMantleCosmeticPackage Result = Build(Prepared, Contract);
+			FMantleCosmeticPackage Result = BuildPrepared(Prepared, Contract);
 			Result.Notes.Add(FString::Printf(TEXT("Outfit source size: %s, as a rigid accessory."), *Prepared.OutfitSourceSize));
 			if (!RigidNote.IsEmpty()) { Result.Notes.Add(RigidNote); }
 			return Result;
@@ -5211,7 +5247,7 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildCore(const FMantleCosmeticDra
 		FString Error, ReducedNote;
 		if (FMantleParametricOutfit::Prepare(Draft, Contract, Prepared, KeepAlive, Error, &ReducedNote))
 		{
-			FMantleCosmeticPackage Result = Build(Prepared, Contract);
+			FMantleCosmeticPackage Result = BuildPrepared(Prepared, Contract);
 			Result.Notes.Add(FString::Printf(TEXT("Outfit source size: %s; exported render geometry uses Mantle's existing runtime fit."), *Prepared.OutfitSourceSize));
 			if (!ReducedNote.IsEmpty()) { Result.Notes.Add(ReducedNote); }
 			return Result;

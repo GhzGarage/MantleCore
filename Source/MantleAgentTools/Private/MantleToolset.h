@@ -131,7 +131,7 @@ public:
 	static FString MeasureHead(const FString& BodyPath, const FString& FacePath = TEXT(""));
 
 	/**
-	 * Check a cosmetic: the Cosmetics panel's "Check only" on a skeletal mesh, a MetaHuman Outfit
+	 * Check a cosmetic: the Cosmetics panel's "Check only" on a skeletal mesh, a Chaos cloth asset, a MetaHuman Outfit
 	 * (an imported .mhpkg outfit, checked as clothing), or a Groom or hair cards static mesh (hair slots only), with the panel's defaults (the authoring body
 	 * it finds, generated LODs, thumbnail). Exports in memory; nothing is uploaded. Read-only.
 	 * @param AssetPath The skeletal mesh, Outfit, Groom or cards mesh, e.g. /Game/Clothing/SKM_Jacket or /Game/Outfits/Survivor/OA_SurvivorOutfit.
@@ -142,6 +142,8 @@ public:
 	 * @param Sections The sections to upload, as the panel's section ticks: material or material slot names separated
 	 * by commas (e.g. "MI_Coat,MI_Shirt" for the top of a mesh holding a whole outfit); "" keeps the panel's default.
 	 * Always pass it.
+	 * A skeletal mesh or Chaos cloth asset garment made on a MetaHuman Creator body gets the same variants: it is wrapped as an Outfit first.
+	 * With no such body it uploads in one size, and a note says so.
 	 * A MetaHuman Outfit uploads as clothing with garment variants made automatically: it is resized onto Epic's standard
 	 * body types (by default the medium-height underweight, normal and overweight bodies of one sex, named like
 	 * "f_med_nrw"), made in memory, so nothing needs converting and no Epic sign-in is needed. The sex follows FitSex;

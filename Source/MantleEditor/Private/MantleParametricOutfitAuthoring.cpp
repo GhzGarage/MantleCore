@@ -110,12 +110,23 @@ namespace MantleOutfitAuthoringPrivate
 		return true;
 	}
 
-	bool ReadCollection(USkeletalMesh& Source, int32 LOD, TSharedRef<FManagedArrayCollection>& Collection, FString& Error)
+	bool ReadCollection(USkeletalMesh& Source, int32 LOD, const TArray<int32>* KeepSlots, TSharedRef<FManagedArrayCollection>& Collection, FString& Error)
 	{
 		FMantleGlbMesh Mesh;
 		TArray<UMaterialInterface*> Materials;
 		int32 Triangles = 0;
 		if (!FMantleCosmeticExport::ReadSkeletalMesh(&Source, LOD, Mesh, Materials, Triangles, Error)) { return false; }
+		if (KeepSlots)
+		{
+			// glTF material i is the mesh's material slot UploadMaterialSlots()[i]; a dropped section's vertices stay in the
+			// arrays unused, as each primitive reads only its own range.
+			const TArray<int32> Slots = FMantleCosmeticExport::UploadMaterialSlots(&Source, LOD);
+			Mesh.Primitives.RemoveAll([&Slots, KeepSlots](const FMantleGlbPrimitive& Primitive)
+			{
+				return !Slots.IsValidIndex(Primitive.MaterialIndex) || !KeepSlots->Contains(Slots[Primitive.MaterialIndex]);
+			});
+			if (Mesh.Primitives.IsEmpty()) { Error = TEXT("none of the garment's kept sections has geometry in this LOD"); return false; }
+		}
 		return WriteCollection(Source, Mesh, Materials, Collection, Error);
 	}
 }
@@ -170,7 +181,7 @@ UChaosOutfitAsset* FMantleParametricOutfitAuthoring::Create(TConstArrayView<FMan
 			for (int32 LOD = 0; LOD < LODCount; ++LOD)
 			{
 				TSharedRef<FManagedArrayCollection> Collection = MakeShared<FManagedArrayCollection>();
-				if (!ReadCollection(*Garment, LOD, Collection, Error)) { return nullptr; }
+				if (!ReadCollection(*Garment, LOD, Row.KeepSlots.GetPtrOrNull(), Collection, Error)) { return nullptr; }
 				Collections.Add(Collection);
 			}
 		}

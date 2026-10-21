@@ -391,8 +391,15 @@ public:
 	static FMantleCosmeticPackage Build(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract,
 		FMantleSkinnedMesh* OutHairPreview = nullptr, FMantleSkinnedMesh* OutHairSourceFace = nullptr);
 
-	/** Build without the provenance: the files and the item. */
+	/**
+	 * Build without the provenance: the files and the item. A skeletal-mesh or cloth-asset garment is first wrapped as an
+	 * Outfit for the standard fit sizes (FMantleParametricOutfit::PrepareWrapped), or uploads in its one size when it cannot be.
+	 */
 	static FMantleCosmeticPackage BuildCore(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract,
+		FMantleSkinnedMesh* OutHairPreview = nullptr, FMantleSkinnedMesh* OutHairSourceFace = nullptr);
+
+	/** BuildCore for a draft that is already as it uploads (an Outfit's prepared size, a garment in its one size): no wrapping. */
+	static FMantleCosmeticPackage BuildPrepared(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract,
 		FMantleSkinnedMesh* OutHairPreview = nullptr, FMantleSkinnedMesh* OutHairSourceFace = nullptr);
 
 	/**

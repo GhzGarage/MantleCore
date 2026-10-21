@@ -124,7 +124,7 @@ namespace MantleDevRenderOutfitFitsPrivate
 		const FMantleAvatarContract* Contract = FMantleAvatarContract::Get();
 		EMantleFitSex Sex = EMantleFitSex::Auto;
 		FString WhyNot;
-		if (!Outfit || !Contract || !FMantleParametricOutfit::IsSource(Outfit) || (Args.Num() > 2 && !FMantleEditorActions::ParseFitSex(Args[2], Sex))
+		if (!Outfit || !Contract || !(FMantleParametricOutfit::IsSource(Outfit) || FMantleParametricOutfit::IsGarmentSource(Outfit)) || (Args.Num() > 2 && !FMantleEditorActions::ParseFitSex(Args[2], Sex))
 			|| !FMantleCosmeticThumbnail::CanCapture(&WhyNot))
 		{
 			UE_LOG(LogMantleRenderOutfitFits, Error, TEXT("MANTLE_RENDER_FITS failed: %s is not an Outfit, there is no contract, the sex is wrong, or nothing can render (%s)"), *Path, *WhyNot);
@@ -140,7 +140,21 @@ namespace MantleDevRenderOutfitFitsPrivate
 			UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS done"));
 			return;
 		}
-		const FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Garment, Outfit, Slot, FString(), *Contract, Sex);
+		FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Garment, Outfit, Slot, FString(), *Contract, Sex);
+		// A skeletal-mesh or cloth-asset garment is wrapped as an Outfit first, as CheckCosmetic does (BuildCore).
+		TArray<TStrongObjectPtr<UObject>> WrapKeepAlive;
+		TSharedPtr<void> WrapLease;
+		if (FMantleParametricOutfit::IsGarmentSource(Outfit))
+		{
+			FMantleCosmeticDraft Wrapped;
+			FString Why;
+			if (!FMantleParametricOutfit::PrepareWrapped(Draft, *Contract, Wrapped, WrapKeepAlive, WrapLease, Why))
+			{
+				UE_LOG(LogMantleRenderOutfitFits, Error, TEXT("MANTLE_RENDER_FITS %s FAILED: it cannot be made in sizes: %s"), *Outfit->GetPathName(), *Why);
+				return;
+			}
+			Draft = MoveTemp(Wrapped);
+		}
 		UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s: %d fit bodies (%s)"), *Outfit->GetPathName(), Draft.OutfitTargets.Num(), *Draft.FitBodiesStatus);
 		for (const FMantleOutfitAuthoringTarget& Target : Draft.OutfitTargets)
 		{
