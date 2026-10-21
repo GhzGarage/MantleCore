@@ -28,16 +28,24 @@ public:
 	/**
 	 * #51: the scalp, where hair roots belong: samples within ScalpTopCm of the top, or facing back (normal Y below
 	 * -0.3) within ScalpBackCm of the top (down to the nape), but never the face (facing forward, normal Y above 0.3,
-	 * more than FaceStartCm below the top). +Y is forward, as everywhere in the fit. The scalp is cut into ScalpCellCm
-	 * cubes so the fit can measure how much of it the roots cover.
+	 * more than FaceStartCm below the top). +Y is forward, as everywhere in the fit. Up to MaxScalpPoints of the scalp
+	 * samples (an even stride) are the points the fit measures the roots' coverage on: a scalp point is covered when a
+	 * seated root is within CoverReachCm of it.
 	 */
 	static constexpr double ScalpTopCm = 10.0;
 	static constexpr double ScalpBackCm = 15.0;
 	static constexpr double FaceStartCm = 5.0;
-	static constexpr double ScalpCellCm = 2.0;
-	/** The sample's scalp cell, or INDEX_NONE when the sample is not on the scalp. */
-	int32 ScalpCell(int32 Id) const { return ScalpCells[Id]; }
-	int32 NumScalpCells() const { return ScalpCellCount; }
+	static constexpr int32 MaxScalpPoints = 800;
+	static constexpr double CoverReachCm = 2.0;
+	/** The scalp point nearest the sample, or INDEX_NONE when the sample is not on the scalp. */
+	int32 NearestScalpPoint(int32 Id) const { return ScalpOf[Id]; }
+	int32 NumScalpPoints() const { return ScalpPoints.Num(); }
+	const FVector& ScalpPoint(int32 Index) const { return ScalpPoints[Index]; }
+	/** The scalp points within twice CoverReachCm of a scalp point: every point a root seated near it can cover. */
+	TConstArrayView<int32> ScalpNeighbours(int32 Index) const
+	{
+		return MakeArrayView(ScalpNeighbourIds.GetData() + ScalpNeighbourStart[Index], ScalpNeighbourStart[Index + 1] - ScalpNeighbourStart[Index]);
+	}
 
 	/** The nearest sample to P: its id and the squared distance. */
 	void Nearest(const FVector& P, int32& OutId, double& OutDistSquared) const;
@@ -51,8 +59,10 @@ private:
 
 	TArray<FVector> Points;
 	TArray<FVector> Normals;
-	TArray<int32> ScalpCells;
-	int32 ScalpCellCount = 0;
+	TArray<int32> ScalpOf;
+	TArray<FVector> ScalpPoints;
+	TArray<int32> ScalpNeighbourStart;
+	TArray<int32> ScalpNeighbourIds;
 	/** Implicit tree: the median of each [Lo, Hi) range sits at its middle. */
 	TArray<int32> Order;
 	double Top = 0.0;
@@ -71,11 +81,10 @@ private:
  *  3. Score (#51, roots). Hair belongs where its roots meet the scalp, not where its top lines up with the head's top
  *     (that floated ponytails, braids and long hair above the crown). Each card's root is the end of the card nearer the
  *     head; a root is seated when it is within SeatCm of a scalp sample. A candidate scores the share of cards seated
- *     times the share of the scalp's cells that have a seated root, so the hair can neither shrink onto a patch of the
- *     head nor grow until only a few roots touch. Candidates that push more than MaxDeepInsideFraction of the hair
+ *     times the share of the scalp points with a seated root within CoverReachCm, so the hair can neither shrink onto a
+ *     patch of the head nor grow until only a few roots touch. Candidates that push more than MaxDeepInsideFraction of the hair
  *     more than DeepInsideCm inside the head (above HeadDepthCm below its top: hair over the shoulders does not count)
- *     are ruled out; among the rest, those within RankTolerance of the best score go to the smallest median root
- *     distance (the scalp is counted in ScalpCellCm cubes, so the score alone is coarse). If every candidate is ruled
+ *     are ruled out; scores equal to 3 decimals go to the smallest median root distance. If every candidate is ruled
  *     out, the one with the least hair inside wins and bKeepsOutOfHead is false.
  *
  * Up to MaxFitPoints points and MaxFitCards cards score each candidate. The transform is
@@ -94,8 +103,6 @@ public:
 	static constexpr double HeadDepthCm = 18.0;
 	/** ... and a candidate may put at most this share of the scored points there. */
 	static constexpr double MaxDeepInsideFraction = 0.03;
-	/** Candidates scoring within this share of the best are equal; the closest roots win among them. Bigger hair touches a few more cubes, so this is wide. */
-	static constexpr double RankTolerance = 0.10;
 	/** The most points and cards that score a candidate (an even stride over the piece). */
 	static constexpr int32 MaxFitPoints = 2000;
 	static constexpr int32 MaxFitCards = 1500;
@@ -126,7 +133,7 @@ public:
 		/** At the chosen candidate: share of the scored points outside the skin, and share inside the head as the bar counts it. */
 		double OutsideFraction = 0.0;
 		double DeepInsideFraction = 0.0;
-		/** Share of cards whose root is seated on the scalp, and share of the scalp's cells with a seated root. */
+		/** Share of cards whose root is seated on the scalp, and share of the scalp points a seated root covers. */
 		double SeatedFraction = 0.0;
 		double ScalpCoverage = 0.0;
 		/** Median distance of the card roots from the skin, cm. */

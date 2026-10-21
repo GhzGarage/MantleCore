@@ -176,12 +176,12 @@ bool FMantleHairPieceFitScalpTest::RunTest(const FString& Parameters)
 	PieceFitSphere(false, Positions, Indices);
 	FMantleHairHeadSamples Head; FString Error;
 	if (!TestTrue(TEXT("head builds"), Head.Build(Positions, Indices, Error))) { AddError(Error); return false; }
-	TestTrue(TEXT("the scalp has cells"), Head.NumScalpCells() > 20);
+	TestTrue(TEXT("the scalp has points"), Head.NumScalpPoints() > 100 && Head.NumScalpPoints() <= FMantleHairHeadSamples::MaxScalpPoints);
 	int32 Crown = 0, CrownScalp = 0, Face = 0, FaceScalp = 0, Nape = 0, NapeScalp = 0, Chin = 0, ChinScalp = 0;
 	for (int32 I = 0; I < Head.Num(); ++I)
 	{
 		const FVector& P = Head.Point(I);
-		const bool bScalp = Head.ScalpCell(I) != INDEX_NONE;
+		const bool bScalp = Head.NearestScalpPoint(I) != INDEX_NONE;
 		if (P.Z > 166.0) { ++Crown; CrownScalp += bScalp; }
 		if (P.Y > 6.0 && P.Z > 156.0 && P.Z < 162.0) { ++Face; FaceScalp += bScalp; }
 		if (P.Y < -6.0 && P.Z > 156.0 && P.Z < 162.0) { ++Nape; NapeScalp += bScalp; }
@@ -254,9 +254,8 @@ bool FMantleHairPieceFitShortHairTest::RunTest(const FString& Parameters)
 	PieceFitRootError(Fit, Fitted, Fitted, false, Median, Worst);
 	TestTrue(FString::Printf(TEXT("roots stay put (median %.2f cm, worst %.2f cm)"), Median, Worst), Median < 0.5 && Worst < 1.0);
 
-	// Shrunk onto a patch of the head is not a fit: a candidate must cover the scalp as well as seat its roots
-	// (48 cards can touch at most about a third of the scalp's 2 cm cubes).
-	TestTrue(FString::Printf(TEXT("the roots spread over the scalp (%.2f)"), Fit.ScalpCoverage), Fit.ScalpCoverage > 0.15);
+	// Shrunk onto a patch of the head is not a fit: a candidate must cover the scalp as well as seat its roots.
+	TestTrue(FString::Printf(TEXT("the roots spread over the scalp (%.2f)"), Fit.ScalpCoverage), Fit.ScalpCoverage > 0.3);
 	return true;
 }
 

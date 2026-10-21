@@ -1,6 +1,8 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleHairPieceFit.h"
 
+#include "MantleHairScalpFit.h"
+
 #include "Algo/Sort.h"
 #include "Async/ParallelFor.h"
 #include "Math/RandomStream.h"
@@ -30,38 +32,20 @@ namespace MantleHairPieceFitPrivate
 		double DeepInside = 0.0;
 		double Seated = 0.0;
 		double Coverage = 0.0;
-		/** Seated times coverage. */
+		/** Seated times coverage, to 3 decimals so near-equal candidates fall to the closest roots. */
 		double Rank = 0.0;
 		double RootMedian = 0.0;
 
 		bool KeepsOut() const { return DeepInside <= FMantleHairPieceFit::MaxDeepInsideFraction; }
 	};
 
-	/**
-	 * The winner (see FMantleHairPieceFit's step 3): among the candidates that keep out of the head, those within
-	 * RankTolerance of the best rank, then the smallest root median (the scalp is counted in cubes, so a shift of up to a
-	 * cube can touch one more without seating the roots any better); with none, the least hair inside. The first in list
-	 * order wins exact ties, so the result does not depend on the threads that scored them.
-	 */
-	int32 PieceFitWinner(const TArray<FPieceFitScore>& Scores)
+	/** True when A is the better candidate (see FMantleHairPieceFit's step 3). */
+	bool PieceFitBetter(const FPieceFitScore& A, const FPieceFitScore& B)
 	{
-		double BestRank = -1.0;
-		for (const FPieceFitScore& S : Scores) if (S.KeepsOut()) BestRank = FMath::Max(BestRank, S.Rank);
-		int32 Winner = INDEX_NONE;
-		for (int32 Index = 0; Index < Scores.Num(); ++Index)
-		{
-			const FPieceFitScore& S = Scores[Index];
-			if (BestRank >= 0.0)
-			{
-				if (!S.KeepsOut() || S.Rank < BestRank * (1.0 - FMantleHairPieceFit::RankTolerance)) continue;
-				if (Winner == INDEX_NONE || S.RootMedian < Scores[Winner].RootMedian) Winner = Index;
-			}
-			else if (Winner == INDEX_NONE || S.DeepInside < Scores[Winner].DeepInside)
-			{
-				Winner = Index;
-			}
-		}
-		return Winner;
+		if (A.KeepsOut() != B.KeepsOut()) return A.KeepsOut();
+		if (!A.KeepsOut()) return A.DeepInside < B.DeepInside;
+		if (A.Rank != B.Rank) return A.Rank > B.Rank;
+		return A.RootMedian < B.RootMedian;
 	}
 }
 
@@ -136,21 +120,36 @@ bool FMantleHairHeadSamples::Build(TConstArrayView<FVector3f> Positions, TConstA
 		}
 	}
 
-	// The scalp, cut into cubes: hair roots belong here (see ScalpCell).
-	ScalpCells.Init(INDEX_NONE, Points.Num());
-	TMap<FIntVector, int32> Cells;
+	// The scalp, where hair roots belong, and the points on it the fit measures the roots' coverage on.
+	TArray<int32> ScalpSamples;
 	for (int32 I = 0; I < Points.Num(); ++I)
 	{
-		const FVector& P = Points[I];
+		const double Below = Top - Points[I].Z;
 		const FVector& N = Normals[I];
-		const double Below = Top - P.Z;
-		const bool bScalp = (Below < ScalpTopCm || (N.Y < -0.3 && Below < ScalpBackCm)) && !(N.Y > 0.3 && Below > FaceStartCm);
-		if (!bScalp) continue;
-		const FIntVector Key(FMath::FloorToInt(P.X / ScalpCellCm), FMath::FloorToInt(P.Y / ScalpCellCm), FMath::FloorToInt(P.Z / ScalpCellCm));
-		const int32* Found = Cells.Find(Key);
-		ScalpCells[I] = Found ? *Found : Cells.Add(Key, Cells.Num());
+		if ((Below < ScalpTopCm || (N.Y < -0.3 && Below < ScalpBackCm)) && !(N.Y > 0.3 && Below > FaceStartCm)) ScalpSamples.Add(I);
 	}
-	ScalpCellCount = Cells.Num();
+	ScalpOf.Init(INDEX_NONE, Points.Num());
+	if (!ScalpSamples.IsEmpty())
+	{
+		const int32 Take = FMath::Min(ScalpSamples.Num(), MaxScalpPoints);
+		for (int32 I = 0; I < Take; ++I) ScalpPoints.Add(Points[ScalpSamples[static_cast<int32>(static_cast<int64>(I) * ScalpSamples.Num() / Take)]]);
+		FMantleScalpKdTree Tree;
+		Tree.Build(ScalpPoints);
+		TArray<int32> Ids;
+		TArray<double> Distances;
+		for (const int32 S : ScalpSamples)
+		{
+			Tree.Nearest(Points[S], 1, Ids, Distances);
+			ScalpOf[S] = Ids[0];
+		}
+		ScalpNeighbourStart.Add(0);
+		for (const FVector& P : ScalpPoints)
+		{
+			Tree.InRadius(P, 2.0 * CoverReachCm, Ids);
+			ScalpNeighbourIds.Append(Ids);
+			ScalpNeighbourStart.Add(ScalpNeighbourIds.Num());
+		}
+	}
 
 	Order.SetNumUninitialized(Points.Num());
 	for (int32 I = 0; I < Order.Num(); ++I) Order[I] = I;
@@ -229,7 +228,7 @@ bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayVie
 	using namespace MantleHairPieceFitPrivate;
 	Out = FResult();
 	if (!Head.IsValid()) { Error = TEXT("there is no head to fit the hair to"); return false; }
-	if (Head.NumScalpCells() == 0) { Error = TEXT("the head has no scalp to seat the hair on"); return false; }
+	if (Head.NumScalpPoints() == 0) { Error = TEXT("the head has no scalp to seat the hair on"); return false; }
 	if (Points.IsEmpty()) { Error = TEXT("the hair has no vertices to fit"); return false; }
 	if (CardEnds.Num() < 2 || CardEnds.Num() % 2 != 0) { Error = TEXT("the hair has no cards to seat on the head"); return false; }
 	if (Search.Scales.IsEmpty() || Search.OffsetsY.IsEmpty() || Search.TopOffsets.IsEmpty()) { Error = TEXT("the hair fit has no candidates to try"); return false; }
@@ -283,38 +282,44 @@ bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayVie
 			if (((Q - Head.Point(Id)) | Head.Normal(Id)) > 0.0) ++Outside;
 			else if (D2 > DeepInsideCm * DeepInsideCm && Q.Z > HeadTop - HeadDepthCm) ++Deep;
 		}
-		// Each card's root is its end nearer the head; a seated root marks its scalp cell covered.
-		TBitArray<> Covered(false, Head.NumScalpCells());
+		// Each card's root is its end nearer the head; a seated root covers the scalp points within CoverReachCm of it.
+		TBitArray<> Covered(false, Head.NumScalpPoints());
 		TArray<double> RootDistances;
 		RootDistances.SetNumUninitialized(Cards);
-		int32 Seated = 0, CellsCovered = 0;
+		int32 Seated = 0, PointsCovered = 0;
+		const double Reach2 = FMantleHairHeadSamples::CoverReachCm * FMantleHairHeadSamples::CoverReachCm;
 		for (int32 C = 0; C < Cards; ++C)
 		{
+			const FVector A = Ends[2 * C] * Scale + Offset, B = Ends[2 * C + 1] * Scale + Offset;
 			int32 IdA = INDEX_NONE, IdB = INDEX_NONE;
 			double DA = 0.0, DB = 0.0;
-			Head.Nearest(Ends[2 * C] * Scale + Offset, IdA, DA);
-			Head.Nearest(Ends[2 * C + 1] * Scale + Offset, IdB, DB);
+			Head.Nearest(A, IdA, DA);
+			Head.Nearest(B, IdB, DB);
 			const bool bA = DA <= DB;
 			const double Distance = FMath::Sqrt(bA ? DA : DB);
 			RootDistances[C] = Distance;
-			const int32 Cell = Head.ScalpCell(bA ? IdA : IdB);
-			if (Distance > SeatCm || Cell == INDEX_NONE) continue;
+			const int32 Near = Head.NearestScalpPoint(bA ? IdA : IdB);
+			if (Distance > SeatCm || Near == INDEX_NONE) continue;
 			++Seated;
-			if (!Covered[Cell]) { Covered[Cell] = true; ++CellsCovered; }
+			const FVector& Root = bA ? A : B;
+			for (const int32 N : Head.ScalpNeighbours(Near))
+			{
+				if (!Covered[N] && FVector::DistSquared(Root, Head.ScalpPoint(N)) <= Reach2) { Covered[N] = true; ++PointsCovered; }
+			}
 		}
 		RootDistances.Sort();
 		Score.Outside = static_cast<double>(Outside) / Scored;
 		Score.DeepInside = static_cast<double>(Deep) / Scored;
 		Score.Seated = static_cast<double>(Seated) / Cards;
-		Score.Coverage = static_cast<double>(CellsCovered) / Head.NumScalpCells();
-		Score.Rank = Score.Seated * Score.Coverage;
+		Score.Coverage = static_cast<double>(PointsCovered) / Head.NumScalpPoints();
+		Score.Rank = PieceFitRound(Score.Seated * Score.Coverage, 1000.0);
 		Score.RootMedian = PieceFitPercentile(RootDistances, 0.5);
 		return Score;
 	};
 	const auto OffsetZFor = [&](double Scale, double TopOffset) { return HeadTop - Scale * CardsTop + TopOffset; };
 
 	struct FCandidate { double Scale; double OffsetY; double TopOffset; };
-	// Scores every candidate in parallel, then picks the winner.
+	// Scores every candidate in parallel; the first best in list order wins ties, so the result does not depend on the threads.
 	const auto Best = [&](const TArray<FCandidate>& Candidates, FPieceFitScore& OutScore)
 	{
 		TArray<FPieceFitScore> Scores;
@@ -324,7 +329,8 @@ bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayVie
 			const FCandidate& C = Candidates[Index];
 			Scores[Index] = Evaluate(C.Scale, C.OffsetY, OffsetZFor(C.Scale, C.TopOffset));
 		});
-		const int32 Winner = PieceFitWinner(Scores);
+		int32 Winner = 0;
+		for (int32 Index = 1; Index < Scores.Num(); ++Index) if (PieceFitBetter(Scores[Index], Scores[Winner])) Winner = Index;
 		Out.CandidatesScored += Candidates.Num();
 		OutScore = Scores[Winner];
 		return Candidates[Winner];
