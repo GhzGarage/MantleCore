@@ -490,7 +490,8 @@ bool FMantleEmoteRetarget::RetargetThrough(UAnimSequence* Sequence, USkeletalMes
 	IContentBrowserSingleton& Browser = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser")).Get();
 	TArray<FAssetData> WasSelected;
 	Browser.GetSelectedAssets(WasSelected);
-	const FString WasFolder = Browser.GetCurrentPath().GetInternalPathString();
+	const FContentBrowserItemPath WasPath = Browser.GetCurrentPath();
+	const FString WasFolder = WasPath.HasInternalPath() ? WasPath.GetInternalPathString() : FString();
 
 	TArray<FAssetData> Created;
 	{
