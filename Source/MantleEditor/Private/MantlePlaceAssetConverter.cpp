@@ -2883,6 +2883,14 @@ bool FMantlePlaceAssetConverter::RepairLODScreenSizes(TArray<float>& InOutSizes)
 	return bChanged;
 }
 
+double FMantlePlaceAssetConverter::GlassOpacityFromIor(const double Ior, const double Opacity)
+{
+	// glTF's index is 1 or more; the default surface reflects as an index of 1.5 does (F0 0.04).
+	const double N = FMath::Clamp(Ior, 1.0, 3.0);
+	const double F0 = FMath::Square((N - 1.0) / (N + 1.0));
+	return FMath::Clamp(FMath::Max(Opacity, MinGlassOpacity) + (F0 - 0.04), 0.0, 1.0);
+}
+
 FString FMantlePlaceAssetConverter::MeshCacheSalt(const FMantlePlaceAssetLimits& Limits, const UStaticMesh& Mesh, int32 FromLOD, const FString& ReducedTag)
 {
 	// The LOD and collision caps change what is written, so they are part of the key.
@@ -3387,7 +3395,9 @@ FMantlePlaceMaterialDocument FMantlePlaceAssetConverter::MaterialFromGltf(const 
 		{
 			FString Part(Pair.Key.ToView());
 			// Clear coat is read from the source material, not the glTF (ConvertMaterial, #487), and Check says what becomes of it.
-			if (Part != TEXT("KHR_materials_unlit") && Part != TEXT("KHR_materials_emissive_strength") && Part != TEXT("KHR_materials_clearcoat"))
+			// The index of refraction of a translucent surface is drawn as glass (GlassOpacityFromIor, #628).
+			if (Part != TEXT("KHR_materials_unlit") && Part != TEXT("KHR_materials_emissive_strength") && Part != TEXT("KHR_materials_clearcoat")
+				&& !(Part == TEXT("KHR_materials_ior") && Doc.AlphaMode == TEXT("blend")))
 			{
 				Part.RemoveFromStart(TEXT("KHR_materials_"));
 				Warn(FString::Printf(TEXT("its %s part is dropped."), *Part));
@@ -3397,6 +3407,10 @@ FMantlePlaceMaterialDocument FMantlePlaceAssetConverter::MaterialFromGltf(const 
 
 	const TSharedPtr<FJsonObject> Pbr = ObjectField(Material, TEXT("pbrMetallicRoughness"));
 	NumberArray(Pbr, TEXT("baseColorFactor"), Doc.BaseColorFactor, 4);
+	if (const TSharedPtr<FJsonObject> IorExtension = ObjectField(Extensions, TEXT("KHR_materials_ior")); IorExtension.IsValid() && Doc.AlphaMode == TEXT("blend"))
+	{
+		Doc.BaseColorFactor[3] = GlassOpacityFromIor(NumberField(IorExtension, TEXT("ior"), 1.5), Doc.BaseColorFactor[3]);
+	}
 	Doc.MetallicFactor = NumberField(Pbr, TEXT("metallicFactor"), 1.0);
 	Doc.RoughnessFactor = NumberField(Pbr, TEXT("roughnessFactor"), 1.0);
 	NumberArray(Material, TEXT("emissiveFactor"), Doc.EmissiveFactor, 3);

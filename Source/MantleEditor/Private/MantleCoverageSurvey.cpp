@@ -513,7 +513,7 @@ namespace MantleCoverageSurveyPrivate
 		case EMantleMaterialLoss::Animation: return TEXT("animation frozen");
 		case EMantleMaterialLoss::WorldPositionOffset: return TEXT("wind / vertex animation");
 		case EMantleMaterialLoss::WorldAligned: return TEXT("world-aligned mapping");
-		case EMantleMaterialLoss::Refraction: return TEXT("refraction");
+		case EMantleMaterialLoss::Refraction: return TEXT("refraction shown as smooth tinted glass with the reflectance of its index (the bending of the scene behind is not drawn)");
 		case EMantleMaterialLoss::Subsurface: return TEXT("subsurface");
 		case EMantleMaterialLoss::Parallax: return TEXT("parallax");
 		case EMantleMaterialLoss::VertexColor: return TEXT("vertex-colour blending");
