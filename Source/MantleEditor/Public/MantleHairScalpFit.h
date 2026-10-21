@@ -98,6 +98,8 @@ private:
  *    at 3 cm per axis), the displacement spreads inward with a cosine falloff over 3 cm of surface distance, and any
  *    cap vertex within 0.5 mm of the skin lifts to 1 mm.
  *  - Last resort: any card vertex still more than 1 mm inside the skin moves out along the normal to the clearance.
+ *  - Neither the push nor the last resort touches hair more than HeadDepthCm below the head's top (#51): long hair over
+ *    the shoulders would be shoved out of the head mesh's collar, which is not the wearer's body.
  *
  * "Cap" versus "cards" is the pack's own structure, as in the prototype: the caller passes the vendor's solid cap piece
  * as Cap, and everything else as Cards. Positions are the whole-piece-fitted ones, in the head's space (cm). Pure.
@@ -121,6 +123,8 @@ struct MANTLEEDITOR_API FMantleScalpFit
 	static constexpr double CapWrapCm = 3.0;
 	/** Cap vertices closer to the skin than this are lifted to CapEdgeOffsetCm, cm. */
 	static constexpr double CapLiftBelowCm = 0.05;
+	/** Card vertices lower than this below the head's top (over the neck and shoulders) are neither pushed nor lifted, cm. */
+	static constexpr double HeadDepthCm = 18.0;
 	/** A card's root end is the 12% of its length nearer the head. */
 	static constexpr double CardEndFraction = 0.12;
 

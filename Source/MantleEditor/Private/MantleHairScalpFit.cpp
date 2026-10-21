@@ -691,6 +691,12 @@ bool FMantleScalpFit::Run(const FMantleScalpHeadSurface& Head, const FMesh& Card
 	const TArray<FVector> CardPos = ToDouble(Cards.Positions);
 	const TArray<uint8> CardUsed = UsedMask(CardPos.Num(), Cards.Indices);
 	M.CardVertices = CardPos.Num();
+	// #51: hair lower than HeadDepthCm below the head's top lies over the neck and shoulders. The head mesh's collar is
+	// not the wearer's body, so that hair is neither pushed nor lifted out of it (long hair was shoved out up to 20 cm).
+	double HeadTop = -TNumericLimits<double>::Max();
+	for (int32 I = 0; I < Head.NumVertices(); ++I) HeadTop = FMath::Max(HeadTop, Head.Vertex(I).Z);
+	TArray<uint8> CardOnHead = CardUsed;
+	for (int32 I = 0; I < CardPos.Num(); ++I) if (CardPos[I].Z < HeadTop - HeadDepthCm) CardOnHead[I] = 0;
 
 	TArray<double> CardDist;
 	CardDist.Init(0.0, CardPos.Num());
@@ -700,7 +706,7 @@ bool FMantleScalpFit::Run(const FMantleScalpHeadSurface& Head, const FMesh& Card
 	}
 	const TArray<int32> Roots = FindCardRoots(CardPos, Cards.Indices, CardDist);
 	M.CardCount = Roots.Num();
-	for (int32 I = 0; I < CardPos.Num(); ++I) if (CardUsed[I] && CardDist[I] < SinkCm) ++M.CardInsideBefore;
+	for (int32 I = 0; I < CardPos.Num(); ++I) if (CardOnHead[I] && CardDist[I] < SinkCm) ++M.CardInsideBefore;
 	{
 		TArray<double> RootDist;
 		for (const int32 R : Roots) RootDist.Add(CardDist[R]);
@@ -745,7 +751,7 @@ bool FMantleScalpFit::Run(const FMantleScalpHeadSurface& Head, const FMesh& Card
 	{
 		if (!CardUsed[I]) continue;
 		const int32 Nn = NearestVertex(CardPos[I]);
-		Push[Nn] = FMath::Max(Push[Nn], FMath::Max(0.0, CardClearance - CardDist[I]));
+		if (CardOnHead[I]) Push[Nn] = FMath::Max(Push[Nn], FMath::Max(0.0, CardClearance - CardDist[I]));
 		Mask[Nn] = 1;
 	}
 	for (int32 I = 0; I < CapPos.Num(); ++I)
@@ -818,7 +824,7 @@ bool FMantleScalpFit::Run(const FMantleScalpHeadSurface& Head, const FMesh& Card
 	for (const double S : Shift) M.FieldShiftMaxCm = FMath::Max(M.FieldShiftMaxCm, S);
 
 	// Last resort: whatever the field left more than 1 mm inside the skin.
-	M.CardLifted = LiftSunk(Head, Moved, CardUsed, CardClearance, M.CardLiftMaxCm);
+	M.CardLifted = LiftSunk(Head, Moved, CardOnHead, CardClearance, M.CardLiftMaxCm);
 	{
 		TArray<double> RootDist;
 		for (const int32 R : Roots) RootDist.Add(Head.Query(Moved[R]).SignedDistance);
@@ -829,7 +835,7 @@ bool FMantleScalpFit::Run(const FMantleScalpHeadSurface& Head, const FMesh& Card
 	}
 	for (int32 I = 0; I < Moved.Num(); ++I)
 	{
-		if (CardUsed[I] && Head.Query(Moved[I]).SignedDistance < SinkCm) ++M.CardInsideAfter;
+		if (CardOnHead[I] && Head.Query(Moved[I]).SignedDistance < SinkCm) ++M.CardInsideAfter;
 	}
 	Out.CardPositions = ToFloat(Moved);
 	if (bCap)

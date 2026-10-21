@@ -263,7 +263,7 @@ bool FMantleHairCardsFitRunTest::RunTest(const FString& Parameters)
 	const FMantleHairCardsFit::FResult Plain = FMantleHairCardsFit::Run(Input);
 	TestTrue(TEXT("fit ran"), Plain.bFitted);
 	TestEqual(TEXT("positions keep their count"), Plain.Positions.Num(), P.Num());
-	TestTrue(TEXT("the cap reached the scalp fit"), Plain.bCapFound);
+	TestTrue(FString::Printf(TEXT("the cap reached the scalp fit (%s)"), *FString::Join(Plain.Notes, TEXT(" | "))), Plain.bCapFound);
 	TestTrue(TEXT("and the notes say so"), Plain.Notes.ContainsByPredicate([](const FString& N) { return N.Contains(TEXT("found 1 cap")); }));
 	TestFalse(TEXT("no built-in head"), Plain.Report.bBakedHead);
 
