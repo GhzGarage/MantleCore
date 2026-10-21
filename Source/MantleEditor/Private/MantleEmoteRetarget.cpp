@@ -802,19 +802,29 @@ USkeletalMesh* FMantleEmoteRetarget::FindSourceMesh(USkeleton* Skeleton)
 
 namespace MantleEmoteRetargetPrivate
 {
-	/** The rest-hands match on an opened or made FRetargeterCopy (FMantleEmoteRetarget::MakeRestHandsCopy); what it changed. */
-	FString MatchHands(const FRetargeterCopy& Copy, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target)
+	/**
+	 * The rest-hands match on an opened or made FRetargeterCopy (FMantleEmoteRetarget::MakeRestHandsCopy); what it changed.
+	 * bTurnHands false leaves hand_l and hand_r as they are (only the fingers are matched), so whatever a hand holds keeps
+	 * its place and turn.
+	 */
+	FString MatchHands(const FRetargeterCopy& Copy, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, const bool bTurnHands = true)
 	{
 		FString OutNote;
 		double Largest = 0.0;
+		TArray<FName> Bones = FMantleEmoteRetarget::HandBones();
+		if (!bTurnHands)
+		{
+			Bones.Remove(FName(TEXT("hand_l")));
+			Bones.Remove(FName(TEXT("hand_r")));
+		}
 		const TMap<FName, FQuat> Offsets = FMantleEmoteRetarget::MatchRestRotations(Source, Copy.OffsetsOf(Source, FRetargeterCopy::Source), Target,
-			Copy.OffsetsOf(Target, FRetargeterCopy::Target), FMantleEmoteRetarget::HandBones(), &Largest);
+			Copy.OffsetsOf(Target, FRetargeterCopy::Target), Bones, &Largest);
 		for (const TPair<FName, FQuat>& Offset : Offsets)
 		{
 			Copy.SetTargetOffset(Offset.Key, Offset.Value);
 		}
-		OutNote = FString::Printf(TEXT("%d hand and finger bones of the target retarget pose given the source's rest shape (largest change %.1f degrees)"),
-			Offsets.Num(), Largest);
+		OutNote = FString::Printf(TEXT("%d %s bones of the target retarget pose given the source's rest shape (largest change %.1f degrees)"),
+			Offsets.Num(), bTurnHands ? TEXT("hand and finger") : TEXT("finger (the hands as they were)"), Largest);
 		// The finger chains joint for joint (the default, Interpolated, samples the source finger by length, so each joint of
 		// a finger with other proportions gets a mix of two joints' bend). A source without metacarpals (the UE4 Mannequin)
 		// gives the target's metacarpal chains nothing to follow: the shipped retargeters map them to the whole finger, and a
@@ -877,7 +887,7 @@ bool FMantleEmoteRetarget::MatchRestHandsInPlace(UObject* Retargeter, const FRef
 	{
 		return false;
 	}
-	OutNote = MatchHands(Asset, Source, Target);
+	OutNote = MatchHands(Asset, Source, Target, /*bTurnHands*/ false);
 	return true;
 }
 

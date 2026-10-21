@@ -1101,8 +1101,8 @@ namespace MantleEmoteCheckPrivate
 	FAutoConsoleCommand GMantleDevMatchRetargetHandsCommand(
 		TEXT("Mantle.Dev.MatchRetargetHands"),
 		TEXT("Mantle.Dev.MatchRetargetHands <Retargeter> <builtin|female|male|<SourceMesh>> <builtin|female|male|<TargetMesh>> [save] -- gives the ")
-		TEXT("retargeter's target retarget pose the source's rest hands and fingers and its finger chains joint for joint, as every emote export ")
-		TEXT("does on its copy (FMantleEmoteRetarget::MatchRestHandsInPlace). In memory, so a Mantle.Dev.CheckEmote after it shows the result; ")
+		TEXT("retargeter's target retarget pose the source's rest fingers (the hands as they were, so held things stay put) and its finger chains ")
+		TEXT("joint for joint (FMantleEmoteRetarget::MatchRestHandsInPlace). In memory, so a Mantle.Dev.CheckEmote after it shows the result; ")
 		TEXT("with save, the asset is saved."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunMatchCommand));
 
