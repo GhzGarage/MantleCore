@@ -298,10 +298,11 @@ bool FMantleLevelPublishSource::Prepare(FMantleValidationResult& OutValidation, 
 	}
 	// GhzGarage/mantle#818: a World Partition level publishes whole. Every cell is loaded first (and let go in EndPublish), so the
 	// check and the export see all of it instead of refusing the cells the editor had not loaded.
-	if (!LoadedCells.IsValid())
+	if (!LoadedCells.IsValid() && LoadedLevelInstances.Num() == 0)
 	{
 		FMantlePlaceWorldPartition::FLoadResult Loaded = FMantlePlaceWorldPartition::LoadAll(Level);
 		LoadedCells = Loaded.Adapter;
+		LoadedLevelInstances = Loaded.LevelInstances;
 		if (Loaded.bLoaded())
 		{
 			WorldPartitionNote = FMantlePlaceWorldPartition::DescribeLoad(Loaded);
@@ -955,12 +956,14 @@ void FMantleLevelPublishSource::EndPublish()
 {
 	Pins.Release();
 	// GhzGarage/mantle#818: the cells this publish loaded go again; the ones the creator loaded stay.
-	if (LoadedCells.IsValid())
+	if (LoadedCells.IsValid() || LoadedLevelInstances.Num() > 0)
 	{
 		FMantlePlaceWorldPartition::FLoadResult Loaded;
 		Loaded.Adapter = LoadedCells;
+		Loaded.LevelInstances = LoadedLevelInstances;
 		FMantlePlaceWorldPartition::ReleaseLoaded(World.Get(), Loaded);
 		LoadedCells.Reset();
+		LoadedLevelInstances.Reset();
 	}
 	WorldPartitionNote.Reset();
 }
