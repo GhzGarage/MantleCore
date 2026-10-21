@@ -94,9 +94,11 @@ struct FMantleEmoteRetarget
 	 * The same match on Retargeter itself (the game's RTG_UEFN_to_Mantle_* retargeters, Mantle.Dev.MatchRetargetHands),
 	 * fingers only: hand_l and hand_r keep their rest pose, so a weapon in a hand socket keeps its place and turn (turning
 	 * the hands tilted it 4.8 degrees). Its target retarget pose and finger chains are changed in memory and its package
-	 * dirtied; the caller saves it.
+	 * dirtied; the caller saves it. bTurnHands also gives hand_l and hand_r the source's palm turn (twist and bend of the
+	 * wrist match; a held weapon tilts with it).
 	 */
-	static bool MatchRestHandsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError);
+	static bool MatchRestHandsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError,
+		const bool bTurnHands = false);
 
 	/**
 	 * A mesh on Skeleton to retarget from (its proportions): the skeleton's preview mesh, else a skeletal mesh in the

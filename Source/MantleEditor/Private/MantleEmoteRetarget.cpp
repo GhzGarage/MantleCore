@@ -879,7 +879,7 @@ UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FRef
 }
 
 bool FMantleEmoteRetarget::MatchRestHandsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote,
-	FString& OutError)
+	FString& OutError, const bool bTurnHands)
 {
 	using namespace MantleEmoteRetargetPrivate;
 	FRetargeterCopy Asset;
@@ -887,7 +887,7 @@ bool FMantleEmoteRetarget::MatchRestHandsInPlace(UObject* Retargeter, const FRef
 	{
 		return false;
 	}
-	OutNote = MatchHands(Asset, Source, Target, /*bTurnHands*/ false);
+	OutNote = MatchHands(Asset, Source, Target, bTurnHands);
 	return true;
 }
 

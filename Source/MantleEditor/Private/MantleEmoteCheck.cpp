@@ -1177,7 +1177,7 @@ namespace MantleEmoteCheckPrivate
 	{
 		if (Args.Num() < 3)
 		{
-			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_MATCH_RETARGET usage: Mantle.Dev.MatchRetargetHands <Retargeter> <builtin|female|male|<SourceMesh>> <builtin|female|male|<TargetMesh>> [save]"));
+			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_MATCH_RETARGET usage: Mantle.Dev.MatchRetargetHands <Retargeter> <builtin|female|male|<SourceMesh>> <builtin|female|male|<TargetMesh>> [wrists] [save]"));
 			return;
 		}
 		FString Path = Args[0];
@@ -1191,13 +1191,20 @@ namespace MantleEmoteCheckPrivate
 		USkeletalMesh* Source = Contract ? ResolveMesh(Args[1], *Contract, Error) : nullptr;
 		USkeletalMesh* Target = Contract && Source ? ResolveMesh(Args[2], *Contract, Error) : nullptr;
 		FString Note;
-		if (!Retargeter || !Source || !Target || !FMantleEmoteRetarget::MatchRestHandsInPlace(Retargeter, Source->GetRefSkeleton(), Target->GetRefSkeleton(), Note, Error))
+		bool bWrists = false;
+		bool bSave = false;
+		for (int32 Index = 3; Index < Args.Num(); ++Index)
+		{
+			bWrists |= Args[Index].Equals(TEXT("wrists"), ESearchCase::IgnoreCase);
+			bSave |= Args[Index].Equals(TEXT("save"), ESearchCase::IgnoreCase);
+		}
+		if (!Retargeter || !Source || !Target || !FMantleEmoteRetarget::MatchRestHandsInPlace(Retargeter, Source->GetRefSkeleton(), Target->GetRefSkeleton(), Note, Error, bWrists))
 		{
 			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_MATCH_RETARGET failed %s: %s"), *Path, Retargeter ? *Error : TEXT("no such retargeter"));
 			return;
 		}
 		UE_LOG(LogMantleCheckEmote, Display, TEXT("MANTLE_MATCH_RETARGET %s (source %s, target %s): %s"), *Path, *Source->GetPathName(), *Target->GetPathName(), *Note);
-		if (Args.Num() > 3 && Args[3].Equals(TEXT("save"), ESearchCase::IgnoreCase))
+		if (bSave)
 		{
 			UPackage* Package = Retargeter->GetPackage();
 			const FString File = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
@@ -1211,10 +1218,10 @@ namespace MantleEmoteCheckPrivate
 
 	FAutoConsoleCommand GMantleDevMatchRetargetHandsCommand(
 		TEXT("Mantle.Dev.MatchRetargetHands"),
-		TEXT("Mantle.Dev.MatchRetargetHands <Retargeter> <builtin|female|male|<SourceMesh>> <builtin|female|male|<TargetMesh>> [save] -- gives the ")
+		TEXT("Mantle.Dev.MatchRetargetHands <Retargeter> <builtin|female|male|<SourceMesh>> <builtin|female|male|<TargetMesh>> [wrists] [save] -- gives the ")
 		TEXT("retargeter's target retarget pose the source's rest fingers (the hands as they were, so held things stay put) and its finger chains ")
 		TEXT("joint for joint (FMantleEmoteRetarget::MatchRestHandsInPlace). In memory, so a Mantle.Dev.CheckEmote after it shows the result; ")
-		TEXT("with save, the asset is saved."),
+		TEXT("with wrists, hand_l and hand_r also take the source's palm turn; with save, the asset is saved."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunMatchCommand));
 
 	FAutoConsoleCommand GMantleDevCheckEmoteCommand(
