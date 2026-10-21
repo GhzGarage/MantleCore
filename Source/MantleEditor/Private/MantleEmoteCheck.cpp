@@ -449,9 +449,17 @@ FMantleHandMatch FMantleEmoteCheck::CompareHands(TConstArrayView<TArray<FTransfo
 		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(A | B, -1.0, 1.0)));
 	};
 
-	// Wrists from the head, in the head's frame; the source's scaled to the converted body's head height.
+	// Wrists from the chest, in the chest's frame, and their distance from the head; the source's scaled to the converted
+	// body's head height. The chest is the clavicles' parent (spine_03 on the UE4 Mannequin, spine_05 on the others).
 	const int32 SourceHead = Bone(Source, TEXT("head"));
 	const int32 ConvertedHead = Bone(Converted, TEXT("head"));
+	auto Chest = [&Bone](const FReferenceSkeleton& Skeleton)
+	{
+		const int32 Clavicle = Bone(Skeleton, TEXT("clavicle_l"));
+		return Clavicle == INDEX_NONE ? INDEX_NONE : Skeleton.GetRawParentIndex(Clavicle);
+	};
+	const int32 SourceChest = Chest(Source);
+	const int32 ConvertedChest = Chest(Converted);
 	double Scale = 1.0;
 	if (SourceHead != INDEX_NONE && ConvertedHead != INDEX_NONE)
 	{
@@ -462,7 +470,8 @@ FMantleHandMatch FMantleEmoteCheck::CompareHands(TConstArrayView<TArray<FTransfo
 	TArray<TPair<int32, int32>> Wrists;
 	for (const TCHAR* Hand : { TEXT("hand_l"), TEXT("hand_r") })
 	{
-		if (Bone(Source, Hand) != INDEX_NONE && Bone(Converted, Hand) != INDEX_NONE && SourceHead != INDEX_NONE && ConvertedHead != INDEX_NONE)
+		if (Bone(Source, Hand) != INDEX_NONE && Bone(Converted, Hand) != INDEX_NONE && SourceHead != INDEX_NONE && ConvertedHead != INDEX_NONE
+			&& SourceChest != INDEX_NONE && ConvertedChest != INDEX_NONE)
 		{
 			Wrists.Emplace(Bone(Source, Hand), Bone(Converted, Hand));
 		}
@@ -478,19 +487,23 @@ FMantleHandMatch FMantleEmoteCheck::CompareHands(TConstArrayView<TArray<FTransfo
 	{
 		const TArray<FTransform>& S = SourcePoses[Frame];
 		const TArray<FTransform>& C = ConvertedPoses[Frame];
+		double FrameBias = 0.0;
 		for (int32 Index = 0; Index < Joints.Num(); ++Index)
 		{
 			const double Difference = BendAt(C, Joints[Index].ConvertedBones) - BendAt(S, Joints[Index].SourceBones);
-			Bias += Difference;
+			FrameBias += Difference;
 			Error += FMath::Abs(Difference);
 			PerJoint[Index] += FMath::Abs(Difference);
 		}
+		Bias += FrameBias;
+		Out.FrameBendBiasDegrees.Add(FrameBias / FMath::Max(1, Joints.Num()));
 		for (const TPair<int32, int32>& Wrist : Wrists)
 		{
-			const FVector SourceVector = S[SourceHead].GetRotation().UnrotateVector(S[Wrist.Key].GetLocation() - S[SourceHead].GetLocation()) * Scale;
-			const FVector ConvertedVector = C[ConvertedHead].GetRotation().UnrotateVector(C[Wrist.Value].GetLocation() - C[ConvertedHead].GetLocation());
+			const FVector SourceVector = S[SourceChest].GetRotation().UnrotateVector(S[Wrist.Key].GetLocation() - S[SourceChest].GetLocation()) * Scale;
+			const FVector ConvertedVector = C[ConvertedChest].GetRotation().UnrotateVector(C[Wrist.Value].GetLocation() - C[ConvertedChest].GetLocation());
 			WristError += FVector::Dist(SourceVector, ConvertedVector);
-			WristCloser += ConvertedVector.Size() - SourceVector.Size();
+			WristCloser += FVector::Dist(C[Wrist.Value].GetLocation(), C[ConvertedHead].GetLocation())
+				- FVector::Dist(S[Wrist.Key].GetLocation(), S[SourceHead].GetLocation()) * Scale;
 		}
 	}
 	Out.Frames = Frames;
@@ -627,9 +640,15 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 			ConvertedPoses.Add(ClipComponentPose(Clip, DriverBones, Time));
 		}
 		const FMantleHandMatch Hands = CompareHands(SourcePoses, HandsSource->GetRefSkeleton(), ConvertedPoses, DriverBones);
-		Say(FString::Printf(TEXT("Hands: finger bend %+.1f degrees on average against the source (negative: straighter), %.1f degrees mean error over %d joints and %d frames, worst joint %s %.1f degrees; wrists %.1f cm from the source's place relative to the head, %+.1f cm farther from it (negative: closer)"),
+		Say(FString::Printf(TEXT("Hands: finger bend %+.1f degrees on average against the source (negative: straighter), %.1f degrees mean error over %d joints and %d frames, worst joint %s %.1f degrees; wrists %.1f cm from the source's place relative to the chest, %+.1f cm farther from the head (negative: closer)"),
 			Hands.BendBiasDegrees, Hands.BendErrorDegrees, Hands.Joints, Hands.Frames, *Hands.BendWorstJoint.ToString(), Hands.BendWorstDegrees,
 			Hands.WristErrorCm, Hands.WristCloserCm));
+		TArray<FString> Rows = { TEXT("frame,bend_bias_degrees") };
+		for (int32 Frame = 0; Frame < Hands.FrameBendBiasDegrees.Num(); ++Frame)
+		{
+			Rows.Add(FString::Printf(TEXT("%d,%.2f"), Frame, Hands.FrameBendBiasDegrees[Frame]));
+		}
+		FFileHelper::SaveStringArrayToFile(Rows, *FPaths::Combine(Directory, Label + TEXT("_hands.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	}
 
 	// The sheet: the clip on a standard body, posed as the client poses it.
@@ -699,6 +718,7 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 		// Hand close-ups, the source's and the converted side by side: right hand, then left, at three moments.
 		const TArray<float> HandTimes = { Clip.GetDuration() * 0.25f, Clip.GetDuration() * 0.5f, Clip.GetDuration() * 0.75f };
 		TArray<TArray<FColor>> Tiles;
+		FString HandProblems;
 		const int32 HandSize = FMath::Max(256, TileSize * 3 / 4);
 		for (const float Time : HandTimes)
 		{
@@ -726,7 +746,10 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 					}
 					TArray<FColor> Pixels;
 					FString Error;
-					FMantleCosmeticThumbnail::Capture(Shot, HandSize, Pixels, Error);
+					if (!FMantleCosmeticThumbnail::Capture(Shot, HandSize, Pixels, Error))
+					{
+						HandProblems += FString::Printf(TEXT("; %s at %.2f s could not be drawn (%s)"), Hand, Time, *Error);
+					}
 					Tiles.Add(MoveTemp(Pixels));
 					CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 				}
@@ -737,8 +760,8 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 		const TArray<FColor> HandSheet = Tile(Tiles, HandSize, 4, Width, Height);
 		const FString HandsFile = FPaths::Combine(Directory, Label + TEXT("_hands.png"));
 		const bool bHandsWritten = FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Width, Height, HandSheet), *HandsFile);
-		Say(FString::Printf(TEXT("Hand close-ups: %s, each row one moment (%s), columns: source right, converted right, source left, converted left"),
-			bHandsWritten ? *HandsFile : TEXT("NOT WRITTEN"), *DescribeTimes(HandTimes)));
+		Say(FString::Printf(TEXT("Hand close-ups: %s, each row one moment (%s), columns: source right, converted right, source left, converted left%s"),
+			bHandsWritten ? *HandsFile : TEXT("NOT WRITTEN"), *DescribeTimes(HandTimes), *HandProblems));
 	}
 	return true;
 }
