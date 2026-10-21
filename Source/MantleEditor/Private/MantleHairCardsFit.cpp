@@ -73,7 +73,23 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 			HairSections.Add(Section);
 		}
 	}
-	const FMantleHairCapSplit::FResult Split = FMantleHairCapSplit::Split(Out.Positions, HairTriangles, HairSections, Input.SectionNames);
+	FMantleHairCapSplit::FResult Split = FMantleHairCapSplit::Split(Out.Positions, HairTriangles, HairSections, Input.SectionNames);
+	if (Split.bFound)
+	{
+		// A cap hugs the scalp. One big piece that hangs far from the skin is a sheet of long hair, not a cap.
+		TArray<double> CapDistances;
+		for (const uint32 V : Split.CapIndices)
+		{
+			CapDistances.Add(FMath::Abs(Surface.Query(FVector(Out.Positions[V])).SignedDistance));
+		}
+		CapDistances.Sort();
+		if (CapDistances[CapDistances.Num() / 2] > CapMaxMedianDistanceCm)
+		{
+			Out.Notes.Add(FString::Printf(TEXT("Hair cap: the big piece hangs %.1f cm from the head, so it is treated as hair, not a cap."), CapDistances[CapDistances.Num() / 2]));
+			Split = FMantleHairCapSplit::FResult();
+			Split.CardIndices = HairTriangles;
+		}
+	}
 	Out.Notes.Add(Split.Describe());
 	Out.bCapFound = Split.bFound;
 

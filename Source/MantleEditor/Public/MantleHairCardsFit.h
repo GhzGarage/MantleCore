@@ -12,6 +12,9 @@
  */
 struct MANTLEEDITOR_API FMantleHairCardsFit
 {
+	/** A cap's median distance to the skin, after the piece fit, must be at most this to count as a cap, cm. */
+	static constexpr double CapMaxMedianDistanceCm = 3.0;
+
 	struct FInput
 	{
 		/** The head's skin triangles, in cm. */
