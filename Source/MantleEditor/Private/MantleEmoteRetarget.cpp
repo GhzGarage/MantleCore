@@ -256,6 +256,72 @@ namespace MantleEmoteRetargetPrivate
 
 		UObject* Get() const { return Copy; }
 
+		/**
+		 * TRIAL (#108 follow-up E4): every FK Chains op's chains that Which picks get rotation mode Mode (EFKChainRotationMode's
+		 * name, "OneToOne"), through the op's UIKRetargetFKChainsController. The number of chains changed.
+		 */
+		int32 SetFKRotationMode(TFunctionRef<bool(FName)> Which, const FString& Mode) const
+		{
+			int32 Changed = 0;
+			int32 Ops = 0;
+			Call(Controller, Find(TEXT("GetNumRetargetOps")), [](UFunction*, uint8*) {}, [&](UFunction* Function, uint8* Params)
+			{
+				Ops = *Function->GetReturnProperty()->ContainerPtrToValuePtr<int32>(Params);
+			});
+			for (int32 Op = 0; Op < Ops; ++Op)
+			{
+				UObject* OpController = nullptr;
+				Call(Controller, Find(TEXT("GetOpController")), [Op](UFunction* Function, uint8* Params)
+				{
+					*Function->FindPropertyByName(TEXT("InOpIndex"))->ContainerPtrToValuePtr<int32>(Params) = Op;
+				}, [&](UFunction* Function, uint8* Params)
+				{
+					OpController = CastField<FObjectPropertyBase>(Function->GetReturnProperty())->GetObjectPropertyValue_InContainer(Params);
+				});
+				UFunction* GetSettings = OpController ? OpController->FindFunction(TEXT("GetSettings")) : nullptr;
+				UFunction* SetSettings = OpController ? OpController->FindFunction(TEXT("SetSettings")) : nullptr;
+				if (!GetSettings || !SetSettings || OpController->GetClass()->GetName() != TEXT("IKRetargetFKChainsController"))
+				{
+					continue;
+				}
+				const FStructProperty* Returned = CastField<FStructProperty>(GetSettings->GetReturnProperty());
+				const FStructProperty* Given = CastField<FStructProperty>(SetSettings->FindPropertyByName(TEXT("InSettings")));
+				const UScriptStruct* Struct = Returned ? Returned->Struct : nullptr;
+				const FArrayProperty* Chains = Struct ? CastField<FArrayProperty>(Struct->FindPropertyByName(TEXT("ChainsToRetarget"))) : nullptr;
+				const FStructProperty* Chain = Chains ? CastField<FStructProperty>(Chains->Inner) : nullptr;
+				const FNameProperty* ChainName = Chain ? CastField<FNameProperty>(Chain->Struct->FindPropertyByName(TEXT("TargetChainName"))) : nullptr;
+				const FEnumProperty* RotationMode = Chain ? CastField<FEnumProperty>(Chain->Struct->FindPropertyByName(TEXT("RotationMode"))) : nullptr;
+				const int64 Value = RotationMode ? RotationMode->GetEnum()->GetValueByNameString(Mode) : INDEX_NONE;
+				if (!Given || !ChainName || Value == INDEX_NONE)
+				{
+					continue;
+				}
+				uint8* Settings = static_cast<uint8*>(FMemory::Malloc(Struct->GetStructureSize(), Struct->GetMinAlignment()));
+				Struct->InitializeStruct(Settings);
+				Call(OpController, GetSettings, [](UFunction*, uint8*) {}, [&](UFunction*, uint8* Params)
+				{
+					Struct->CopyScriptStruct(Settings, Returned->ContainerPtrToValuePtr<void>(Params));
+				});
+				FScriptArrayHelper Array(Chains, Chains->ContainerPtrToValuePtr<void>(Settings));
+				for (int32 Index = 0; Index < Array.Num(); ++Index)
+				{
+					uint8* Element = Array.GetRawPtr(Index);
+					if (Which(ChainName->GetPropertyValue_InContainer(Element)))
+					{
+						RotationMode->GetUnderlyingProperty()->SetIntPropertyValue(RotationMode->ContainerPtrToValuePtr<void>(Element), Value);
+						++Changed;
+					}
+				}
+				Call(OpController, SetSettings, [&](UFunction*, uint8* Params)
+				{
+					Struct->CopyScriptStruct(Given->ContainerPtrToValuePtr<void>(Params), Settings);
+				}, [](UFunction*, uint8*) {});
+				Struct->DestroyStruct(Settings);
+				FMemory::Free(Settings);
+			}
+			return Changed;
+		}
+
 		/** The copy, rooted, now the caller's (FMantleEmoteRetarget::ReleaseRestHandsCopy). */
 		UObject* Detach()
 		{
@@ -383,6 +449,48 @@ TArray<FName> FMantleEmoteRetarget::HandBones()
 			for (const TCHAR* Joint : { TEXT("metacarpal"), TEXT("01"), TEXT("02"), TEXT("03") })
 			{
 				Out.Add(FName(FString::Printf(TEXT("%s_%s_%s"), Finger, Joint, Side)));
+			}
+		}
+	}
+	return Out;
+}
+
+TArray<FName> FMantleEmoteRetarget::BodyBones(const FString& Sets)
+{
+	TArray<FString> Names;
+	Sets.ParseIntoArray(Names, TEXT(","));
+	TArray<FName> Out;
+	for (const FString& Set : Names)
+	{
+		if (Set == TEXT("hands"))
+		{
+			Out.Append(HandBones());
+			continue;
+		}
+		if (Set == TEXT("spine"))
+		{
+			for (const TCHAR* Bone : { TEXT("pelvis"), TEXT("spine_01"), TEXT("spine_02"), TEXT("spine_03"), TEXT("spine_04"), TEXT("spine_05"), TEXT("neck_01"),
+				TEXT("neck_02"), TEXT("head") })
+			{
+				Out.Add(FName(Bone));
+			}
+			continue;
+		}
+		for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
+		{
+			if (Set == TEXT("arms"))
+			{
+				for (const TCHAR* Bone : { TEXT("clavicle"), TEXT("upperarm"), TEXT("lowerarm") })
+				{
+					Out.Add(FName(FString::Printf(TEXT("%s_%s"), Bone, Side)));
+				}
+			}
+			else if (Set == TEXT("legs"))
+			{
+				for (const TCHAR* Bone : { TEXT("thigh"), TEXT("calf"), TEXT("foot"), TEXT("ball") })
+				{
+					Out.Add(FName(FString::Printf(TEXT("%s_%s"), Bone, Side)));
+				}
 			}
 		}
 	}
@@ -709,7 +817,7 @@ USkeletalMesh* FMantleEmoteRetarget::FindSourceMesh(USkeleton* Skeleton)
 }
 
 UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote,
-	FString& OutError)
+	FString& OutError, TConstArrayView<FName> Bones, const FString& FingerRotationMode)
 {
 	using namespace MantleEmoteRetargetPrivate;
 	FRetargeterCopy Copy;
@@ -719,13 +827,23 @@ UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FRef
 	}
 	double Largest = 0.0;
 	const TMap<FName, FQuat> Offsets = MatchRestRotations(Source, Copy.OffsetsOf(Source, FRetargeterCopy::Source), Target,
-		Copy.OffsetsOf(Target, FRetargeterCopy::Target), HandBones(), &Largest);
+		Copy.OffsetsOf(Target, FRetargeterCopy::Target), Bones.Num() > 0 ? Bones : TConstArrayView<FName>(HandBones()), &Largest);
 	for (const TPair<FName, FQuat>& Offset : Offsets)
 	{
 		Copy.SetTargetOffset(Offset.Key, Offset.Value);
 	}
-	OutNote = FString::Printf(TEXT("%d hand and finger bones of the target retarget pose given the source's rest shape (largest change %.1f degrees)"),
-		Offsets.Num(), Largest);
+	OutNote = FString::Printf(TEXT("%d %s bones of the target retarget pose given the source's rest shape (largest change %.1f degrees)"),
+		Offsets.Num(), Bones.Num() > 0 ? TEXT("chosen") : TEXT("hand and finger"), Largest);
+	if (!FingerRotationMode.IsEmpty())
+	{
+		const int32 Changed = Copy.SetFKRotationMode([](const FName Chain)
+		{
+			const FString Name = Chain.ToString();
+			return !Name.Contains(TEXT("Metacarpal")) && (Name.Contains(TEXT("Thumb")) || Name.Contains(TEXT("Index")) || Name.Contains(TEXT("Middle"))
+				|| Name.Contains(TEXT("Ring")) || Name.Contains(TEXT("Pinky")));
+		}, FingerRotationMode);
+		OutNote += FString::Printf(TEXT("; TRIAL %d finger chains set to %s"), Changed, *FingerRotationMode);
+	}
 	return Copy.Detach();
 }
 
@@ -796,7 +914,12 @@ bool FMantleEmoteRetarget::RetargetAndSample(UAnimSequence* Sequence, const FStr
 	// retarget runs through a copy whose UEFN pose has the source's rest arms, hands and fingers.
 	FString MatchError;
 	FString MatchNote;
-	UObject* const Matched = MakeRestHandsCopy(Retargeter, SourceMesh->GetRefSkeleton(), TargetMesh->GetRefSkeleton(), MatchNote, MatchError);
+	// TRIAL (#108 follow-up, removed before merge): MANTLE_EMOTE_REST=hands,legs,spine,arms picks the matched bone sets;
+	// MANTLE_EMOTE_FINGERS=OneToOne the finger chains' rotation mode.
+	const FString RestSets = FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_REST"));
+	const TArray<FName> RestBones = RestSets.IsEmpty() ? TArray<FName>() : BodyBones(RestSets);
+	UObject* const Matched = MakeRestHandsCopy(Retargeter, SourceMesh->GetRefSkeleton(), TargetMesh->GetRefSkeleton(), MatchNote, MatchError, RestBones,
+		FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_FINGERS")));
 	if (!Matched)
 	{
 		OutError = FString::Printf(TEXT("the retargeter's rest hands could not be matched (%s): enable the IK Rig plugin and restart the editor."), *MatchError);

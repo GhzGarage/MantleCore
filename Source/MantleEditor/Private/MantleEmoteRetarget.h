@@ -86,7 +86,11 @@ struct FMantleEmoteRetarget
 	 * Source and Target: the meshes' reference skeletons the retarget runs between. Rooted until ReleaseRestHandsCopy; the
 	 * shipped asset is never touched. Null with OutError when IK Rig's controller cannot edit it. Game thread.
 	 */
-	static UObject* MakeRestHandsCopy(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError);
+	static UObject* MakeRestHandsCopy(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError,
+		TConstArrayView<FName> Bones = {}, const FString& FingerRotationMode = FString());
+
+	/** TRIAL (#108 follow-up): the bones of comma-separated sets hands, spine (pelvis to head), arms (clavicle to lower arm), legs (thigh to ball). */
+	static TArray<FName> BodyBones(const FString& Sets);
 	static void ReleaseRestHandsCopy(UObject* Copy);
 
 	/**

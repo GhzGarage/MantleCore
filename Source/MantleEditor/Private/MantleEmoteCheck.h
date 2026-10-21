@@ -50,6 +50,40 @@ struct FMantleHandMatch
 	double WristCloserCm = 0.0;
 };
 
+/** One body part of FMantleBodyMatch: its measures' means over the frames (degrees, or cm for a place). */
+struct FMantleBodyPart
+{
+	FString Name;
+	int32 Measures = 0;
+	double Mean = 0.0;
+	double Worst = 0.0;
+	FString WorstMeasure;
+};
+
+/**
+ * How a converted clip's whole body compares with the source's over a clip (FMantleEmoteCheck::CompareBodies), part by
+ * part. Directions: the angle between the source's and the converted's line from one joint to another (pelvis to chest,
+ * upper arm to lower arm, foot to ball...), so neither skeleton's bone axes matter. Head turn: the angle between the two
+ * heads' turns from their own reference pose. Places: hands, feet and head from the pelvis, the source's scaled by the
+ * pelvis heights (cm). Feet: on the frames the source's foot or ball is planted (moves under half a centimetre), how far
+ * the converted one slides and how much higher it is than the source's (scaled).
+ */
+struct FMantleBodyMatch
+{
+	int32 Frames = 0;
+	TArray<FMantleBodyPart> Parts;
+
+	/** Every measure's mean over the frames, by label ("upperarm_l>lowerarm_l", "hand_l@"). */
+	TArray<TPair<FString, double>> Measures;
+
+	int32 PlantedFrames = 0;
+	double FootSlideCm = 0.0;
+	double FootHeightCm = 0.0;
+
+	/** One line for the notes. */
+	FString Describe() const;
+};
+
 /**
  * #283 emote trials: Mantle.Dev.CheckEmote <AnimSequence> <Directory> [Label] [female|male|<SkeletalMesh>] [size]. Runs the
  * Cosmetics panel's real emote export (FMantleEditorActions::MakeCosmeticDraft, FMantleCosmeticExport::Build: identify the
@@ -78,6 +112,10 @@ struct FMantleEmoteCheck
 	 * Converted, in each skeleton's bone order). Bones either skeleton lacks are skipped. Pure.
 	 */
 	static FMantleHandMatch CompareHands(TConstArrayView<TArray<FTransform>> SourcePoses, const FReferenceSkeleton& Source,
+		TConstArrayView<TArray<FTransform>> ConvertedPoses, const FReferenceSkeleton& Converted);
+
+	/** FMantleBodyMatch of two clips sampled at the same moments, as CompareHands takes them. Pure. */
+	static FMantleBodyMatch CompareBodies(TConstArrayView<TArray<FTransform>> SourcePoses, const FReferenceSkeleton& Source,
 		TConstArrayView<TArray<FTransform>> ConvertedPoses, const FReferenceSkeleton& Converted);
 
 	/** Component-space pose of Skeleton from local transforms (LocalOf gives a bone's local transform). Pure. */
