@@ -1,4 +1,5 @@
 // Copyright Joshua Eger. All Rights Reserved.
+#include "MantleAssetCleanup.h"
 #include "MantleVehicleConverter.h"
 #include "MantleVehicleScratchBody.h"
 #include "MantleVehicleSource.h"
@@ -14,7 +15,6 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
-#include "PackageTools.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -208,7 +208,7 @@ namespace MantleVehicleExportScaleTestPrivate
 					FAssetRegistryModule::AssetDeleted(Asset);
 				}
 				FText Error;
-				UPackageTools::UnloadPackages({ Package }, Error, true);
+				FMantleAssetCleanup::UnloadPackagesClean({ Package }, Error);
 			}
 			if (!Folder.IsEmpty())
 			{
@@ -466,7 +466,7 @@ bool FMantleVehicleSourceFirearmAimArcTest::RunTest(const FString& Parameters)
 	}
 	FText UnloadError;
 	if (!TestTrue(*FString::Printf(TEXT("the saved source unloads before reopen (%s)"), *UnloadError.ToString()),
-		UPackageTools::UnloadPackages({ Package }, UnloadError, true)))
+		FMantleAssetCleanup::UnloadPackagesClean({ Package }, UnloadError)))
 	{
 		return false;
 	}

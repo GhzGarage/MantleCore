@@ -27,7 +27,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Misc/PackageName.h"
 #include "Modules/ModuleManager.h"
-#include "ObjectTools.h"
+#include "MantleAssetCleanup.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PreviewScene.h"
 #include "ReferenceSkeleton.h"
@@ -853,7 +853,7 @@ void FMantleMetaHumanSteps::Discard(TArray<TWeakObjectPtr<UObject>>& Made)
 	Made.Reset();
 	if (Doomed.Num() > 0)
 	{
-		const int32 Deleted = ObjectTools::ForceDeleteObjects(Doomed, /*ShowConfirmation*/ false);
+		const int32 Deleted = FMantleAssetCleanup::MoveAside(Doomed);
 		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT discarded %d of %d assets a failed MetaHuman step made"), Deleted, Doomed.Num());
 	}
 }

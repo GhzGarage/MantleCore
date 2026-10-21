@@ -24,7 +24,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/ScopedSlowTask.h"
 #include "Modules/ModuleManager.h"
-#include "ObjectTools.h"
+#include "MantleAssetCleanup.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "SkinnedAssetCompiler.h"
@@ -1062,7 +1062,7 @@ int32 FMantleAvatarConverter::RemovePreviousOutput(const FString& OutputFolder, 
 	{
 		return 0;
 	}
-	const int32 Deleted = ObjectTools::ForceDeleteObjects(Doomed, false);
+	const int32 Deleted = FMantleAssetCleanup::MoveAside(Doomed);
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT replaced the earlier output of %s: %d of %d assets under %s deleted"), *Key, Deleted, Doomed.Num(), *OutputFolder);
 	return Deleted;
 }

@@ -12,7 +12,7 @@
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/PackageName.h"
-#include "ObjectTools.h"
+#include "MantleAssetCleanup.h"
 #include "SkinnedAssetCompiler.h"
 
 const FName FMantleAvatarBakeFixer::KindMesh(TEXT("Mesh"));
@@ -407,7 +407,7 @@ bool FMantleAvatarBakeFixer::ApplyToPart(FMantleConvertContext& Context, int32 P
 		{
 			Context.CreatedAssets.RemoveAll([Work](const TWeakObjectPtr<UObject>& Created) { return Created.Get() == Work; });
 			const TArray<UObject*> Doomed = { Work };
-			ObjectTools::ForceDeleteObjects(Doomed, false);
+			FMantleAssetCleanup::MoveAside(Doomed);
 		}
 	};
 	TArray<FSkeletalMaterial> Materials = Work->GetMaterials();

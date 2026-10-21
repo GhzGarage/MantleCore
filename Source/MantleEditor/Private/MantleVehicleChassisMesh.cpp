@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleVehicleChassisMesh.h"
+#include "MantleAssetCleanup.h"
 
 #include "Animation/Skeleton.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -12,7 +13,6 @@
 #include "MeshDescription.h"
 #include "MeshUVChannelInfo.h"
 #include "Misc/PackageName.h"
-#include "ObjectTools.h"
 #include "ReferenceSkeleton.h"
 #include "Rendering/SkeletalMeshLODModel.h"
 #include "Rendering/SkeletalMeshModel.h"
@@ -71,7 +71,7 @@ namespace MantleVehicleChassisMeshPrivate
 		}
 		if (Doomed.Num() > 0)
 		{
-			ObjectTools::ForceDeleteObjects(Doomed, false);
+			FMantleAssetCleanup::MoveAside(Doomed, /*bDeleteFiles*/ false);
 		}
 		// A file the delete left behind (a package the registry did not know) would block the save.
 		for (const TPair<FString, FName>& Asset : Assets)

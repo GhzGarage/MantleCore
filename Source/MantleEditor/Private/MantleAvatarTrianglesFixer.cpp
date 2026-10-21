@@ -13,7 +13,7 @@
 #include "LODUtilities.h"
 #include "MeshDescription.h"
 #include "Modules/ModuleManager.h"
-#include "ObjectTools.h"
+#include "MantleAssetCleanup.h"
 #include "SkeletalMeshReductionSettings.h"
 #include "SkeletalMeshTypes.h"
 #include "SkinnedAssetCompiler.h"
@@ -308,7 +308,7 @@ bool FMantleAvatarTrianglesFixer::Apply(const FMantleConvertFix& Fix, FMantleCon
 		{
 			Context.CreatedAssets.RemoveAll([Work](const TWeakObjectPtr<UObject>& Created) { return Created.Get() == Work; });
 			const TArray<UObject*> Doomed = { Work };
-			ObjectTools::ForceDeleteObjects(Doomed, false);
+			FMantleAssetCleanup::MoveAside(Doomed);
 		}
 	};
 	const bool bDone = Plan.PromoteLOD != INDEX_NONE ? PromoteLOD(Work, Plan.PromoteLOD, OutError) : ReduceLODZero(Work, Plan.Target, OutError);

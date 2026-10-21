@@ -1,4 +1,5 @@
 // Copyright Joshua Eger. All Rights Reserved.
+#include "MantleAssetCleanup.h"
 #include "MantleChassisDerive.h"
 #include "MantleChassisSpec.h"
 #include "MantlePlaceValidator.h"
@@ -29,7 +30,6 @@
 #include "LevelEditorViewport.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"
-#include "ObjectTools.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -203,7 +203,7 @@ bool FMantleVehicleBuilderImportFbxTest::RunTest(const FString& Parameters)
 	Cleanup.RemoveAll([](UObject* Object) { return Object == nullptr; });
 	if (Cleanup.Num() > 0)
 	{
-		ObjectTools::DeleteObjectsUnchecked(Cleanup);
+		FMantleAssetCleanup::MoveAside(Cleanup);
 	}
 	return true;
 }
