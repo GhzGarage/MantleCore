@@ -244,6 +244,10 @@ namespace MantleEmoteCheckPrivate
 				OutProblems += FString::Printf(TEXT("; the moment at %.2f s could not be drawn (%s)"), Time, *Error);
 			}
 			Tiles.Add(MoveTemp(Pixels));
+			// Each capture's scene, components and render target go now, not at the next idle collection: a run of
+			// sheets otherwise grows the GPU's memory until the device is lost.
+			Subject.Pose = nullptr;
+			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 		}
 		int32 Width = 0;
 		int32 Height = 0;
