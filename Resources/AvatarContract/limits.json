@@ -789,7 +789,7 @@
     },
     "emote": {
       "format": "MAN1",
-      "maxDurationSeconds": 10,
+      "maxDurationSeconds": 30,
       "frameRate": 30,
       "skeletons": [
         "uefn"
