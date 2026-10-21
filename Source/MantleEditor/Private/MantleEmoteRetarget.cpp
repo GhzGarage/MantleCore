@@ -257,10 +257,11 @@ namespace MantleEmoteRetargetPrivate
 		UObject* Get() const { return Copy; }
 
 		/**
-		 * TRIAL (#108 follow-up E4): every FK Chains op's chains that Which picks get rotation mode Mode (EFKChainRotationMode's
-		 * name, "OneToOne"), through the op's UIKRetargetFKChainsController. The number of chains changed.
+		 * Every FK Chains op's chains that Which picks (by target chain name) edited by Edit (the chain's
+		 * FRetargetFKChainSettings, its struct property and memory), through the op's UIKRetargetFKChainsController. The
+		 * number of chains edited.
 		 */
-		int32 SetFKRotationMode(TFunctionRef<bool(FName)> Which, const FString& Mode) const
+		int32 EditFKChains(TFunctionRef<bool(FName)> Which, TFunctionRef<void(const UScriptStruct& Chain, uint8* Element)> Edit) const
 		{
 			int32 Changed = 0;
 			int32 Ops = 0;
@@ -290,9 +291,7 @@ namespace MantleEmoteRetargetPrivate
 				const FArrayProperty* Chains = Struct ? CastField<FArrayProperty>(Struct->FindPropertyByName(TEXT("ChainsToRetarget"))) : nullptr;
 				const FStructProperty* Chain = Chains ? CastField<FStructProperty>(Chains->Inner) : nullptr;
 				const FNameProperty* ChainName = Chain ? CastField<FNameProperty>(Chain->Struct->FindPropertyByName(TEXT("TargetChainName"))) : nullptr;
-				const FEnumProperty* RotationMode = Chain ? CastField<FEnumProperty>(Chain->Struct->FindPropertyByName(TEXT("RotationMode"))) : nullptr;
-				const int64 Value = RotationMode ? RotationMode->GetEnum()->GetValueByNameString(Mode) : INDEX_NONE;
-				if (!Given || !ChainName || Value == INDEX_NONE)
+				if (!Given || !ChainName)
 				{
 					continue;
 				}
@@ -308,7 +307,7 @@ namespace MantleEmoteRetargetPrivate
 					uint8* Element = Array.GetRawPtr(Index);
 					if (Which(ChainName->GetPropertyValue_InContainer(Element)))
 					{
-						RotationMode->GetUnderlyingProperty()->SetIntPropertyValue(RotationMode->ContainerPtrToValuePtr<void>(Element), Value);
+						Edit(*Chain->Struct, Element);
 						++Changed;
 					}
 				}
@@ -834,16 +833,42 @@ UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FRef
 	}
 	OutNote = FString::Printf(TEXT("%d %s bones of the target retarget pose given the source's rest shape (largest change %.1f degrees)"),
 		Offsets.Num(), Bones.Num() > 0 ? TEXT("chosen") : TEXT("hand and finger"), Largest);
-	if (!FingerRotationMode.IsEmpty())
+	// The finger chains joint for joint (the default, Interpolated, samples the source finger by length, so each joint of
+	// a finger with other proportions gets a mix of two joints' bend). A source without metacarpals (the UE4 Mannequin)
+	// gives the target's metacarpal chains nothing to follow: the shipped retargeters map them to the whole finger, and a
+	// one-bone chain takes the fingertip's bend, which folds the palm (40 degrees and more in the trials). They hold the
+	// matched rest pose instead.
+	const bool bSourceMetacarpals = Source.FindRawBoneIndex(FName(TEXT("index_metacarpal_l"))) != INDEX_NONE;
+	const FString Mode = FingerRotationMode.IsEmpty() ? FString(TEXT("OneToOne")) : FingerRotationMode;
+	int32 Fingers = 0;
+	int32 Held = 0;
+	Copy.EditFKChains([](const FName Chain)
 	{
-		const int32 Changed = Copy.SetFKRotationMode([](const FName Chain)
+		const FString Name = Chain.ToString();
+		return Name.Contains(TEXT("Thumb")) || Name.Contains(TEXT("Index")) || Name.Contains(TEXT("Middle")) || Name.Contains(TEXT("Ring")) || Name.Contains(TEXT("Pinky"));
+	}, [&](const UScriptStruct& Chain, uint8* Element)
+	{
+		const FNameProperty* ChainName = CastField<FNameProperty>(Chain.FindPropertyByName(TEXT("TargetChainName")));
+		const bool bMetacarpal = ChainName && ChainName->GetPropertyValue_InContainer(Element).ToString().Contains(TEXT("Metacarpal"));
+		if (bMetacarpal && !bSourceMetacarpals)
 		{
-			const FString Name = Chain.ToString();
-			return !Name.Contains(TEXT("Metacarpal")) && (Name.Contains(TEXT("Thumb")) || Name.Contains(TEXT("Index")) || Name.Contains(TEXT("Middle"))
-				|| Name.Contains(TEXT("Ring")) || Name.Contains(TEXT("Pinky")));
-		}, FingerRotationMode);
-		OutNote += FString::Printf(TEXT("; TRIAL %d finger chains set to %s"), Changed, *FingerRotationMode);
-	}
+			if (const FBoolProperty* EnableFK = CastField<FBoolProperty>(Chain.FindPropertyByName(TEXT("EnableFK"))))
+			{
+				EnableFK->SetPropertyValue_InContainer(Element, false);
+				++Held;
+			}
+			return;
+		}
+		const FEnumProperty* RotationMode = CastField<FEnumProperty>(Chain.FindPropertyByName(TEXT("RotationMode")));
+		const int64 Value = RotationMode ? RotationMode->GetEnum()->GetValueByNameString(Mode) : INDEX_NONE;
+		if (Value != INDEX_NONE)
+		{
+			RotationMode->GetUnderlyingProperty()->SetIntPropertyValue(RotationMode->ContainerPtrToValuePtr<void>(Element), Value);
+			++Fingers;
+		}
+	});
+	OutNote += FString::Printf(TEXT("; %d finger chains retargeted joint for joint (%s)%s"), Fingers, *Mode,
+		Held > 0 ? *FString::Printf(TEXT(", %d metacarpal chains held at the rest pose (the source has no metacarpals)"), Held) : TEXT(""));
 	return Copy.Detach();
 }
 
