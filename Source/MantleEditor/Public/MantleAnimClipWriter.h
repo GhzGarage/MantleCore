@@ -8,8 +8,12 @@ class FMantleAvatarContract;
 class UAnimSequence;
 class USkeletalMesh;
 
-/** One bone's keys in an emote: local transforms in Unreal's frame and units. */
-struct MANTLEEDITOR_API FMantleAnimClipTrack
+/**
+ * One bone's keys in an emote: local transforms in Unreal's frame and units. Named apart from MantleRuntime's reader types
+ * (MantleAnimClip.h's FMantleAnimClipTrack and FMantleAnimClipEvent), so the writer and the reader can meet in one
+ * translation unit (MantleEditor builds as a unity build; the emote check decodes what it encodes).
+ */
+struct MANTLEEDITOR_API FMantleAnimClipTrackData
 {
 	FName Bone;
 
@@ -20,7 +24,7 @@ struct MANTLEEDITOR_API FMantleAnimClipTrack
 	TArray<FVector3f> Translations;
 };
 
-struct MANTLEEDITOR_API FMantleAnimClipEvent
+struct MANTLEEDITOR_API FMantleAnimClipEventData
 {
 	float TimeSeconds = 0.0f;
 	FString Name;
@@ -31,8 +35,8 @@ struct MANTLEEDITOR_API FMantleAnimClipData
 {
 	float FrameRate = 30.0f;
 	int32 FrameCount = 0;
-	TArray<FMantleAnimClipTrack> Tracks;
-	TArray<FMantleAnimClipEvent> Events;
+	TArray<FMantleAnimClipTrackData> Tracks;
+	TArray<FMantleAnimClipEventData> Events;
 
 	/**
 	 * A place clip's skeleton (#469, MAN1 flag bit 0): the bone table of the mesh it was sampled over, parent-first,

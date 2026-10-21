@@ -394,15 +394,18 @@ bool FMantleCosmeticThumbnail::Capture(const FMantleThumbnailSubject& Subject, i
 	// What the picture draws, and what each piece is, for the materials' wait and the log.
 	TArray<TPair<UPrimitiveComponent*, const UObject*>> Drawn;
 
-	// The reference pose: no animation, no post-process Blueprint (MetaHuman's correctives), LOD 0.
+	// The reference pose (unless Subject.Pose poses them): no animation, no post-process Blueprint (MetaHuman's correctives), LOD 0.
+	TArray<USkeletalMeshComponent*> SkeletalComponents;
 	for (int32 Index = 0; Index < Subject.SkeletalMeshes.Num(); ++Index)
 	{
 		USkeletalMesh* Mesh = Subject.SkeletalMeshes[Index];
+		SkeletalComponents.Add(nullptr);
 		if (!Mesh)
 		{
 			continue;
 		}
 		USkeletalMeshComponent* Component = NewObject<USkeletalMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+		SkeletalComponents.Last() = Component;
 		Component->SetDisablePostProcessBlueprint(true);
 		Component->SetSkeletalMeshAsset(Mesh);
 		Component->SetForcedLOD(1);
@@ -420,6 +423,10 @@ bool FMantleCosmeticThumbnail::Capture(const FMantleThumbnailSubject& Subject, i
 				}
 			}
 		}
+	}
+	if (Subject.Pose)
+	{
+		Subject.Pose(Scene, SkeletalComponents);
 	}
 	if (Subject.StaticMesh)
 	{
