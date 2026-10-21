@@ -2475,14 +2475,17 @@ bool FMantlePlaceExporter::ReadPhysics(const UStaticMeshComponent* Component, FM
 	// Starts anchored when its actor carries the MantleAnchored tag (MantlePhysicsAnchoredTag).
 	const AActor* Owner = Component->GetOwner();
 	OutPhysics.bSimulate = !(Owner && Owner->ActorHasTag(MantlePhysicsAnchoredTag()));
-	// The mass the creator saw: the override when set, else what the editor computes from the
-	// mesh's collision. None at all (no collision) leaves it to the runtime.
-	const double Mass = Body.bOverrideMass
-		? static_cast<double>(Body.GetMassOverride())
-		: static_cast<double>(const_cast<UStaticMeshComponent*>(Component)->CalculateMass());
-	if (Mass > 0.0)
+	// A mass only when the creator set Mass Override. Otherwise it stays unset so the game computes it
+	// from the collision volume and the physical material's density, and floats or sinks by that density.
+	// The editor's CalculateMass is lightened (a 1 m metal crate reads 826 kg), so sending it would
+	// make the game float things that should sink.
+	if (Body.bOverrideMass)
 	{
-		OutPhysics.Mass = FMath::Clamp(Mass, FMantlePlaceLimits::MinPhysicsMass, FMantlePlaceLimits::MaxPhysicsMass);
+		const double Mass = static_cast<double>(Body.GetMassOverride());
+		if (Mass > 0.0)
+		{
+			OutPhysics.Mass = FMath::Clamp(Mass, FMantlePlaceLimits::MinPhysicsMass, FMantlePlaceLimits::MaxPhysicsMass);
+		}
 	}
 	OutPhysics.LinearDamping = FMath::Clamp(static_cast<double>(Body.LinearDamping), 0.0, FMantlePlaceLimits::MaxPhysicsDamping);
 	OutPhysics.AngularDamping = FMath::Clamp(static_cast<double>(Body.AngularDamping), 0.0, FMantlePlaceLimits::MaxPhysicsDamping);
