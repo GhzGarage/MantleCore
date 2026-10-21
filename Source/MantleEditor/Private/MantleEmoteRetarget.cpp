@@ -14,6 +14,7 @@
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "ContentBrowserItemPath.h"
 #include "ContentBrowserModule.h"
 #include "Engine/SkeletalMesh.h"
 #include "HAL/PlatformTime.h"
@@ -489,7 +490,7 @@ bool FMantleEmoteRetarget::RetargetThrough(UAnimSequence* Sequence, USkeletalMes
 	IContentBrowserSingleton& Browser = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser")).Get();
 	TArray<FAssetData> WasSelected;
 	Browser.GetSelectedAssets(WasSelected);
-	const FString WasFolder = Browser.GetCurrentPath(EContentBrowserPathType::Internal);
+	const FString WasFolder = Browser.GetCurrentPath().GetInternalPathString();
 
 	TArray<FAssetData> Created;
 	{
