@@ -1303,6 +1303,11 @@ void FMantleApiClient::ServerChatSystemToAsync(const FString& Text, const TArray
 	SendServerTokenRequest(TEXT("/server/chat/system"), BuildServerChatSystemBody(Text, FString(), PlayerIds), OnDone);
 }
 
+void FMantleApiClient::ServerHttpSummaryAsync(const FString& BodyJson, FMantleApiCallback OnDone)
+{
+	SendServerTokenRequest(TEXT("/server/http/summary"), BodyJson, OnDone);
+}
+
 void FMantleApiClient::ServerChatIngestAsync(const FString& BodyJson, FMantleApiCallback OnDone)
 {
 	SendServerTokenRequest(TEXT("/server/chat/messages/ingest"), BodyJson, OnDone);

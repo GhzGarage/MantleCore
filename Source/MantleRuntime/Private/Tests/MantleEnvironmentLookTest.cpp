@@ -185,12 +185,12 @@ bool FMantleEnvironmentExposureSettingsTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("nor the minimum"), Settings.bOverride_AutoExposureMinBrightness);
 		TestFalse(TEXT("nor the maximum"), Settings.bOverride_AutoExposureMaxBrightness);
 	}
-	// A script's bias alone is what it always was.
+	// A script's bias adds to the game's own exposure.
 	{
 		FPostProcessSettings Settings;
-		UMantleEnvironmentSubsystem::ApplyExposureSettings(Settings, 2.0f, TOptional<FMantleExposureSettings>(), EngineBias);
+		UMantleEnvironmentSubsystem::ApplyExposureSettings(Settings, 0.5f, TOptional<FMantleExposureSettings>(), EngineBias);
 		TestTrue(TEXT("a script's bias is overridden"), Settings.bOverride_AutoExposureBias);
-		TestEqual(TEXT("as it is"), Settings.AutoExposureBias, 2.0f);
+		TestEqual(TEXT("the game's own plus the script's"), Settings.AutoExposureBias, EngineBias + 0.5f);
 		TestFalse(TEXT("with the metering left alone"), Settings.bOverride_AutoExposureMethod);
 	}
 	// Fixed with a bias: the compensation only, the game's own plus the bias.
@@ -224,7 +224,7 @@ bool FMantleEnvironmentExposureSettingsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("an unset end is the default"), static_cast<double>(Settings.AutoExposureMaxBrightness), DefaultAutoExposureMax);
 		TestEqual(TEXT("the bias is relative to the game's own"), Settings.AutoExposureBias, EngineBias - 1.0f);
 		UMantleEnvironmentSubsystem::ApplyExposureSettings(Settings, 3.0f, Ranged, EngineBias);
-		TestEqual(TEXT("a script's bias replaces it"), Settings.AutoExposureBias, 3.0f);
+		TestEqual(TEXT("a script's bias replaces the place's, on the game's own"), Settings.AutoExposureBias, EngineBias + 3.0f);
 		TestTrue(TEXT("the range stays"), Settings.bOverride_AutoExposureMinBrightness && Settings.AutoExposureMinBrightness == 0.5f);
 	}
 	// The client's lift adds to a fixed exposure, whoever set it, and leaves an auto one alone.
@@ -237,7 +237,7 @@ bool FMantleEnvironmentExposureSettingsTest::RunTest(const FString& Parameters)
 		UMantleEnvironmentSubsystem::ApplyExposureSettings(Settings, 0.0f, FixedBiased, EngineBias, 1.5f);
 		TestEqual(TEXT("on top of the place's bias"), Settings.AutoExposureBias, EngineBias + 2.0f);
 		UMantleEnvironmentSubsystem::ApplyExposureSettings(Settings, 2.0f, TOptional<FMantleExposureSettings>(), EngineBias, 1.5f);
-		TestEqual(TEXT("and of a script's"), Settings.AutoExposureBias, 3.5f);
+		TestEqual(TEXT("and of a script's"), Settings.AutoExposureBias, EngineBias + 3.5f);
 		UMantleEnvironmentSubsystem::ApplyExposureSettings(Settings, 0.0f, Auto, EngineBias, 1.5f);
 		TestEqual(TEXT("an auto exposure takes none"), Settings.AutoExposureBias, EngineBias);
 	}

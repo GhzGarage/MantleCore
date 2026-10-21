@@ -1185,11 +1185,11 @@ void UMantleEnvironmentSubsystem::ApplyExposureSettings(FPostProcessSettings& Se
 	// A fixed exposure's lift (SetExposureLift); an auto one adapts by itself.
 	const float FixedLift = bAuto ? 0.0f : Lift;
 
-	// The exposure compensation: a script's non-zero value, else the game's own plus the place's bias; then the lift.
+	// The exposure compensation: the game's own plus a script's non-zero value (which replaces the place's bias while set,
+	// else the place's bias); then the lift. A script's 0 is the game's own, so +1 doubles the brightness.
+	const float PlaceBias = Exposure.IsSet() ? static_cast<float>(Exposure->Bias) : 0.0f;
 	Settings.bOverride_AutoExposureBias = ScriptBias != 0.0f || bBias || bAuto || FixedLift != 0.0f;
-	Settings.AutoExposureBias = (ScriptBias != 0.0f
-		? ScriptBias
-		: EngineBias + (Exposure.IsSet() ? static_cast<float>(Exposure->Bias) : 0.0f)) + FixedLift;
+	Settings.AutoExposureBias = EngineBias + (ScriptBias != 0.0f ? ScriptBias : PlaceBias) + FixedLift;
 
 	// An auto exposure names its metering and range: r.DefaultFeature.AutoExposure=False only sets the base range to
 	// 1 to 1 (SceneView.cpp), which an override here replaces. Fixed leaves all three to that base, as every place did.
