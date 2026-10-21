@@ -60,12 +60,13 @@ struct FMantleEmoteRetarget
 	static bool IsBodyBone(FName Bone);
 
 	/**
-	 * mantle #840 step 1, rest-pose match: the bones whose rest shape the UEFN target's retarget pose copies from the
-	 * source's. Each hand and its fingers (metacarpals and 01 to 03 of the thumb, index, middle, ring and pinky), and with
-	 * bArms the clavicle, upper and lower arm. Unreal's auto-align writes no offsets for fingers, so the FK finger chains
-	 * otherwise carry the difference between the two rest hands into every frame (a constant 17 to 35 degree under-curl).
+	 * mantle #840 step 1, rest-pose match: the bones whose rest shape the target's retarget pose copies from the source's,
+	 * each hand and its fingers (metacarpals and 01 to 03 of the thumb, index, middle, ring and pinky). Unreal's auto-align
+	 * writes no offsets for fingers, so the FK finger chains otherwise carry the difference between the two rest hands into
+	 * every frame (a constant 17 to 35 degree under-curl). The arms are left to the retargeter: matching them too put the
+	 * wrists further from the source's in the trials.
 	 */
-	static TArray<FName> HandBones(bool bArms);
+	static TArray<FName> HandBones();
 
 	/**
 	 * The target retarget pose's local rotation offsets (IK Rig's: retarget local = reference local * offset) that give
@@ -81,7 +82,7 @@ struct FMantleEmoteRetarget
 
 	/**
 	 * A copy of Retargeter (an IK retargeter) in the transient package whose target retarget pose gives the hands and
-	 * fingers (HandBones(false)) the source's rest shape (MatchRestRotations), so FK finger chains carry the source's curl.
+	 * fingers (HandBones()) the source's rest shape (MatchRestRotations), so FK finger chains carry the source's curl.
 	 * Source and Target: the meshes' reference skeletons the retarget runs between. Rooted until ReleaseRestHandsCopy; the
 	 * shipped asset is never touched. Null with OutError when IK Rig's controller cannot edit it. Game thread.
 	 */
@@ -96,7 +97,8 @@ struct FMantleEmoteRetarget
 
 	/**
 	 * Retargets Sequence (on SkeletonId's skeleton, played on SourceMesh) onto TargetMesh (a UEFN mannequin) through
-	 * RetargeterPathFor(SkeletonId), samples the copy with FMantleAnimClipWriter::Sample, and deletes the copy. False with
+	 * RetargeterPathFor(SkeletonId) (a MakeRestHandsCopy of it, so the fingers keep the source's curl; OutHandsNote says what
+	 * that changed), samples the copy with FMantleAnimClipWriter::Sample, and deletes the copy. False with
 	 * a sentence for the creator when anything is missing or the retarget does not give one animation on the target's
 	 * skeleton with Sequence's length (within a frame).
 	 */

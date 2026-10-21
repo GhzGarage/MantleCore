@@ -775,10 +775,9 @@ bool FMantleEmoteRestHandsTest::RunTest(const FString& Parameters)
 	const FReferenceSkeleton Source = MakeHand({ 0.0f, 0.0f, 20.0f, 20.0f, 20.0f });
 	const FReferenceSkeleton Target = MakeHand({ 0.0f, 10.0f, 0.0f, 0.0f, 0.0f });
 	double Largest = 0.0;
-	const TArray<FName> Bones = FMantleEmoteRetarget::HandBones(false);
+	const TArray<FName> Bones = FMantleEmoteRetarget::HandBones();
 	TestTrue(TEXT("the hand bones hold the hands and fingers"), Bones.Contains(FName(TEXT("hand_r"))) && Bones.Contains(FName(TEXT("pinky_metacarpal_l"))));
-	TestFalse(TEXT("without arms there is no upper arm"), Bones.Contains(FName(TEXT("upperarm_l"))));
-	TestTrue(TEXT("with arms there is"), FMantleEmoteRetarget::HandBones(true).Contains(FName(TEXT("upperarm_l"))));
+	TestFalse(TEXT("the arms are left to the retargeter"), Bones.Contains(FName(TEXT("upperarm_l"))));
 	const TMap<FName, FQuat> Offsets = FMantleEmoteRetarget::MatchRestRotations(Source, {}, Target, {}, Bones, &Largest);
 	TestEqual(TEXT("the hand and the two finger bones with a child get offsets (the tip has nothing to point at)"), Offsets.Num(), 3);
 	const TArray<FTransform> SourcePose = RefComponentPose(Source, {});
@@ -828,7 +827,7 @@ bool FMantleEmoteFingerCurlTest::RunTest(const FString& Parameters)
 		Controller.OpenBracket(FText::FromString(TEXT("Emote fist test")), false);
 		Controller.SetFrameRate(FFrameRate(30, 1), false);
 		Controller.SetNumberOfFrames(FFrameNumber(Frames), false);
-		for (const FName Bone : FMantleEmoteRetarget::HandBones(false))
+		for (const FName Bone : FMantleEmoteRetarget::HandBones())
 		{
 			const int32 Index = Reference.FindRawBoneIndex(Bone);
 			const FString Name = Bone.ToString();
