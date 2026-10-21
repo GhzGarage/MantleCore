@@ -9,8 +9,8 @@
 #include "HAL/FileManager.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
-#include "PackageTools.h"
 #include "UObject/Package.h"
+#include "UObject/GarbageCollection.h"
 #include "UObject/SavePackage.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
@@ -18,6 +18,39 @@
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+namespace
+{
+	/**
+	 * Unloads packages without UPackageTools::UnloadPackages, whose editor-selection step ensures "Element type ID '0' has not been
+	 * registered" in a -nullrhi full-suite run. Their objects are moved aside and collected, so a reload reads the file.
+	 */
+	bool UnloadPackagesClean(const TArray<UPackage*>& Packages, FText& OutError)
+	{
+		for (UPackage* Package : Packages)
+		{
+			if (!Package)
+			{
+				continue;
+			}
+			TArray<UObject*> Contained;
+			GetObjectsWithPackage(Package, Contained, false);
+			for (UObject* Object : Contained)
+			{
+				Object->ClearFlags(RF_Public | RF_Standalone);
+				Object->Rename(*MakeUniqueObjectName(GetTransientPackage(), Object->GetClass(), Object->GetFName()).ToString(),
+					GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+				Object->MarkAsGarbage();
+			}
+			ResetLoaders(Package);
+			Package->ClearFlags(RF_Public | RF_Standalone);
+			Package->MarkAsGarbage();
+		}
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+		OutError = FText::GetEmpty();
+		return true;
+	}
+}
 
 namespace MantleWeaponBuilderPanelTestPrivate
 {
@@ -74,7 +107,7 @@ namespace MantleWeaponBuilderPanelTestPrivate
 					FAssetRegistryModule::AssetDeleted(Asset);
 				}
 				FText Error;
-				UPackageTools::UnloadPackages({ Package }, Error, true);
+				UnloadPackagesClean({ Package }, Error);
 			}
 			if (!Folder.IsEmpty())
 			{
@@ -294,7 +327,7 @@ bool FMantleWeaponBuilderPanelSaveReopenTest::RunTest(const FString& Parameters)
 	}
 
 	FText UnloadError;
-	const bool bUnloaded = UPackageTools::UnloadPackages({ SavedPackage }, UnloadError, true);
+	const bool bUnloaded = UnloadPackagesClean({ SavedPackage }, UnloadError);
 	TestTrue(*FString::Printf(TEXT("the saved source package unloads before reopen (%s)"), *UnloadError.ToString()), bUnloaded);
 	if (!bUnloaded)
 	{
@@ -396,7 +429,7 @@ bool FMantleWeaponBuilderPanelSaveReopenTest::RunTest(const FString& Parameters)
 	const FString LegacyFilename = FPackageName::LongPackageNameToFilename(LegacyPackagePath, FPackageName::GetAssetPackageExtension());
 	if (!TestTrue(TEXT("the old full-length source package saves"), UPackage::SavePackage(LegacyPackage, LegacyAsset, *LegacyFilename, LegacySaveArgs))) return false;
 	FText LegacyUnloadError;
-	if (!TestTrue(TEXT("the old full-length source unloads before it is reopened"), UPackageTools::UnloadPackages({ LegacyPackage }, LegacyUnloadError, true))) return false;
+	if (!TestTrue(TEXT("the old full-length source unloads before it is reopened"), UnloadPackagesClean({ LegacyPackage }, LegacyUnloadError))) return false;
 	LegacyPackage = LoadPackage(nullptr, *LegacyPackagePath, LOAD_None);
 	LegacyAsset = LegacyPackage ? FindObject<UMantleWeaponSource>(LegacyPackage, *LegacyAssetName) : nullptr;
 	if (!TestNotNull(TEXT("the old full-length source reloads from its original path"), LegacyAsset)) return false;
