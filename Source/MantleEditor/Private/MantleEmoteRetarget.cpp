@@ -918,13 +918,7 @@ bool FMantleEmoteRetarget::MatchWristsInPlace(UObject* Retargeter, const FRefere
 		}
 		return Out;
 	};
-	// The hand's bend (forearm line against hand-to-middle-finger) and twist about the forearm, as Mantle.Dev.CheckEmote measures them.
-	auto Bend = [](const TArray<FTransform>& Pose, const int32 Lower, const int32 Hand, const int32 Middle)
-	{
-		const FVector Forearm = (Pose[Hand].GetLocation() - Pose[Lower].GetLocation()).GetSafeNormal();
-		const FVector Palm = (Pose[Middle].GetLocation() - Pose[Hand].GetLocation()).GetSafeNormal();
-		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Forearm | Palm, -1.0, 1.0)));
-	};
+	// The hand's twist about the forearm, as Mantle.Dev.CheckEmote measures it.
 	auto Twist = [](const TArray<FTransform>& Pose, const int32 Lower, const int32 Hand)
 	{
 		const FVector Axis = (Pose[Hand].GetLocation() - Pose[Lower].GetLocation()).GetSafeNormal();
@@ -938,55 +932,28 @@ bool FMantleEmoteRetarget::MatchWristsInPlace(UObject* Retargeter, const FRefere
 	for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
 	{
 		auto Find = [Side](const FReferenceSkeleton& Skeleton, const TCHAR* Stem) { return Skeleton.FindRawBoneIndex(FName(*FString::Printf(TEXT("%s_%s"), Stem, Side))); };
-		const int32 SL = Find(Source, TEXT("lowerarm")), SH = Find(Source, TEXT("hand")), SM = Find(Source, TEXT("middle_01"));
-		const int32 TL = Find(Target, TEXT("lowerarm")), TH = Find(Target, TEXT("hand")), TM = Find(Target, TEXT("middle_01"));
-		if (SL == INDEX_NONE || SH == INDEX_NONE || SM == INDEX_NONE || TL == INDEX_NONE || TH == INDEX_NONE || TM == INDEX_NONE)
+		const int32 SL = Find(Source, TEXT("lowerarm")), SH = Find(Source, TEXT("hand"));
+		const int32 TL = Find(Target, TEXT("lowerarm")), TH = Find(Target, TEXT("hand"));
+		if (SL == INDEX_NONE || SH == INDEX_NONE || TL == INDEX_NONE || TH == INDEX_NONE)
 		{
 			continue;
 		}
 		// How far each retarget pose's wrist sits from its own reference pose; the animation carries the source's difference
 		// from its reference onto the target, so what the two differ by is the error every frame.
 		const double TwistGap = FMath::UnwindDegrees((Twist(TargetPose, TL, TH) - Twist(TargetRef, TL, TH)) - (Twist(SourcePose, SL, SH) - Twist(SourceRef, SL, SH)));
-		const double BendGap = (Bend(TargetPose, TL, TH, TM) - Bend(TargetRef, TL, TH, TM)) - (Bend(SourcePose, SL, SH, SM) - Bend(SourceRef, SL, SH, SM));
 		const FVector Axis = (TargetPose[TH].GetLocation() - TargetPose[TL].GetLocation()).GetSafeNormal();
-		const FQuat TwistTurn(Axis, FMath::DegreesToRadians(-TwistGap));
-		const FVector Forearm = Axis;
-		const FVector Palm = TwistTurn.RotateVector((TargetPose[TM].GetLocation() - TargetPose[TH].GetLocation()).GetSafeNormal());
-		const FVector BendAxis = (Forearm ^ Palm).GetSafeNormal();
-		// The bend is an unsigned angle, so which way to turn is read from the result: the turn (either way) that leaves the
-		// two retarget poses' wrists nearest each other from their reference poses.
-		const double SourceBendShift = Bend(SourcePose, SL, SH, SM) - Bend(SourceRef, SL, SH, SM);
-		const double TargetRefBend = Bend(TargetRef, TL, TH, TM);
-		FQuat BendTurn = FQuat::Identity;
-		double BestLeft = FMath::Abs(BendGap);
-		double BendDegrees = 0.0;
-		if (!BendAxis.IsNearlyZero())
-		{
-			for (const double Sign : { -1.0, 1.0 })
-			{
-				const double Degrees = Sign * FMath::Abs(BendGap);
-				const FVector Turned = FQuat(BendAxis, FMath::DegreesToRadians(Degrees)).RotateVector(Palm);
-				const double Left = FMath::Abs(FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Forearm | Turned, -1.0, 1.0))) - TargetRefBend - SourceBendShift);
-				if (Left < BestLeft)
-				{
-					BestLeft = Left;
-					BendDegrees = Degrees;
-					BendTurn = FQuat(BendAxis, FMath::DegreesToRadians(Degrees));
-				}
-			}
-		}
-		const FQuat Turn = BendTurn * TwistTurn;
+		const FQuat Turn(Axis, FMath::DegreesToRadians(-TwistGap));
 		const int32 Parent = Target.GetRawParentIndex(TH);
 		const FQuat ParentGlobal = Parent == INDEX_NONE ? FQuat::Identity : TargetPose[Parent].GetRotation();
 		const FQuat NewLocal = (ParentGlobal.Inverse() * Turn * TargetPose[TH].GetRotation()).GetNormalized();
 		const FName Hand = Target.GetBoneName(TH);
 		const FQuat NewOffset = (Target.GetRawRefBonePose()[TH].GetRotation().Inverse() * NewLocal).GetNormalized();
 		Asset.SetTargetOffset(Hand, NewOffset);
-		OutNote += FString::Printf(TEXT("%shand_%s turned %.1f degrees about the forearm and %.1f degrees at the wrist"), OutNote.IsEmpty() ? TEXT("") : TEXT("; "), Side, -TwistGap, BendDegrees);
+		OutNote += FString::Printf(TEXT("%shand_%s turned %.1f degrees about the forearm"), OutNote.IsEmpty() ? TEXT("") : TEXT("; "), Side, -TwistGap);
 	}
 	if (OutNote.IsEmpty())
 	{
-		OutError = TEXT("the source or target has no lowerarm, hand and middle_01 bones.");
+		OutError = TEXT("the source or target has no lowerarm and hand bones.");
 		return false;
 	}
 	return true;
