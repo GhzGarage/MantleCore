@@ -98,6 +98,8 @@ public class MantleEditor : ModuleRules
 			// FLandscapeEditDataInterface). An engine runtime module every editor loads, not a plugin;
 			// the shipped client never builds this module, so nothing is added to it.
 			"Landscape",
+			// GhzGarage/mantle#997: the Water plugin (Experimental, off by default) is deliberately NOT a dependency here or in
+			// MantleCore.uplugin. MantleWaterBodyExport finds its classes by name through reflection, so a project without the plugin loads Mantle.
 			// LandscapeEdit.h includes InstancedFoliageActor.h (engine runtime module).
 			"Foliage",
 			// #625 (owner, 2026-10-02: the MetaHuman Creator plugin is a normal dependency): Convert makes the avatar a

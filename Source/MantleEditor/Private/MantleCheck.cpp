@@ -125,6 +125,7 @@ FMantleCheckReport FMantleCheck::Evaluate(UWorld* World, const bool bThin)
 			Report.ThinOffer = Exported.ThinPreview.Describe();
 		}
 		Report.Coverage = Exported.Coverage;
+		Report.Water = FMantleWaterBodyExport::Read(World);
 		if (Exported.bSuccess)
 		{
 			Report.PlaceJson = FMantlePlaceExporter::ToJson(Exported.Place);
@@ -193,6 +194,10 @@ FMantleCheckReport FMantleCheck::Run(UWorld* World, const FArgs& Args)
 			*MantleCheckPrivate::OneLine(Report.ThinOffer));
 	}
 	Report.Coverage.Log();
+	if (Report.Water.bWaterPluginLoaded)
+	{
+		UE_LOG(LogMantle, Display, TEXT("%s"), *Report.Water.SummaryLine());
+	}
 
 	if (!Args.ExportDir.IsEmpty())
 	{
@@ -207,6 +212,10 @@ FMantleCheckReport FMantleCheck::Run(UWorld* World, const FArgs& Args)
 			TArray<FString> Notes = IssueLines(Report);
 			Notes.Add(DoneLine(Report));
 			Notes.Append(Report.Coverage.ToDisplayLines());
+			if (Report.Water.bWaterPluginLoaded)
+			{
+				Notes.Add(Report.Water.SummaryLine());
+			}
 			FFileHelper::SaveStringToFile(FString::Join(Notes, TEXT("\n")), *(Dir / TEXT("check.txt")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 			Report.ExportedTo = Dir;
 			UE_LOG(LogMantle, Display, TEXT("MANTLE_CHECK_EXPORT %s"), *Dir);
