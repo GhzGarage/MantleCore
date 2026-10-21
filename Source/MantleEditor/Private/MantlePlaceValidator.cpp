@@ -194,7 +194,7 @@ namespace
 	void CheckComponents(const AActor* Actor, EMantleEntityType Type, FMantleValidationResult& Result)
 	{
 		// A reflection capture (#628) publishes as its one capture component; its preview boxes are the editor's.
-		if (Type == EMantleEntityType::ReflectionProbe || Type == EMantleEntityType::Text)
+		if (Type == EMantleEntityType::ReflectionProbe || Type == EMantleEntityType::Text || Type == EMantleEntityType::WaterBody)
 		{
 			return;
 		}

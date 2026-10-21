@@ -67,6 +67,15 @@ struct MANTLEEDITOR_API FMantleTerrainSource
 	/** The average base colour of each layer's look, by layer name, where known (#628): which kept layer a folded one goes into. */
 	TMap<FName, FLinearColor> LayerColours;
 
+	/**
+	 * Water Bodies that carve this landscape through a brush edit layer (GhzGarage/mantle#997). The heights above are the landscape's final,
+	 * merged heightmap, so the carve is in them; bCarveRefreshed says the edit layers were out of date and were rebuilt first, bCarveStale that
+	 * they still were afterwards (the carve may be missing or old).
+	 */
+	int32 WaterBodiesCarving = 0;
+	bool bCarveRefreshed = false;
+	bool bCarveStale = false;
+
 	/** The landscape sample (in its own grid) that sample (0, 0) is: what a mask's landscape UV is counted from. */
 	FIntPoint FirstSample = FIntPoint::ZeroValue;
 

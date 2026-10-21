@@ -127,6 +127,7 @@ namespace MantleCoverageSurveyPrivate
 		case EMantleEntityType::Constraint:
 		case EMantleEntityType::Scatter:
 		case EMantleEntityType::ReflectionProbe: // a capture's preview boxes are the editor's; Export reports the probe itself
+		case EMantleEntityType::WaterBody: // a water body's helper meshes are the plugin's; Export reports the body itself
 		case EMantleEntityType::Text: // a text actor's sprite is the editor's; Export reports the text itself
 			return true;
 		default:

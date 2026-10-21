@@ -8,6 +8,7 @@
 #include "LandscapeInfo.h"
 #include "LandscapeLayerInfoObject.h"
 #include "LandscapeProxy.h"
+#include "MantleWaterBodyExport.h"
 #include "MantleCoverage.h"
 #include "MantlePlaceLimits.h"
 #include "MantlePlaceSettingsActor.h"
@@ -273,6 +274,17 @@ bool FMantleTerrainExport::ReadLandscape(const AActor* Actor, FMantleTerrainSour
 	Out.HeightScale = HeightScale;
 	Out.HeightOffset = -32768.0 * HeightScale;
 
+	// Water Bodies carve a landscape by rendering a brush into an edit layer, and the landscape merges its layers into its own
+	// textures on the GPU and reads them back. Those textures are what is read below, so a landscape whose layers are out of date
+	// (a body moved, a level just opened) is brought up to date first.
+	Out.WaterBodiesCarving = FMantleWaterBodyExport::CountBodiesCarving(Landscape);
+	if (Out.WaterBodiesCarving > 0 && !Landscape->IsUpToDate())
+	{
+		const_cast<ALandscape*>(Landscape)->ForceUpdateLayersContent();
+		Out.bCarveRefreshed = true;
+		Out.bCarveStale = !Landscape->IsUpToDate();
+	}
+
 	// The final heights and weights, every edit layer merged (an invalid layer guid reads the
 	// landscape's own textures), read without touching the GPU copies.
 	FLandscapeEditDataInterface Edit(Info, FGuid(), /*bInUploadTextureChangesToGPU*/ false);
@@ -480,6 +492,24 @@ bool FMantleTerrainExport::ChooseLayers(UWorld* World, const FMantleTerrainSourc
 			TEXT("It still publishes, and your landscape is not changed. To keep an opening (a cave mouth, a tunnel), model it as a mesh over the filled ground."));
 		Report(MantleCoverageCategory::Terrain, EMantleCoverageOutcome::Approximated, Label,
 			FString::Printf(TEXT("holes painted in the landscape's visibility layer (%s) are filled: Mantle terrain has no holes, so the ground is drawn across them."), *HoleCount));
+	}
+
+	if (Source.WaterBodiesCarving > 0)
+	{
+		const FString Bodies = FString::Printf(TEXT("%d water bod%s"), Source.WaterBodiesCarving, Source.WaterBodiesCarving == 1 ? TEXT("y") : TEXT("ies"));
+		if (Source.bCarveStale)
+		{
+			Warn(FString::Printf(TEXT("is carved by %s, but its edit layers were not up to date and would not finish updating, so the carve may be missing or old in the published ground."), *Bodies),
+				TEXT("Open the level in the editor, let the landscape finish updating (wait for the edit layers progress to end), save, then check again."));
+			Report(MantleCoverageCategory::WaterCarve, EMantleCoverageOutcome::Approximated, Label,
+				FString::Printf(TEXT("%s carve it, and the landscape's edit layers were out of date, so the carve may be missing or old."), *Bodies));
+		}
+		else
+		{
+			Report(MantleCoverageCategory::WaterCarve, EMantleCoverageOutcome::Kept, Label,
+				FString::Printf(TEXT("%s carve it; the published ground is the landscape's merged heightmap, carve included%s."), *Bodies,
+					Source.bCarveRefreshed ? TEXT(" (its edit layers were rebuilt first)") : TEXT("")));
+		}
 	}
 
 	const AMantlePlaceSettingsActor* Settings = AMantlePlaceSettingsActor::Find(World);

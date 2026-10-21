@@ -350,6 +350,47 @@ struct MANTLERUNTIME_API FMantlePlaceLimits
 	static constexpr double MinTextScale = 0.1;
 	static constexpr double MaxTextScale = 10.0;
 
+	/** WaterBody entities in one place (GhzGarage/mantle#997). Cross-entity: not in the schema itself; validate.py and the backend state it too. */
+	static constexpr int32 MaxWaterBodiesPerPlace = 64;
+
+	/** Spline points on one WaterBody (#997): the schema's maxItems. */
+	static constexpr int32 MaxWaterSplinePointsPerBody = 256;
+
+	/** Spline points across all of a place's WaterBody entities (#997). Cross-entity, like MaxWaterBodiesPerPlace. */
+	static constexpr int32 MaxWaterSplinePointsPerPlace = 4096;
+
+	/** Gerstner waves on one WaterBody (#997): the schema's maxItems. */
+	static constexpr int32 MaxWaterWavesPerBody = 64;
+
+	/** A river's spline is open and needs this many points; a lake's or ocean's is a closed loop and needs MinWaterLoopPoints (#997). */
+	static constexpr int32 MinWaterRiverPoints = 2;
+	static constexpr int32 MinWaterLoopPoints = 3;
+
+	/** A spline point's depth, cm (#997). */
+	static constexpr double MinWaterSplineDepth = 0.0;
+	static constexpr double MaxWaterSplineDepth = 100000.0;
+
+	/** A river spline point's width, cm, and velocity, cm/s (#997). */
+	static constexpr double MinWaterRiverWidth = 1.0;
+	static constexpr double MaxWaterRiverWidth = 100000.0;
+	static constexpr double MaxWaterRiverVelocity = 10000.0;
+
+	/** A Gerstner wave's wavelength and amplitude, cm, and phaseOffset's magnitude (#997). */
+	static constexpr double MinWaterWavelength = 1.0;
+	static constexpr double MaxWaterWavelength = 100000.0;
+	static constexpr double MaxWaterAmplitude = 10000.0;
+	static constexpr double MaxWaterPhaseOffset = 1000000.0;
+
+	/** A WaterBody's collisionHeightOffset magnitude, cm (#997). */
+	static constexpr double MaxWaterCollisionShift = 100000.0;
+
+	/** An ocean's collisionExtent and oceanExtent, and the Water Zone's zoneExtent: each axis, cm (#997). */
+	static constexpr double MinWaterExtent = 1.0;
+	static constexpr double MaxWaterExtent = 409600.0;
+
+	/** The Water Zone's size when settings.water leaves zoneExtent out, each axis, cm (#997). */
+	static constexpr double DefaultWaterZoneExtent = 51200.0;
+
 	/** scripts[].name, 1 to this many characters. */
 	static constexpr int32 MaxScriptNameLength = 80;
 

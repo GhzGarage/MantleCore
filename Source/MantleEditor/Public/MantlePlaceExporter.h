@@ -83,13 +83,6 @@ struct FMantlePrefabPart
 
 	/** A StaticMesh part with a negative scale (#628): the mirrored copy to publish in place of the component's mesh (FMantleMirrorBake). Null otherwise. */
 	UStaticMesh* MirroredMesh = nullptr;
-
-	/**
-	 * A StaticMesh part that is a Water plugin body (GhzGarage/mantle#818, FMantleWaterBody): the mesh it draws (its own, or the flat mesh
-	 * Mantle filled a lake's spline with) and the water material to draw it with. Component is the body component, not a mesh component.
-	 */
-	UStaticMesh* WaterMesh = nullptr;
-	UMaterialInterface* WaterMaterial = nullptr;
 };
 
 /** One Script Asset (Mantle Place Settings) Export listed in assets[]: its Unreal path and the id scripts use for it. */
