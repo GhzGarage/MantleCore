@@ -3895,6 +3895,13 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 							FString::Printf(TEXT("%s (%s)"), *ExporterLabelOf(Actor), *Part.Component->GetName()),
 							TEXT("drawn with Mantle's water: the body's mesh (or its outline filled flat) with its water material, without waves, flow or depth shading."));
 					}
+					else if (Part.Type == EMantleEntityType::StaticMesh && FMantleWaterBody::IsBodyMeshComponent(Cast<UStaticMeshComponent>(Part.Component)))
+					{
+						// A Custom body's own mesh component (GhzGarage/mantle#818): drawn with the body's water material, which publishes as Mantle's water.
+						Result.Coverage.Add(MantleCoverageCategory::Water, EMantleCoverageOutcome::Approximated,
+							FString::Printf(TEXT("%s (%s)"), *ExporterLabelOf(Actor), *Part.Component->GetName()),
+							TEXT("drawn with Mantle's water: the body's own mesh with its water material; its waves are not carried, nor its flow or depth shading."));
+					}
 					const FString Base = PrefabPartEntityId(ActorId, Part.Component, Part.EffectIndex);
 					FString Id = Base;
 					int32 Suffix = 2;

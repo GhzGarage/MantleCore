@@ -26,6 +26,7 @@
 #include "Materials/MaterialExpressionPixelDepth.h"
 #include "Materials/MaterialExpressionSaturate.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionSetMaterialAttributes.h"
 #include "Materials/MaterialExpressionSceneDepth.h"
 #include "Materials/MaterialExpressionSingleLayerWaterMaterialOutput.h"
 #include "Materials/MaterialExpressionStaticSwitchParameter.h"
@@ -37,6 +38,7 @@
 #include "Materials/MaterialExpressionWorldPosition.h"
 #include "Materials/MaterialFunction.h"
 #include "Materials/MaterialInstanceConstant.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/AutomationTest.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -1173,6 +1175,106 @@ bool FMantleWaterSingleLayerWavesTest::RunTest(const FString& Parameters)
 	const FMantlePlaceMaterialDocument Doc = FMantlePlaceAssetConverter::MaterialFromGltf(Flattened, 0, TEXT("WaterMID_1"), FMantlePlaceAssetLimits(), false, Set, Extras);
 	TestTrue(TEXT("it writes the water key"), Doc.WritesWater());
 	TestTrue(TEXT("with coefficients above zero"), Doc.WaterAbsorption[0] + Doc.WaterAbsorption[1] + Doc.WaterAbsorption[2] > 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleWaterPluginChainTest,
+	"Mantle.Editor.Water.WaterPluginBodyChainPublishesAsWater",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleWaterPluginChainTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleWaterMaterialTestPrivate;
+
+	// The Water plugin's Water_Material as a Custom body draws it (Babylon Temple, GhzGarage/mantle#818): Single Layer Water, masked,
+	// built with Set Material Attributes (no output root is connected), its waves a world position offset of Time, its scattering on
+	// the output node behind a foam Lerp this cannot read, and "Absorption", "Scattering" and "Water Albedo" vector parameters.
+	UMaterial* Master = NewObject<UMaterial>(GetTransientPackage());
+	Master->SetShadingModel(MSM_SingleLayerWater);
+	Master->BlendMode = BLEND_Masked;
+	Master->bUseMaterialAttributes = true;
+	auto AddParameter = [Master](const TCHAR* Name, const FLinearColor& Default)
+	{
+		UMaterialExpressionVectorParameter* Parameter = AddExpression<UMaterialExpressionVectorParameter>(Master);
+		Parameter->ParameterName = Name;
+		Parameter->DefaultValue = Default;
+		return Parameter;
+	};
+	UMaterialExpressionVectorParameter* Absorption = AddParameter(TEXT("Absorption"), FLinearColor(0.1f, 0.05f, 0.02f));
+	UMaterialExpressionVectorParameter* Scattering = AddParameter(TEXT("Scattering"), FLinearColor(0.01f, 0.02f, 0.03f));
+	UMaterialExpressionVectorParameter* Albedo = AddParameter(TEXT("Water Albedo"), FLinearColor(0.0f, 0.2f, 0.25f));
+	UMaterialExpressionTextureSample* Foam = AddExpression<UMaterialExpressionTextureSample>(Master);
+	Foam->Texture = UTexture2D::CreateTransient(4, 4);
+	UMaterialExpressionLinearInterpolate* FoamScattering = AddExpression<UMaterialExpressionLinearInterpolate>(Master);
+	FoamScattering->A.Connect(0, Scattering);
+	FoamScattering->B.Connect(0, AddColour(Master, FLinearColor::White));
+	FoamScattering->Alpha.Connect(0, Foam);
+	UMaterialExpressionSingleLayerWaterMaterialOutput* Output = AddExpression<UMaterialExpressionSingleLayerWaterMaterialOutput>(Master);
+	Output->ScatteringCoefficients.Connect(0, FoamScattering);
+	Output->AbsorptionCoefficients.Connect(0, Absorption);
+	UMaterialExpressionMultiply* Wave = AddExpression<UMaterialExpressionMultiply>(Master);
+	Wave->A.Connect(0, AddExpression<UMaterialExpressionTime>(Master));
+	Wave->B.Connect(0, AddColour(Master, FLinearColor(0.0f, 0.0f, 50.0f)));
+	UMaterialExpressionSetMaterialAttributes* Attributes = AddExpression<UMaterialExpressionSetMaterialAttributes>(Master);
+	Attributes->ConnectInputAttribute(MP_BaseColor, Albedo);
+	Attributes->ConnectInputAttribute(MP_OpacityMask, AddNumber(Master, 1.0f));
+	Attributes->ConnectInputAttribute(MP_WorldPositionOffset, Wave);
+	Master->GetEditorOnlyData()->MaterialAttributes.Connect(0, Attributes);
+	// A loaded material has its parameters cached; one built here caches them now, so the instances below find the defaults.
+	Master->UpdateCachedExpressionData();
+
+	// Water_Material_CustomMesh: an instance overriding the absorption; WaterMID_0: the body's transient dynamic instance on its mesh.
+	UMaterialInstanceConstant* Instance = NewObject<UMaterialInstanceConstant>(GetTransientPackage());
+	Instance->SetParentEditorOnly(Master, false);
+	Instance->UpdateOverridableBaseProperties();
+	Instance->SetVectorParameterValueEditorOnly(FMaterialParameterInfo(TEXT("Absorption")), FLinearColor(0.2f, 0.1f, 0.05f));
+	UMaterialInstanceDynamic* Dynamic = UMaterialInstanceDynamic::Create(Instance, GetTransientPackage(), TEXT("WaterMID_0"));
+	Dynamic->UpdateOverridableBaseProperties();
+	Dynamic->SetScalarParameterValue(TEXT("WaterBodyIndex"), 0.0f);
+	TestEqual(TEXT("the chain is masked"), static_cast<int32>(Dynamic->GetBlendMode()), static_cast<int32>(BLEND_Masked));
+
+	const FMantleMaterialAnalysis Analysis = FMantlePlaceAssets::AnalyzeMaterial(Dynamic);
+	const FMantleWaterBake& Water = Analysis.Fidelity2.Water;
+	if (!TestTrue(TEXT("the body's dynamic instance is found as Single Layer Water"), Water.bFound && Water.bSingleLayer))
+	{
+		return false;
+	}
+	TestFalse(TEXT("its shading is no longer a loss (no 'becomes standard shading')"), Analysis.Has(EMantleMaterialLoss::SpecialShading));
+	TestTrue(TEXT("it publishes opaque with the water key"), Water.PublishesOpaque());
+	TestTrue(TEXT("its waves are said to be dropped"), Water.bWavesDropped);
+	TestFalse(TEXT("and are not a world position offset loss"), Analysis.Has(EMantleMaterialLoss::WorldPositionOffset));
+	TestFalse(TEXT("nor wind"), Analysis.Fidelity2.bWind);
+	if (TestTrue(TEXT("the volume comes from the named parameters"), Water.bVolume))
+	{
+		TestEqual(TEXT("the instance's absorption"), Water.Volume.Absorption[0], 0.2, 1.0e-4);
+		TestEqual(TEXT("and the master's scattering"), Water.Volume.Scattering[2], 0.03, 1.0e-4);
+	}
+	if (TestTrue(TEXT("the colour comes from Water Albedo"), Water.bColour))
+	{
+		TestEqual(TEXT("as the parameter has it"), Water.Colour[2], 0.25, 1.0e-4);
+	}
+
+	// GLTFExporter's bake of a masked material; the document is a water document, opaque, with the parameters' coefficients.
+	FMantleGlbDocument Flattened = BakedWater();
+	Flattened.Json->GetArrayField(TEXT("materials"))[0]->AsObject()->SetStringField(TEXT("alphaMode"), TEXT("MASK"));
+	FMantleMaterialExtras Extras;
+	Extras.Fidelity = Analysis.Fidelity2;
+	FMantlePlaceAssetSet Set;
+	const FMantlePlaceMaterialDocument Doc = FMantlePlaceAssetConverter::MaterialFromGltf(Flattened, 0, TEXT("WaterMID_0"), FMantlePlaceAssetLimits(), false, Set, Extras);
+	TestTrue(TEXT("the document writes the water key"), Doc.WritesWater());
+	TestEqual(TEXT("masked water publishes opaque"), Doc.AlphaMode, FString(TEXT("opaque")));
+	TestEqual(TEXT("with the instance's absorption"), Doc.WaterAbsorption[0], 0.2, 1.0e-4);
+	TestEqual(TEXT("and the albedo as the surface colour"), Doc.BaseColorFactor[2], 0.25, 1.0e-4);
+
+	// A Single Layer Water material with nothing to read still has a volume and a colour: a clear lake's.
+	UMaterial* Bare = NewObject<UMaterial>(GetTransientPackage());
+	Bare->SetShadingModel(MSM_SingleLayerWater);
+	Bare->bUseMaterialAttributes = true;
+	const FMantleWaterBake& Plain = FMantlePlaceAssets::AnalyzeMaterial(Bare).Fidelity2.Water;
+	TestTrue(TEXT("a bare Single Layer Water material is water"), Plain.bFound && Plain.bSingleLayer);
+	TestTrue(TEXT("with the clear lake's colour"), Plain.bColour && FMath::IsNearlyEqual(Plain.Colour[1], FMantleWaterMaterial::ClearLakeColour[1], 1.0e-6));
+	TestFalse(TEXT("and no coefficients of its own (they derive from the colour)"), Plain.bVolume);
 	return true;
 }
 

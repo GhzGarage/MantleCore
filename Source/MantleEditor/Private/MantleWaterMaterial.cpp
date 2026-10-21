@@ -1381,6 +1381,77 @@ bool FMantleWaterMaterial::RecogniseSingleLayer(const UMaterialInterface* Contex
 		}
 	}
 	ReadSurface(Context, BaseColor, Normal, Out);
+
+	// The Water plugin's Water_Material (GhzGarage/mantle#818) builds its outputs with Set Material Attributes (no roots to read) and
+	// feeds its output node through foam and depth graphs this cannot evaluate, so what it holds is read by its parameter names
+	// instead: "Absorption" and "Scattering" (the output node's coefficients, 1/cm) and "Water Albedo" (the surface colour), as
+	// the body's instance chain sets them. Its waves are world position offset in every case: dropped and said.
+	auto NamedColour = [Context](const TCHAR* Name, double (&Value)[3])
+	{
+		FLinearColor Colour;
+		if (!Context->GetVectorParameterValue(FHashedMaterialParameterInfo(FMaterialParameterInfo(FName(Name))), Colour))
+		{
+			return false;
+		}
+		Value[0] = Colour.R;
+		Value[1] = Colour.G;
+		Value[2] = Colour.B;
+		return true;
+	};
+	if (!Out.bVolume)
+	{
+		double Absorption[3];
+		double Scattering[3];
+		if (NamedColour(TEXT("Absorption"), Absorption) && NamedColour(TEXT("Scattering"), Scattering))
+		{
+			// Believed only within the schema's 0..1 (1/cm): a value above it is one the graph scales on the way to the node
+			// (water that absorbs everything within a centimetre is no lake), and then the deep colour derives the coefficients.
+			bool bPlausible = true;
+			for (int32 Channel = 0; Channel < 3; ++Channel)
+			{
+				bPlausible = bPlausible && Absorption[Channel] >= 0.0 && Absorption[Channel] <= 1.0 && Scattering[Channel] >= 0.0 && Scattering[Channel] <= 1.0;
+			}
+			if (bPlausible)
+			{
+				Out.bVolume = true;
+				for (int32 Channel = 0; Channel < 3; ++Channel)
+				{
+					Out.Volume.Absorption[Channel] = Absorption[Channel];
+					Out.Volume.Scattering[Channel] = Scattering[Channel];
+				}
+			}
+			else if (Out.Why.IsEmpty())
+			{
+				Out.Why = TEXT("the Absorption and Scattering parameters are outside 0..1 per cm");
+			}
+		}
+	}
+	if (!Out.bColour)
+	{
+		double Albedo[3];
+		if (NamedColour(TEXT("Water Albedo"), Albedo) || NamedColour(TEXT("WaterAlbedo"), Albedo) || NamedColour(TEXT("Water Color"), Albedo))
+		{
+			Out.bColour = true;
+			for (int32 Channel = 0; Channel < 3; ++Channel)
+			{
+				Out.Colour[Channel] = FMath::Clamp(Albedo[Channel], 0.0, 1.0);
+			}
+		}
+		else
+		{
+			// Nothing to read: a clear lake, rather than the bake's colour (white where a texture fed the colour, or the near end of a fade).
+			Out.bColour = true;
+			for (int32 Channel = 0; Channel < 3; ++Channel)
+			{
+				Out.Colour[Channel] = ClearLakeColour[Channel];
+			}
+		}
+	}
+	const UMaterial* Base = Context->GetMaterial();
+	if (Base && Base->GetPathName().StartsWith(TEXT("/Water/Materials/")))
+	{
+		Out.bWavesDropped = true;
+	}
 	return true;
 }
 

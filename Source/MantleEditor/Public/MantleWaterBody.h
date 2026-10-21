@@ -7,6 +7,7 @@ class UActorComponent;
 class UMaterialInterface;
 class USceneComponent;
 class UStaticMesh;
+class UStaticMeshComponent;
 
 /** What a Water plugin body publishes as: its mesh and the material it draws with, or why it cannot be carried. */
 struct FMantleWaterBodyMesh
@@ -40,6 +41,12 @@ class MANTLEEDITOR_API FMantleWaterBody
 public:
 	/** Whether Component is a Water plugin body component (UWaterBodyComponent or a child). */
 	static bool IsWaterBody(const UActorComponent* Component);
+
+	/**
+	 * Whether Mesh is the static mesh component a Water plugin body on the same actor draws itself with (a Custom body's MeshComp, or
+	 * any body's water mesh override): it publishes on its own, as a mesh drawn with the body's water material.
+	 */
+	static bool IsBodyMeshComponent(const UStaticMeshComponent* Mesh);
 
 	/** The body's mesh and material, or why not (see FMantleWaterBodyMesh). The generated mesh is cached per body and shape. */
 	static FMantleWaterBodyMesh Resolve(const USceneComponent* Body);

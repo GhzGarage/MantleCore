@@ -5,6 +5,7 @@
 #include "MantleRuntime.h"
 
 #include "Components/SplineComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "CompGeom/PolygonTriangulation.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Actor.h"
@@ -81,6 +82,34 @@ namespace MantleWaterBodyPrivate
 bool FMantleWaterBody::IsWaterBody(const UActorComponent* Component)
 {
 	return Component && MantleWaterBodyPrivate::DerivesFrom(Component->GetClass(), TEXT("WaterBodyComponent"));
+}
+
+bool FMantleWaterBody::IsBodyMeshComponent(const UStaticMeshComponent* Mesh)
+{
+	using namespace MantleWaterBodyPrivate;
+	const AActor* Owner = Mesh ? Mesh->GetOwner() : nullptr;
+	if (!Owner)
+	{
+		return false;
+	}
+	for (const UActorComponent* Component : Owner->GetComponents())
+	{
+		if (!IsWaterBody(Component))
+		{
+			continue;
+		}
+		// A Custom body's own mesh component (MeshComp), else the mesh any body's override names.
+		if (ReadObject(Component, TEXT("MeshComp")) == Mesh)
+		{
+			return true;
+		}
+		const UStaticMesh* Override = Cast<UStaticMesh>(ReadObject(Component, TEXT("WaterMeshOverride")));
+		if (Override && Override == Mesh->GetStaticMesh())
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 UStaticMesh* FMantleWaterBody::BuildFlatMesh(const TArray<FVector2D>& Polygon, double Z, UMaterialInterface* Material, const FString& Name, FString& OutWhy)
