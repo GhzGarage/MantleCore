@@ -58,6 +58,9 @@ struct MANTLEEDITOR_API FMantleAnimClipData
 		double TravelCm = 0.0;
 		double RiseCm = 0.0;
 		double TurnDegrees = 0.0;
+		/** How far the root's first key is from its reference pose (cm, degrees): an offset the client would also drop. */
+		double OffsetCm = 0.0;
+		double OffsetDegrees = 0.0;
 		bool bMoved = false;
 		bool bInPlace = false;
 	} RootMotion;

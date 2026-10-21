@@ -468,8 +468,9 @@ void FMantleAnimClipWriter::MoveRootOntoChildren(FMantleAnimClipData& Clip, cons
 	const FTransform First = RootAt(0);
 	double Lowest = First.GetTranslation().Z;
 	double Highest = Lowest;
-	const bool bOffReference = FVector::Dist(First.GetTranslation(), RootReference.GetTranslation()) > 0.5
-		|| FMath::RadiansToDegrees(First.GetRotation().AngularDistance(RootReference.GetRotation())) > 0.5;
+	Clip.RootMotion.OffsetCm = FVector::Dist(First.GetTranslation(), RootReference.GetTranslation());
+	Clip.RootMotion.OffsetDegrees = FMath::RadiansToDegrees(First.GetRotation().AngularDistance(RootReference.GetRotation()));
+	const bool bOffReference = Clip.RootMotion.OffsetCm > 0.5 || Clip.RootMotion.OffsetDegrees > 0.5;
 	for (int32 Frame = 0; Frame < Frames; ++Frame)
 	{
 		const FTransform At = RootAt(Frame);
