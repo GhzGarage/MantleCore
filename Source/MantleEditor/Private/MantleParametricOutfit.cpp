@@ -736,7 +736,7 @@ namespace MantleParametricOutfitPrivate
 		};
 		const FString Before = Clearance();
 		FMantleRefitPushOut Pushed;
-		if (!FMantleAvatarRefit::PushOutOfBody(*Description, Surface, Pushed, OutError)) { return false; }
+		if (!FMantleAvatarRefit::PushOutOfBody(*Description, Surface, Pushed, OutError, /*bCoverSkin*/ true)) { return false; }
 		UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_GARMENT_FIT resized onto %s: %s; pushed out: %s"), *Body.GetName(), *Before, *Clearance());
 		OutNote = Pushed.ToString();
 		if (Pushed.Moved > 0)

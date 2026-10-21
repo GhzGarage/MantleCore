@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleGarmentOutfit.h"
+#include "MantleAvatarRefitFixer.h"
 #include "MantleOutfitSections.h"
 #include "MantleSkinnedMesh.h"
 
@@ -273,6 +274,48 @@ bool FMantleGarmentOutfitClearanceTest::RunTest(const FString& Parameters)
 	const FString Line = FMantleGarmentOutfit::DescribeClearance({ FVector3f(0.5f, 0.2f, 0.0f), FVector3f(0.2f, 0.2f, 2.0f), FVector3f(0.7f, 0.7f, -1.0f) }, SkinSheet(4, 0.0f));
 	TestTrue(TEXT("all three are tracked"), Line.StartsWith(TEXT("tracked 3/3, under 1,")));
 	TestTrue(TEXT("the share within 1 cm"), Line.Contains(TEXT("within 1 cm 67%")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitCoverSkinTest,
+	"Mantle.Editor.GarmentOutfit.CoverSkin",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitCoverSkinTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleGarmentOutfitTestPrivate;
+	// Skin with a 1.2 cm kneecap at (6, 3); a coarse garment square 1 cm over the flat skin, its vertices all well outside
+	// it, but the kneecap comes through the triangle (1, 1), (9, 1), (9, 9) between them.
+	const FMantleSkinnedMeshLOD Knee = SkinSheet(10, 0.0f, [](const float X, const float Y) { return X == 6.0f && Y == 3.0f ? 1.2f : 0.0f; });
+	auto Square = [](const float Z, const bool bFacingSkin)
+	{
+		FMantleSkinnedMeshLOD Garment;
+		Garment.Positions = { FVector3f(1, 1, Z), FVector3f(9, 1, Z), FVector3f(1, 9, Z), FVector3f(9, 9, Z) };
+		Garment.Normals.Init(FVector3f(0, 0, bFacingSkin ? -1.0f : 1.0f), 4);
+		Garment.Indices = { 0, 1, 3, 0, 3, 2 };
+		return Garment;
+	};
+	FMantleSkinnedMeshLOD Garment = Square(1.0f, false);
+	int32 After = 0;
+	const int32 Before = FMantleAvatarRefit::CoverSkin(Garment, Knee, After);
+	TestEqual(TEXT("the kneecap came through"), Before, 1);
+	TestEqual(TEXT("it is covered"), After, 0);
+	for (const int32 Corner : { 0, 1, 3 })
+	{
+		TestTrue(TEXT("the triangle over it went out by the cover"), FMath::IsNearlyEqual(Garment.Positions[Corner].Z, 1.2f + FMantleAvatarRefit::SkinCoverCm, 0.02f));
+	}
+	TestTrue(TEXT("the other corner stays"), FMath::IsNearlyEqual(Garment.Positions[2].Z, 1.0f, 1e-4f));
+
+	// The same square as an inner lining facing the skin: left alone.
+	FMantleSkinnedMeshLOD Lining = Square(1.0f, true);
+	FMantleAvatarRefit::CoverSkin(Lining, Knee, After);
+	TestTrue(TEXT("a lining facing the skin does not move"), Lining.Positions[0].Equals(FVector3f(1, 1, 1), 1e-4f) && Lining.Positions[3].Equals(FVector3f(9, 9, 1), 1e-4f));
+
+	// Skin well under the garment asks nothing of it.
+	FMantleSkinnedMeshLOD High = Square(1.6f, false);
+	TestEqual(TEXT("nothing through a garment over it"), FMantleAvatarRefit::CoverSkin(High, Knee, After), 0);
+	TestTrue(TEXT("and it does not move"), High.Positions[0].Equals(FVector3f(1, 1, 1.6f), 1e-4f));
 	return true;
 }
 

@@ -226,7 +226,7 @@ namespace MantleGarmentOutfitPrivate
 		FMantleSkinnedMeshLOD Surface;
 		TArray<int32> PointOf;
 		FMantleGarmentOutfit::WeldedSurface(Mesh, Surface, PointOf);
-		if (!FMantleAvatarRefit::PushOutOfBody(Surface, Body, Out, OutError))
+		if (!FMantleAvatarRefit::PushOutOfBody(Surface, Body, Out, OutError, /*bCoverSkin*/ true))
 		{
 			return false;
 		}

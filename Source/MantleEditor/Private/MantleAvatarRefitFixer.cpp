@@ -194,8 +194,9 @@ const TCHAR* LexToString(const EMantleRefitCorrespondence Path)
 
 FString FMantleRefitPushOut::ToString() const
 {
-	return FString::Printf(TEXT("%d of %d under the skin (deepest %.2f cm), %d moved (largest %.2f cm), %d left under (%d deeper than %.0f cm)"),
+	const FString Line = FString::Printf(TEXT("%d of %d under the skin (deepest %.2f cm), %d moved (largest %.2f cm), %d left under (%d deeper than %.0f cm)"),
 		InsideBefore, Tracked, DeepestCm, Moved, MaxMoveCm, InsideAfter, TooDeep, FMantleAvatarRefit::MaxPushDepthCm);
+	return SkinThroughBefore < 0 ? Line : FString::Printf(TEXT("%s; skin through it between vertices %d, covered to %d"), *Line, SkinThroughBefore, SkinThroughAfter);
 }
 
 FVector3f FMantleRefitPlan::Warp(const FVector3f& P) const
@@ -829,7 +830,7 @@ bool FMantleAvatarRefit::RefitMeshDescription(FMeshDescription& Mesh, const FMan
 	return true;
 }
 
-bool FMantleAvatarRefit::PushOutOfBody(FMeshDescription& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError)
+bool FMantleAvatarRefit::PushOutOfBody(FMeshDescription& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError, const bool bCoverSkin)
 {
 	Out = FMantleRefitPushOut();
 	FSkeletalMeshAttributes Attributes(Mesh);
@@ -875,7 +876,7 @@ bool FMantleAvatarRefit::PushOutOfBody(FMeshDescription& Mesh, const FMantleSkin
 	}
 
 	const FMantleSkinnedMeshLOD Before = Garment;
-	if (!PushOutOfBody(Garment, Body, Out, OutError))
+	if (!PushOutOfBody(Garment, Body, Out, OutError, bCoverSkin))
 	{
 		return false;
 	}
@@ -889,7 +890,7 @@ bool FMantleAvatarRefit::PushOutOfBody(FMeshDescription& Mesh, const FMantleSkin
 	return true;
 }
 
-bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError)
+bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError, const bool bCoverSkin)
 {
 	Out = FMantleRefitPushOut();
 	if (Garment.NumTriangles() == 0)
@@ -935,6 +936,10 @@ bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMa
 		OutError = FString::Printf(TEXT("the push out of the body failed: %s"), *Error);
 		return false;
 	}
+	if (bCoverSkin)
+	{
+		Out.SkinThroughBefore = CoverSkin(Garment, Body, Out.SkinThroughAfter);
+	}
 	for (int32 Vertex = 0; Vertex < Garment.NumVertices(); ++Vertex)
 	{
 		const double Move = FVector3f::Dist(Garment.Positions[Vertex], Before.Positions[Vertex]);
@@ -956,6 +961,81 @@ bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMa
 		}
 	}
 	return true;
+}
+
+int32 FMantleAvatarRefit::CoverSkin(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, int32& OutAfter)
+{
+	OutAfter = 0;
+	int32 ThroughBefore = -1;
+	if (Garment.NumTriangles() == 0 || Body.Positions.IsEmpty() || Body.Normals.Num() != Body.Positions.Num())
+	{
+		return 0;
+	}
+	for (int32 Pass = 0; Pass <= SkinCoverPasses; ++Pass)
+	{
+		// The skin over the garment: each body point near it, at its closest garment triangle.
+		FMantleGarmentClearance SkinOver;
+		if (!FMantleGarmentClearance::Compute(Body.Positions, Garment, SkinOver, SkinCoverSearchCm))
+		{
+			break;
+		}
+		SkinOver.UntrackBoundary(Garment);
+		TArray<float> Lack;
+		TArray<FVector3f> Along;
+		Lack.Init(0.0f, Garment.NumVertices());
+		Along.Init(FVector3f::ZeroVector, Garment.NumVertices());
+		int32 Through = 0;
+		for (int32 Point = 0; Point < Body.Positions.Num(); ++Point)
+		{
+			float Over = 0.0f;
+			FVector3f Normal;
+			if (!SkinOver.IsTracked(Point) || !SkinOver.Measure(Point, Body.Positions[Point], Garment.Positions, Over, Normal)
+				|| FVector3f::DotProduct(Normal, Body.Normals[Point]) < FMantleGarmentClearance::NormalMinDot)
+			{
+				continue;
+			}
+			// Over: how far the skin point is above the triangle (positive: through it).
+			Through += Over > 0.0f ? 1 : 0;
+			const float Needed = Over + SkinCoverCm;
+			if (Needed <= 0.01f)
+			{
+				continue;
+			}
+			const int32 Triangle = SkinOver.Triangle[Point];
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				const int32 Vertex = static_cast<int32>(Garment.Indices[Triangle * 3 + Corner]);
+				if (Needed > Lack[Vertex])
+				{
+					Lack[Vertex] = Needed;
+					Along[Vertex] = Normal;
+				}
+			}
+		}
+		if (Pass == 0)
+		{
+			ThroughBefore = Through;
+		}
+		OutAfter = Through;
+		if (Pass == SkinCoverPasses)
+		{
+			break;
+		}
+		bool bMoved = false;
+		for (int32 Vertex = 0; Vertex < Garment.NumVertices(); ++Vertex)
+		{
+			if (Lack[Vertex] > 0.0f)
+			{
+				Garment.Positions[Vertex] += Along[Vertex] * Lack[Vertex];
+				bMoved = true;
+			}
+		}
+		if (!bMoved)
+		{
+			break;
+		}
+	}
+	return FMath::Max(0, ThroughBefore);
 }
 
 USkeletalMesh* FMantleAvatarRefit::WriteRefit(USkeletalMesh* Garment, const FMantleRefitPlan& InPlan, const FString& PackagePath, const FString& AssetName,

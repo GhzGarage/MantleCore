@@ -42,6 +42,10 @@ struct MANTLEEDITOR_API FMantleRefitPushOut
 	int32 Moved = 0;
 	double MaxMoveCm = 0.0;
 
+	/** With bCoverSkin: skin points that came through the garment between its vertices, before and after CoverSkin (-1: not run). */
+	int32 SkinThroughBefore = -1;
+	int32 SkinThroughAfter = -1;
+
 	/** "312 of 5120 under the skin (deepest 2.41 cm), 340 moved (largest 2.70 cm), 3 left under". */
 	FString ToString() const;
 };
@@ -220,10 +224,29 @@ public:
 	 * (FMantleClearanceRestore: a smoothed push field, layer twins moved together, triangles never turned over). Vertices
 	 * deeper than MaxPushDepthCm stay. Positions only. False with why on bad inputs.
 	 */
-	static bool PushOutOfBody(FMeshDescription& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError);
+	static bool PushOutOfBody(FMeshDescription& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError, bool bCoverSkin = false);
 
-	/** The same on a surface (one point per welded vertex, its normals and triangles): Garment's positions are moved. */
-	static bool PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError);
+	/** The same on a surface (one point per welded vertex, its normals and triangles): Garment's positions are moved. bCoverSkin: CoverSkin after. */
+	static bool PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError, bool bCoverSkin = false);
+
+	/** Skin under a garment triangle is kept at least this far under it by CoverSkin, cm (PushOutCm, as at the vertices). */
+	static constexpr float SkinCoverCm = PushOutCm;
+
+	/** CoverSkin looks at skin within this of the garment, cm: further out it is not under this garment (an arm beside a top). */
+	static constexpr float SkinCoverSearchCm = 2.0f;
+
+	/** CoverSkin's passes. */
+	static constexpr int32 SkinCoverPasses = 3;
+
+	/**
+	 * Pure (tested): skin that comes through a garment between its vertices (a kneecap under a coarse trouser leg, where every
+	 * vertex is outside the skin) is covered. Each Body point within SkinCoverSearchCm whose closest garment point lies inside
+	 * a garment triangle (not on its open edge) facing the way the skin does, and less than SkinCoverCm under it, moves that
+	 * triangle's corners out along the triangle's normal by what it lacks (the most any such point asks of a corner),
+	 * SkinCoverPasses passes. A garment layer facing the skin (an inner lining) is left alone. Returns the skin points through
+	 * the garment (above it) before; OutAfter, after.
+	 */
+	static int32 CoverSkin(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, int32& OutAfter);
 
 	/**
 	 * A NEW skeletal mesh, PackagePath/AssetName, Garment refitted by InPlan on every LOD (FMantleAvatarRepose::
