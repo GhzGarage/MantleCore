@@ -12,6 +12,7 @@
 #include "MantleCosmeticExport.h"
 #include "MantleAvatarRefitFixer.h"
 #include "MantleGarmentOutfit.h"
+#include "MantleOutfitSections.h"
 #include "MantleAvatarConvertFixer.h"
 #include "MantleNailSeating.h"
 #include "MeshDescription.h"
@@ -932,19 +933,23 @@ USkeletalMesh* FMantleParametricOutfit::FindBodyBeside(USkeletalMesh* Garment)
 		Filter.ClassPaths.Add(USkeletalMesh::StaticClass()->GetClassPathName());
 		TArray<FAssetData> Meshes;
 		Registry.GetAssets(Filter, Meshes);
+		// A body named for a body first; the Convert list's pairing decides in the end.
+		Meshes.StableSort([](const FAssetData& A, const FAssetData& B)
+		{
+			return A.AssetName.ToString().Contains(TEXT("Body"), ESearchCase::IgnoreCase) && !B.AssetName.ToString().Contains(TEXT("Body"), ESearchCase::IgnoreCase);
+		});
 		for (const FAssetData& Data : Meshes)
 		{
-			FString Skeleton;
-			Data.GetTagValue(TEXT("Skeleton"), Skeleton);
-			const FString Name = Data.AssetName.ToString();
-			const FString Package = Data.PackageName.ToString();
-			if (!FMantleCosmeticExport::CouldBeAuthoringBody(Name, Package, Skeleton)
-				|| !(Name.Contains(TEXT("Body"), ESearchCase::IgnoreCase) || Package.Contains(TEXT("/Body/"), ESearchCase::IgnoreCase)))
-			{
-				continue;
-			}
+			if (Data.PackageName == Garment->GetPackage()->GetFName()) { continue; }
 			USkeletalMesh* Body = Cast<USkeletalMesh>(Data.GetAsset());
 			if (!Body || Body == Garment || !FMantleGarmentOutfit::WornClothing(*Body).IsEmpty()) { continue; }
+			// A bare body: every section skin, and not a head (the Convert list's own test for a body).
+			TArray<int32> Slots;
+			const TArray<FMantleOutfitSection> Sections = FMantleCosmeticExport::ReadOutfitSections(Body, 0, Slots);
+			bool bAllSkin = Sections.Num() > 0;
+			for (const FMantleOutfitSection& Section : Sections) { bAllSkin &= FMantleOutfitSections::Classify(Section) == EMantleOutfitPiece::Skin; }
+			const TArray<FString> Words = FMantleOutfitSections::Words(Body->GetName());
+			if (!bAllSkin || Words.Contains(TEXT("head")) || Words.Contains(TEXT("face"))) { continue; }
 			// The body names this garment among its separate clothing (the Convert list's own matching).
 			TArray<FMantleConvertGarment> Garments;
 			TArray<FString> NotOffered;
