@@ -1275,6 +1275,7 @@ void SMantleCosmeticPanel::SetSource(UObject* Source)
 	Draft.OutfitSourceSize.Reset();
 	SaveAccessoryPlacement();
 	Draft.Source = Source;
+	Draft.bPlaceHairByHand = false;
 	// The rights declaration is about this content; a new source needs its own tick (#614).
 	Draft.bRightsDeclared = false;
 	Draft.ClothingColors.Reset(); ClothingPreviewColors.Reset();
@@ -2047,15 +2048,18 @@ void SMantleCosmeticPanel::ShowHairHeadFit()
 	{
 		return;
 	}
+	// The hair card lives in its own box so confirming it leaves every check above it alone.
+	const TSharedRef<SVerticalBox> Card = SNew(SVerticalBox);
+	Card->AddSlot().AutoHeight()[Card];
 	if (!Package->bHairHeadFitted)
 	{
 		if (Draft.bPlaceHairByHand && Draft.Class == EMantleCosmeticClass::Hair)
 		{
-			IssuesBox->AddSlot().AutoHeight().Padding(0, 8, 0, 2)
+			Card->AddSlot().AutoHeight().Padding(0, 8, 0, 2)
 			[
 				SNew(STextBlock).AutoWrapText(true).Text(LOCTEXT("HairFitByHand", "This hair uploads where you made it; it was not sized to the standard head."))
 			];
-			IssuesBox->AddSlot().AutoHeight().Padding(0, 4)
+			Card->AddSlot().AutoHeight().Padding(0, 4)
 			[
 				SNew(SButton).Text(LOCTEXT("HairFitForMe", "Fit it for me"))
 				.OnClicked_Lambda([this]
@@ -2071,32 +2075,32 @@ void SMantleCosmeticPanel::ShowHairHeadFit()
 		return;
 	}
 	const FMantleHairFitReport::FResult& Fit = Package->HairHeadFit;
-	IssuesBox->AddSlot().AutoHeight().Padding(0, 8, 0, 2)
+	Card->AddSlot().AutoHeight().Padding(0, 8, 0, 2)
 	[
 		SNew(STextBlock).AutoWrapText(true).Text(FText::FromString(Fit.Headline))
 	];
 	for (const FString& Message : Fit.Messages)
 	{
-		IssuesBox->AddSlot().AutoHeight().Padding(0, 2)
+		Card->AddSlot().AutoHeight().Padding(0, 2)
 		[
 			SNew(STextBlock).AutoWrapText(true)
 			.ColorAndOpacity(MantleCosmeticPanelPrivate::SeverityColour(EMantleCosmeticSeverity::Warning))
 			.Text(FText::FromString(Message))
 		];
 	}
-	IssuesBox->AddSlot().AutoHeight().Padding(0, 4)
+	Card->AddSlot().AutoHeight().Padding(0, 4)
 	[
 		SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
 		[
 			SNew(SButton).Text(FText::FromString(FMantleHairFitReport::ConfirmLabel()))
-			.OnClicked_Lambda([this]
+			.OnClicked_Lambda([WeakCard = TWeakPtr<SVerticalBox>(Card)]
 			{
 				// Confirming keeps the fitted hair; the preview and the upload already carry it.
-				if (IssuesBox.IsValid())
+				if (const TSharedPtr<SVerticalBox> Pinned = WeakCard.Pin())
 				{
-					IssuesBox->ClearChildren();
-					IssuesBox->AddSlot().AutoHeight()
+					Pinned->ClearChildren();
+					Pinned->AddSlot().AutoHeight()
 					[
 						SNew(STextBlock).Text(LOCTEXT("HairFitConfirmed", "Hair fit confirmed."))
 					];

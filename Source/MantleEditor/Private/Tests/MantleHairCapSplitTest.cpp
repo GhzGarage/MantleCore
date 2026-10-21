@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleHairCapSplit.h"
 #include "MantleHairFitReport.h"
+#include "MantleHairHeadFit.h"
 
 #include "Misc/AutomationTest.h"
 
@@ -38,6 +39,27 @@ namespace MantleHairCapSplitTestPrivate
 	{
 		CapTestSheet(10, 20.f, 0.f, P, I);
 		CapTestSheet(10, 20.f, 0.f, P, I);
+	}
+
+	/** A UV sphere, outward windings, radius R cm, at the origin. */
+	void CapTestSphere(float R, int32 Rings, int32 Segments, TArray<FVector3f>& P, TArray<uint32>& I)
+	{
+		const uint32 Base = P.Num();
+		for (int32 Ring = 0; Ring <= Rings; ++Ring)
+		{
+			const float Phi = UE_PI * Ring / Rings;
+			for (int32 Seg = 0; Seg < Segments; ++Seg)
+			{
+				const float Theta = 2.f * UE_PI * Seg / Segments;
+				P.Add(FVector3f(R * FMath::Sin(Phi) * FMath::Cos(Theta), R * FMath::Sin(Phi) * FMath::Sin(Theta), R * FMath::Cos(Phi)));
+			}
+		}
+		for (int32 Ring = 0; Ring < Rings; ++Ring) for (int32 Seg = 0; Seg < Segments; ++Seg)
+		{
+			const uint32 A = Base + Ring * Segments + Seg, B = Base + Ring * Segments + (Seg + 1) % Segments;
+			const uint32 C = A + Segments, D = B + Segments;
+			I.Append({A, B, D, A, D, C});
+		}
 	}
 }
 
@@ -178,6 +200,50 @@ bool FMantleHairFitReportTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("head names"), FMantleHairFitReport::IsBakedHeadName(TEXT("M_Head")) && FMantleHairFitReport::IsBakedHeadName(TEXT("Face_skin")) && FMantleHairFitReport::IsBakedHeadName(TEXT("Body")));
 	TestFalse(TEXT("cap and scalp are not heads"), FMantleHairFitReport::IsBakedHeadName(TEXT("Head_Cap")) || FMantleHairFitReport::IsBakedHeadName(TEXT("Scalp_skin")));
 	TestFalse(TEXT("cards are not heads"), FMantleHairFitReport::IsBakedHeadName(TEXT("Hair_Cards")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHairHeadFitRunTest,
+	"Mantle.Editor.HairHeadFit.CapReachesTheFitAndABakedHeadIsLeftOut",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHairHeadFitRunTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleHairCapSplitTestPrivate;
+	TArray<FVector3f> HeadP; TArray<uint32> HeadI;
+	CapTestSphere(9.f, 16, 24, HeadP, HeadI);
+
+	// Hair: 30 cards (section 0) and a cap sheet (section 1); the same again with a huge built-in head (section 2).
+	TArray<FVector3f> P; TArray<uint32> I; TArray<int32> Sections;
+	CapTestCards(30, P, I);
+	for (int32 T = 0; T < I.Num() / 3; ++T) Sections.Add(0);
+	CapTestSheet(10, 20.f, 0.f, P, I);
+	while (Sections.Num() < I.Num() / 3) Sections.Add(1);
+	const TArray<FString> Names = {TEXT("Cards"), TEXT("Hair_Cap"), TEXT("Head_Mat")};
+
+	FMantleHairHeadFit::FInput Input;
+	Input.HeadPositions = HeadP; Input.HeadIndices = HeadI;
+	Input.HairPositions = P; Input.HairIndices = I; Input.TriangleSections = Sections; Input.SectionNames = Names;
+	const FMantleHairHeadFit::FResult Plain = FMantleHairHeadFit::Run(Input);
+	TestTrue(TEXT("fit ran"), Plain.bFitted);
+	TestEqual(TEXT("positions keep their count"), Plain.Positions.Num(), P.Num());
+	TestTrue(TEXT("the cap reached the scalp fit"), Plain.bCapFound);
+	TestTrue(TEXT("and the notes say so"), Plain.Notes.ContainsByPredicate([](const FString& N) { return N.Contains(TEXT("found 1 cap")); }));
+	TestFalse(TEXT("no built-in head"), Plain.Report.bBakedHead);
+
+	TArray<FVector3f> P2 = P; TArray<uint32> I2 = I; TArray<int32> Sections2 = Sections;
+	CapTestSphere(80.f, 12, 16, P2, I2);
+	while (Sections2.Num() < I2.Num() / 3) Sections2.Add(2);
+	FMantleHairHeadFit::FInput Baked = Input;
+	Baked.HairPositions = P2; Baked.HairIndices = I2; Baked.TriangleSections = Sections2;
+	const FMantleHairHeadFit::FResult WithHead = FMantleHairHeadFit::Run(Baked);
+	TestTrue(TEXT("fit ran with a built-in head"), WithHead.bFitted);
+	TestTrue(TEXT("the built-in head is reported"), WithHead.Report.bBakedHead);
+	TestEqual(TEXT("sizing is the same as without it (the head did not size the piece)"), WithHead.Notes[0], Plain.Notes[0]);
+	bool bSame = true;
+	for (int32 V = 0; V < P.Num(); ++V) bSame &= WithHead.Positions[V].Equals(Plain.Positions[V], 1.e-3f);
+	TestTrue(TEXT("hair lands in the same place with or without it"), bSame);
 	return true;
 }
 

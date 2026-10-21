@@ -110,7 +110,9 @@ FMantleHairHeadFit::FResult FMantleHairHeadFit::Run(const FInput& Input)
 	Report.bMeetsOutsideBar = Piece.bMeetsOutsideBar;
 	Report.bScalpCheckFit = Scalp.bCheckFit;
 	Report.RootsWithin5mmAfter = M.RootsWithin5mmAfter;
-	Report.CardVertices = M.CardVertices;
+	// Only the vertices the cards use: the metrics count every position, cap and built-in head included.
+	TSet<uint32> CardVerticesUsed(Split.CardIndices);
+	Report.CardVertices = CardVerticesUsed.Num();
 	Report.CardInsideAfter = M.CardInsideAfter;
 	Report.bHadCap = Split.bFound;
 	Out.Report = FMantleHairFitReport::Describe(Report);
