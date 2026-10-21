@@ -39,6 +39,7 @@
 #include "MantleVehicleSource.h"
 #include "MantleVehicleSpawnPoint.h"
 #include "MantleWaterBody.h"
+#include "MantleWaterBodyExport.h"
 #include "MantleWeaponSpawnPoint.h"
 #include "MantleScriptPoint.h"
 #include "MantleScriptPackages.h"
@@ -717,6 +718,57 @@ namespace
 	}
 
 	/**
+	 * A Water Body entity's properties (GhzGarage/mantle#997), from the actor's water body: the numbers as FMantleWaterBodyExport::BuildProps
+	 * holds them to the place format, and a custom body's mesh by its library or upload id.
+	 */
+	void ExporterReadWaterBody(
+		const AActor* Actor,
+		const FString& Path,
+		TSet<FString>& ReferencedAssets,
+		MantlePlaceExporterUploads::FContext& Uploads,
+		TArray<FMantleParseError>& Errors,
+		FMantleEntity& Entity)
+	{
+		FMantleWaterBodyData Body;
+		FMantleWaterBodyProps Props;
+		FString Why;
+		TArray<FString> Notes;
+		if (!FMantleWaterBodyExport::ReadBody(Actor, Body) || !FMantleWaterBodyExport::BuildProps(Body, Props, Why, Notes))
+		{
+			Errors.Add(FMantleParseError{ Path + TEXT("/properties"), FString::Printf(TEXT("'%s' %s"), *Entity.Name, Why.IsEmpty() ? TEXT("is not a water body Mantle can publish") : *Why) });
+			Entity.Props.Set<FMantleWaterBodyProps>(FMantleWaterBodyProps());
+			return;
+		}
+		if (Props.BodyType == EMantleWaterBodyType::Custom)
+		{
+			const UStaticMesh* Mesh = Body.Mesh.Get();
+			if (!Mesh)
+			{
+				Errors.Add(FMantleParseError{ Path + TEXT("/properties/mesh"), TEXT("has no mesh assigned") });
+			}
+			else if (FMantlePlaceAssets::IsLibraryAsset(Mesh))
+			{
+				Props.MeshId = FMantleAssetLibrary::Get().FindIdByPath(FSoftObjectPath(Mesh));
+				ReferencedAssets.Add(Props.MeshId);
+			}
+			else
+			{
+				TArray<FMantleValidationIssue> MeshIssues;
+				FMantlePlaceAssets::CheckMesh(Mesh, FString(), Uploads.Limits, MeshIssues);
+				for (const FMantleValidationIssue& Issue : MeshIssues)
+				{
+					if (Issue.Severity == EMantleIssueSeverity::Error)
+					{
+						Errors.Add(FMantleParseError{ Path + TEXT("/properties/mesh"), Issue.Problem + TEXT(" ") + Issue.Remedy });
+					}
+				}
+				Props.MeshId = Uploads.IdFor(FMantlePlaceAssets::MeshKey(Mesh), EMantleAssetKind::StaticMesh, Mesh);
+			}
+		}
+		Entity.Props.Set<FMantleWaterBodyProps>(MoveTemp(Props));
+	}
+
+	/**
 	 * One mesh of a Mantle Scatter Volume (#530), named as a StaticMesh names its mesh: a library mesh by its
 	 * id with only its material overrides; a project mesh by its upload's id, held to the upload limits, with
 	 * every slot's effective material (the override, else the mesh's own), since an uploaded mesh carries
@@ -1230,6 +1282,11 @@ namespace
 		case EMantleEntityType::Text:
 			// GhzGarage/mantle#724: the text component's look; its scale is folded into xScale and yScale, and the transform written at scale 1.
 			FMantleTextExport::Extract(FMantleTextExport::ActorComponent(Actor), Entity);
+			break;
+
+		case EMantleEntityType::WaterBody:
+			// GhzGarage/mantle#997: a Water plugin body, its spline, waves, look and collision.
+			ExporterReadWaterBody(Actor, Path, ReferencedAssets, Uploads, Errors, Entity);
 			break;
 
 		default:
@@ -2168,6 +2225,8 @@ bool FMantlePlaceExporter::DescribeSkippedActor(const AActor* Actor, FSkippedAct
 
 bool FMantlePlaceExporter::ClassifyActor(const AActor* Actor, EMantleEntityType& OutType)
 {
+	// GhzGarage/mantle#997: a Water plugin body is a WaterBody entity where the target reads them (else it is left out with a warning).
+	if (FMantleTargetFeatures::Current().Reads(MantleClientFeatures::WaterBodies) && FMantleWaterBodyExport::IsWaterBodyActor(Actor)) { OutType = EMantleEntityType::WaterBody; return true; }
 	// #628: a mesh actor made of several components (a Blueprint's mesh, doors, lights, particles) is a Group of parts.
 	if (MantlePlaceExporterPrefab::NeedsGroup(Actor)) { OutType = EMantleEntityType::Group;            return true; }
 	// #818: a placed particle actor (an Emitter, a Niagara Actor) is a Group of Effect parts, as a Blueprint's particle components are.
@@ -3668,6 +3727,8 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 	int32 EffectParts = 0;
 	int32 ReflectionProbes = 0;
 	int32 Texts = 0;
+	int32 WaterBodies = 0;
+	int32 WaterSplinePoints = 0;
 
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
@@ -3741,6 +3802,12 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 		// A reflection probe (#628) left out on a target client that does not read them, hidden, or past the per-place cap: said so
 		// there, and its coverage line (kept or approximated) written when it publishes.
 		if (Type == EMantleEntityType::ReflectionProbe && !FMantleReflectionProbeExport::AdmitForExport(Actor, ReflectionProbes, Result.Coverage))
+		{
+			continue;
+		}
+
+		// A Water plugin body (GhzGarage/mantle#997) the place format cannot carry, or past the place's limits, is left out and said so.
+		if (Type == EMantleEntityType::WaterBody && !FMantleWaterBodyExport::Admit(Actor, ExporterLabelOf(Actor), WaterBodies, WaterSplinePoints, &Result.Coverage))
 		{
 			continue;
 		}
@@ -3835,6 +3902,16 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 					Exported.Add(MantlePlaceExporterPrefab::FExportedPart{ Part, Id });
 				}
 			}
+		}
+	}
+
+	// The Water Zone (GhzGarage/mantle#997): settings.water, when the place has a body to put in it.
+	if (WaterBodies > 0)
+	{
+		const FMantleWaterBodies Water = FMantleWaterBodyExport::Read(World);
+		if (const FMantleWaterZoneData* Zone = FMantleWaterBodyExport::PrimaryZone(Water))
+		{
+			Place.Settings.Water = FMantleWaterBodyExport::BuildZone(*Zone);
 		}
 	}
 
@@ -5181,6 +5258,19 @@ FString FMantlePlaceExporter::ToJson(const FMantlePlace& Place)
 		}
 		Writer->WriteObjectEnd();
 	}
+	// The Water Zone (GhzGarage/mantle#997), only when the place has one: clients from before it refuse the key.
+	if (Place.Settings.Water.IsSet())
+	{
+		const FMantleWaterZone& Zone = Place.Settings.Water.GetValue();
+		Writer->WriteObjectStart(TEXT("water"));
+		Writer->WriteArrayStart(TEXT("zoneExtent"));
+		Writer->WriteValue(Zone.ZoneExtent.X);
+		Writer->WriteValue(Zone.ZoneExtent.Y);
+		Writer->WriteArrayEnd();
+		WriteVector(Writer, TEXT("zoneLocation"), Zone.ZoneLocation);
+		Writer->WriteValue(TEXT("zoneYawDeg"), Zone.ZoneYawDeg);
+		Writer->WriteObjectEnd();
+	}
 	Writer->WriteObjectEnd();
 
 	// The audience block (#320), only when it says something: clients from before it refuse
@@ -5606,6 +5696,88 @@ FString FMantlePlaceExporter::ToJson(const FMantlePlace& Place)
 			}
 			Writer->WriteValue(TEXT("brightness"), P16->Brightness);
 			Writer->WriteValue(TEXT("skylightScale"), P16->SkylightScale);
+		}
+		else if (const FMantleWaterBodyProps* P21 = Entity.Props.TryGet<FMantleWaterBodyProps>())
+		{
+			// A new type (GhzGarage/mantle#997): its keys ship with it. A custom body writes its mesh, the others their spline; a river no waves.
+			Writer->WriteValue(TEXT("bodyType"), FString(MantleWaterBodyTypeToString(P21->BodyType)));
+			if (P21->BodyType == EMantleWaterBodyType::Custom)
+			{
+				Writer->WriteValue(TEXT("mesh"), P21->MeshId);
+			}
+			else
+			{
+				Writer->WriteObjectStart(TEXT("spline"));
+				Writer->WriteArrayStart(TEXT("points"));
+				for (const FMantleWaterSplinePoint& Point : P21->SplinePoints)
+				{
+					Writer->WriteObjectStart();
+					WriteVector(Writer, TEXT("location"), Point.Location);
+					WriteVector(Writer, TEXT("arriveTangent"), Point.ArriveTangent);
+					WriteVector(Writer, TEXT("leaveTangent"), Point.LeaveTangent);
+					Writer->WriteValue(TEXT("depth"), Point.Depth);
+					if (P21->BodyType == EMantleWaterBodyType::River)
+					{
+						Writer->WriteValue(TEXT("width"), Point.Width);
+						Writer->WriteValue(TEXT("velocity"), Point.Velocity);
+					}
+					if (Point.Interp != EMantleWaterSplinePointType::Curve)
+					{
+						Writer->WriteValue(TEXT("interp"), FString(MantleWaterSplinePointTypeToString(Point.Interp)));
+					}
+					Writer->WriteObjectEnd();
+				}
+				Writer->WriteArrayEnd();
+				Writer->WriteObjectEnd();
+			}
+			if (P21->Waves.Num() > 0)
+			{
+				Writer->WriteObjectStart(TEXT("waves"));
+				Writer->WriteArrayStart(TEXT("list"));
+				for (const FMantleWaterWave& Wave : P21->Waves)
+				{
+					Writer->WriteObjectStart();
+					Writer->WriteValue(TEXT("wavelength"), Wave.Wavelength);
+					Writer->WriteValue(TEXT("amplitude"), Wave.Amplitude);
+					Writer->WriteValue(TEXT("steepness"), Wave.Steepness);
+					Writer->WriteValue(TEXT("directionDeg"), Wave.DirectionDeg);
+					if (!FMath::IsNearlyZero(Wave.PhaseOffset))
+					{
+						Writer->WriteValue(TEXT("phaseOffset"), Wave.PhaseOffset);
+					}
+					Writer->WriteObjectEnd();
+				}
+				Writer->WriteArrayEnd();
+				Writer->WriteObjectEnd();
+			}
+			if (P21->Albedo.IsSet() || P21->Scattering.IsSet() || P21->Absorption.IsSet())
+			{
+				Writer->WriteObjectStart(TEXT("look"));
+				if (P21->Albedo.IsSet()) { WriteColor(Writer, TEXT("albedo"), *P21->Albedo); }
+				if (P21->Scattering.IsSet()) { WriteColor(Writer, TEXT("scattering"), *P21->Scattering); }
+				if (P21->Absorption.IsSet()) { WriteColor(Writer, TEXT("absorption"), *P21->Absorption); }
+				Writer->WriteObjectEnd();
+			}
+			Writer->WriteValue(TEXT("collision"), P21->bCollision);
+			if (P21->CollisionHeightOffset.IsSet())
+			{
+				Writer->WriteValue(TEXT("collisionHeightOffset"), *P21->CollisionHeightOffset);
+			}
+			if (P21->CollisionExtent.IsSet())
+			{
+				WriteVector(Writer, TEXT("collisionExtent"), *P21->CollisionExtent);
+			}
+			if (P21->OceanExtent.IsSet())
+			{
+				Writer->WriteArrayStart(TEXT("oceanExtent"));
+				Writer->WriteValue(P21->OceanExtent->X);
+				Writer->WriteValue(P21->OceanExtent->Y);
+				Writer->WriteArrayEnd();
+			}
+			if (P21->CenterOnZone.IsSet())
+			{
+				Writer->WriteValue(TEXT("centerOnZone"), *P21->CenterOnZone);
+			}
 		}
 		else if (const FMantleTextProps* P20 = Entity.Props.TryGet<FMantleTextProps>())
 		{

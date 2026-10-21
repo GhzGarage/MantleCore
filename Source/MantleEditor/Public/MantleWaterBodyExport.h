@@ -2,13 +2,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MantlePlaceTypes.h"
+#include "UObject/WeakObjectPtrTemplates.h"
 
 class AActor;
+class UStaticMesh;
 class UWorld;
 class FJsonObject;
+class FMantleCoverage;
 
 /** Which kind of Water Body a level has (the Water plugin's Ocean, Lake, River and Custom body actors). */
-enum class EMantleWaterBodyType : uint8
+enum class EMantleWaterBodyKind : uint8
 {
 	Ocean,
 	Lake,
@@ -17,7 +21,7 @@ enum class EMantleWaterBodyType : uint8
 };
 
 /** One spline point of a water body: where it is and what the body's spline metadata says about the water there. */
-struct MANTLEEDITOR_API FMantleWaterSplinePoint
+struct MANTLEEDITOR_API FMantleWaterSplineSample
 {
 	/** In the spline's own space (the body's transform turns it into the world), as are the tangents. */
 	FVector Location = FVector::ZeroVector;
@@ -37,8 +41,10 @@ struct MANTLEEDITOR_API FMantleWaterSplinePoint
 };
 
 /** One Gerstner wave, as the wave asset stores it once its generator has run. */
-struct MANTLEEDITOR_API FMantleWaterWave
+struct MANTLEEDITOR_API FMantleWaterWaveSample
 {
+	/** The wave's phase offset as the wave asset holds it. */
+	float PhaseOffset = 0.f;
 	float WaveLength = 0.f;
 	float Amplitude = 0.f;
 	float Steepness = 0.f;
@@ -60,7 +66,7 @@ struct MANTLEEDITOR_API FMantleWaterWaves
 	TSharedPtr<FJsonObject> Generator;
 
 	/** The waves the generator made (per wave: length, amplitude, steepness, direction), and the highest the set can rise. */
-	TArray<FMantleWaterWave> Waves;
+	TArray<FMantleWaterWaveSample> Waves;
 	float MaxWaveHeight = 0.f;
 
 	/** The body's own wave settings: the depth the waves fade out at, and the offset added to the highest wave. */
@@ -90,6 +96,11 @@ struct MANTLEEDITOR_API FMantleWaterLook
 	TArray<FMantleWaterMaterialParam> Params;
 	int32 TotalParams = 0;
 
+	/** The water master's look parameters ("Water Albedo", "Scattering", "Absorption"), when the material has them as colours. */
+	TOptional<FLinearColor> Albedo;
+	TOptional<FLinearColor> Scattering;
+	TOptional<FLinearColor> Absorption;
+
 	/** The other materials the body names: the river's transitions, the underwater post process and the static mesh stand-in (path names). */
 	TMap<FString, FString> OtherMaterials;
 };
@@ -110,15 +121,16 @@ struct MANTLEEDITOR_API FMantleWaterCollision
 /** Everything the exporter will need from one Water Body actor. */
 struct MANTLEEDITOR_API FMantleWaterBodyData
 {
-	EMantleWaterBodyType Type = EMantleWaterBodyType::Lake;
+	EMantleWaterBodyKind Type = EMantleWaterBodyKind::Lake;
 	FString Name;
 	FString Path;
 
-	/** The spline component's world transform (the body's actor transform in the Water plugin). */
+	/** The body actor's world transform, and the spline component's (the actor's root in the Water plugin, so the same in practice). */
 	FTransform Transform = FTransform::Identity;
+	FTransform SplineTransform = FTransform::Identity;
 
 	bool bClosedLoop = false;
-	TArray<FMantleWaterSplinePoint> Points;
+	TArray<FMantleWaterSplineSample> Points;
 
 	/** The spline metadata exists, so Depth, Velocity and AudioIntensity of the points are the body's own. */
 	bool bHasMetadata = false;
@@ -129,6 +141,7 @@ struct MANTLEEDITOR_API FMantleWaterBodyData
 
 	/** A custom body's mesh (asset path), and a lake's or custom body's override; empty for none. */
 	FString MeshPath;
+	TWeakObjectPtr<UStaticMesh> Mesh;
 
 	/** The body carves the landscape (the Water brush) and the ground depth used where there is no spline depth. */
 	bool bAffectsLandscape = false;
@@ -140,7 +153,7 @@ struct MANTLEEDITOR_API FMantleWaterBodyData
 };
 
 /** The level's Water Zone: its extent and how finely the water mesh is tessellated. */
-struct MANTLEEDITOR_API FMantleWaterZone
+struct MANTLEEDITOR_API FMantleWaterZoneData
 {
 	FString Name;
 	FString Path;
@@ -173,9 +186,9 @@ struct MANTLEEDITOR_API FMantleWaterBodies
 	bool bWaterPluginLoaded = false;
 
 	TArray<FMantleWaterBodyData> Bodies;
-	TArray<FMantleWaterZone> Zones;
+	TArray<FMantleWaterZoneData> Zones;
 
-	int32 Count(EMantleWaterBodyType Type) const;
+	int32 Count(EMantleWaterBodyKind Type) const;
 
 	/** "MANTLE_CHECK_WATER ocean=<n> lake=<n> river=<n> custom=<n> zones=<n> plugin=<1|0>", the line Mantle.Check logs. */
 	FString SummaryLine() const;
@@ -196,6 +209,31 @@ struct MANTLEEDITOR_API FMantleWaterBodyExport
 
 	/** Every Water Body actor and Water Zone in World. */
 	static FMantleWaterBodies Read(UWorld* World);
+
+	/** Whether Actor is a Water Body actor of the Water plugin (false when the plugin is not loaded). */
+	static bool IsWaterBodyActor(const AActor* Actor);
+
+	/** One Water Body actor; false when it is not one. */
+	static bool ReadBody(const AActor* Actor, FMantleWaterBodyData& Out);
+
+	/** The zone the place's settings.water describes: the highest overlap priority, else the first by path; null for none. */
+	static const FMantleWaterZoneData* PrimaryZone(const FMantleWaterBodies& Water);
+
+	/**
+	 * Body as a WaterBody entity's properties (GhzGarage/mantle#997), in the actor's own space, held to the place format's ranges.
+	 * Props.MeshId is left for the exporter (a custom body's mesh is an upload). False with OutWhy when the body cannot be carried
+	 * (a custom body with no mesh, a spline with too few or too many points); OutNotes says what was clamped or left out.
+	 */
+	static bool BuildProps(const FMantleWaterBodyData& Body, FMantleWaterBodyProps& Props, FString& OutWhy, TArray<FString>& OutNotes);
+
+	/** Zone as settings.water, its extent held to the format's range. */
+	static FMantleWaterZone BuildZone(const FMantleWaterZoneData& Zone);
+
+	/**
+	 * Export's gate for one Water Body actor: reads it, and counts it against the place's limits (Bodies and SplinePoints are running
+	 * totals). False, with a Dropped coverage line, when it is left out; otherwise an Approximated line says what it carries.
+	 */
+	static bool Admit(const AActor* Actor, const FString& Label, int32& Bodies, int32& SplinePoints, FMantleCoverage* Coverage);
 
 	/** The data as one JSON object ({ "bodies": [...], "zones": [...] }), for the harness and for the writer to come. */
 	static TSharedRef<FJsonObject> ToJson(const FMantleWaterBodies& Water);

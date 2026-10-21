@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantlePlaceAssets.h"
+#include "MantleWaterBodyExport.h"
 #include "MantleActorDecompose.h"
 #include "MantleAssetLibrary.h"
 #include "MantleAvatarContract.h"
@@ -1471,6 +1472,15 @@ FMantlePlaceDependencies FMantlePlaceDependencies::Gather(UWorld* World)
 			else if (Mirror.bOk)
 			{
 				Out.AddComponent(Cast<AStaticMeshActor>(Actor)->GetStaticMeshComponent(), Actor->GetActorLabel(), Mirror.Mesh);
+			}
+		}
+		else if (Type == EMantleEntityType::WaterBody)
+		{
+			// GhzGarage/mantle#997: a custom body's mesh is uploaded.
+			FMantleWaterBodyData Body;
+			if (FMantleWaterBodyExport::ReadBody(Actor, Body) && Body.Mesh.IsValid())
+			{
+				Out.AddMesh(Body.Mesh.Get(), Actor->GetActorLabel());
 			}
 		}
 		else if (Type == EMantleEntityType::SoundEmitter)

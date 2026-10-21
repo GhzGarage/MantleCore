@@ -1,5 +1,8 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleCoverage.h"
+#include "MantlePlaceExporter.h"
+#include "MantlePlaceParser.h"
+#include "MantleTargetFeatures.h"
 #include "MantleTerrainExport.h"
 #include "MantleWaterBodyExport.h"
 
@@ -51,7 +54,7 @@ namespace MantleWaterBodyExportTestPrivate
 		return Class ? World->SpawnActor(Class, &Location) : nullptr;
 	}
 
-	const FMantleWaterBodyData* FindBody(const FMantleWaterBodies& Water, const EMantleWaterBodyType Type)
+	const FMantleWaterBodyData* FindBody(const FMantleWaterBodies& Water, const EMantleWaterBodyKind Type)
 	{
 		return Water.Bodies.FindByPredicate([Type](const FMantleWaterBodyData& Body) { return Body.Type == Type; });
 	}
@@ -101,15 +104,15 @@ bool FMantleWaterBodyReadSpawnedBodiesTest::RunTest(const FString& Parameters)
 
 	const FMantleWaterBodies Water = FMantleWaterBodyExport::Read(Fixture.World);
 	TestTrue(TEXT("the plugin is seen as loaded"), Water.bWaterPluginLoaded);
-	TestEqual(TEXT("one lake"), Water.Count(EMantleWaterBodyType::Lake), 1);
-	TestEqual(TEXT("one river"), Water.Count(EMantleWaterBodyType::River), 1);
-	TestEqual(TEXT("one ocean"), Water.Count(EMantleWaterBodyType::Ocean), 1);
-	TestEqual(TEXT("one custom body"), Water.Count(EMantleWaterBodyType::Custom), 1);
+	TestEqual(TEXT("one lake"), Water.Count(EMantleWaterBodyKind::Lake), 1);
+	TestEqual(TEXT("one river"), Water.Count(EMantleWaterBodyKind::River), 1);
+	TestEqual(TEXT("one ocean"), Water.Count(EMantleWaterBodyKind::Ocean), 1);
+	TestEqual(TEXT("one custom body"), Water.Count(EMantleWaterBodyKind::Custom), 1);
 	// The Water plugin makes a zone of its own for a body that has none, so the level can have more than the one spawned here.
 	TestTrue(TEXT("the water zone is read"), Water.Zones.Num() >= 1);
 	TestTrue(TEXT("the check line counts them"), Water.SummaryLine().Contains(TEXT("ocean=1 lake=1 river=1 custom=1")) && Water.SummaryLine().Contains(TEXT("plugin=1")));
 
-	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyType::Lake))
+	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyKind::Lake))
 	{
 		TestTrue(TEXT("the lake is where it was put"), Body->Transform.GetLocation().Equals(FVector(0.0, 0.0, 100.0), 1.0));
 		TestTrue(TEXT("a lake's spline is closed"), Body->bClosedLoop);
@@ -117,7 +120,7 @@ bool FMantleWaterBodyReadSpawnedBodiesTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("a lake carves the landscape by default"), Body->bAffectsLandscape);
 		TestFalse(TEXT("and has a collision setting"), Body->Collision.Enabled.IsEmpty());
 	}
-	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyType::River))
+	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyKind::River))
 	{
 		TestFalse(TEXT("a river's spline is open"), Body->bClosedLoop);
 		TestTrue(TEXT("with at least two points"), Body->Points.Num() >= 2);
@@ -128,16 +131,16 @@ bool FMantleWaterBodyReadSpawnedBodiesTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("and a depth"), Body->Points[0].Depth > 0.f);
 		}
 	}
-	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyType::Custom))
+	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyKind::Custom))
 	{
 		TestTrue(TEXT("a custom body names its mesh"), Body->MeshPath.Contains(TEXT("MantleWaterTestPool")));
 		TestFalse(TEXT("and never carves the landscape"), Body->bAffectsLandscape);
 	}
-	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyType::Ocean))
+	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyKind::Ocean))
 	{
 		TestTrue(TEXT("an ocean has an extent"), Body->OceanExtents.X > 0.0 && Body->OceanExtents.Y > 0.0);
 	}
-	TestTrue(TEXT("a zone has an extent"), Water.Zones.ContainsByPredicate([](const FMantleWaterZone& Zone) { return Zone.Extent.X > 0.0 && Zone.Extent.Y > 0.0; }));
+	TestTrue(TEXT("a zone has an extent"), Water.Zones.ContainsByPredicate([](const FMantleWaterZoneData& Zone) { return Zone.Extent.X > 0.0 && Zone.Extent.Y > 0.0; }));
 
 	// The writer-to-come's input is plain JSON.
 	const FString Json = FMantleWaterBodyExport::ToJsonString(Water);
@@ -181,10 +184,10 @@ bool FMantleWaterBodyJsonTest::RunTest(const FString& Parameters)
 	Water.bWaterPluginLoaded = true;
 
 	FMantleWaterBodyData& River = Water.Bodies.AddDefaulted_GetRef();
-	River.Type = EMantleWaterBodyType::River;
+	River.Type = EMantleWaterBodyKind::River;
 	River.Name = TEXT("Brook");
 	River.bHasMetadata = true;
-	FMantleWaterSplinePoint& Start = River.Points.AddDefaulted_GetRef();
+	FMantleWaterSplineSample& Start = River.Points.AddDefaulted_GetRef();
 	Start.Location = FVector(0.0, 0.0, 10.0);
 	Start.Width = 300.f;
 	Start.Depth = 120.f;
@@ -193,10 +196,10 @@ bool FMantleWaterBodyJsonTest::RunTest(const FString& Parameters)
 	River.Points.AddDefaulted();
 	River.Waves.bHasWaves = true;
 	River.Waves.WavesClass = TEXT("GerstnerWaterWaves");
-	FMantleWaterWave& Wave = River.Waves.Waves.AddDefaulted_GetRef();
+	FMantleWaterWaveSample& Wave = River.Waves.Waves.AddDefaulted_GetRef();
 	Wave.WaveLength = 800.f;
 	Wave.Amplitude = 12.f;
-	Water.Bodies.AddDefaulted_GetRef().Type = EMantleWaterBodyType::Ocean;
+	Water.Bodies.AddDefaulted_GetRef().Type = EMantleWaterBodyKind::Ocean;
 	Water.Zones.AddDefaulted();
 
 	TestEqual(TEXT("the check line"), Water.SummaryLine(), FString(TEXT("MANTLE_CHECK_WATER ocean=1 lake=0 river=1 custom=0 zones=1 plugin=1")));
@@ -337,6 +340,256 @@ bool FMantleTerrainCarveCoverageTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("with an approximated water carve line"), static_cast<int64>(Coverage.Count(MantleCoverageCategory::WaterCarve, EMantleCoverageOutcome::Approximated)), static_cast<int64>(1));
 		TestEqual(TEXT("and one warning"), Issues.Num(), 1);
 		TestTrue(TEXT("which is a warning, not an error"), Issues.Num() == 1 && Issues[0].Severity == EMantleIssueSeverity::Warning);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleWaterBodyBuildPropsTest,
+	"Mantle.Editor.Water.BuildsThePlaceFormatsProperties",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleWaterBodyBuildPropsTest::RunTest(const FString& Parameters)
+{
+	// Built by hand, so it runs without the Water plugin.
+	auto Point = [](const FVector& Location, const float Depth, const float Width = 0.f, const float Velocity = 0.f)
+	{
+		FMantleWaterSplineSample Sample;
+		Sample.Location = Location;
+		Sample.ArriveTangent = FVector(100.0, 0.0, 0.0);
+		Sample.LeaveTangent = FVector(100.0, 0.0, 0.0);
+		Sample.Type = TEXT("Curve");
+		Sample.Depth = Depth;
+		Sample.Width = Width;
+		Sample.Velocity = Velocity;
+		return Sample;
+	};
+
+	// A river: widths and velocity kept, waves never carried, a clamped point written as curveClamped.
+	{
+		FMantleWaterBodyData River;
+		River.Type = EMantleWaterBodyKind::River;
+		River.bHasMetadata = true;
+		River.Points = { Point(FVector(0.0, 0.0, 0.0), 300.f, 600.f, 120.f), Point(FVector(1000.0, 0.0, 0.0), 400.f, 800.f, 200000.f) };
+		River.Points[1].Type = TEXT("CurveClamped");
+		River.Waves.bHasWaves = true;
+		River.Waves.Waves.AddDefaulted();
+		FMantleWaterBodyProps Props;
+		FString Why;
+		TArray<FString> Notes;
+		TestTrue(TEXT("a river builds"), FMantleWaterBodyExport::BuildProps(River, Props, Why, Notes));
+		TestEqual(TEXT("as a river"), Props.BodyType, EMantleWaterBodyType::River);
+		TestEqual(TEXT("with both points"), Props.SplinePoints.Num(), 2);
+		TestEqual(TEXT("the width is kept"), Props.SplinePoints[0].Width, 600.0);
+		TestEqual(TEXT("a velocity past the format's limit is held to it"), Props.SplinePoints[1].Velocity, FMantlePlaceLimits::MaxWaterRiverVelocity);
+		TestEqual(TEXT("the interpolation is carried"), Props.SplinePoints[1].Interp, EMantleWaterSplinePointType::CurveClamped);
+		TestEqual(TEXT("a river has no waves"), Props.Waves.Num(), 0);
+		TestTrue(TEXT("and says values were held"), Notes.ContainsByPredicate([](const FString& Note) { return Note.Contains(TEXT("held")); }));
+	}
+
+	// A lake whose spline sits offset from the actor: the points are in the actor's own space. Waves go out as world-space degrees.
+	{
+		FMantleWaterBodyData Lake;
+		Lake.Type = EMantleWaterBodyKind::Lake;
+		Lake.bHasMetadata = true;
+		Lake.Transform = FTransform(FVector(1000.0, 0.0, 0.0));
+		Lake.SplineTransform = FTransform(FVector(1500.0, 0.0, 0.0));
+		Lake.Points = { Point(FVector(0.0, 0.0, 0.0), 500.f), Point(FVector(100.0, 0.0, 0.0), 500.f), Point(FVector(0.0, 100.0, 0.0), 500.f) };
+		Lake.Waves.bHasWaves = true;
+		FMantleWaterWaveSample& Wave = Lake.Waves.Waves.AddDefaulted_GetRef();
+		Wave.WaveLength = 800.f;
+		Wave.Amplitude = 20.f;
+		Wave.Steepness = 2.f;
+		Wave.Direction = FVector(0.0, 1.0, 0.0);
+		Lake.Look.Albedo = FLinearColor(0.1f, 0.2f, 1.5f);
+		Lake.Collision.Enabled = TEXT("NoCollision");
+		FMantleWaterBodyProps Props;
+		FString Why;
+		TArray<FString> Notes;
+		TestTrue(TEXT("a lake builds"), FMantleWaterBodyExport::BuildProps(Lake, Props, Why, Notes));
+		TestTrue(TEXT("its points are in the actor's space"), Props.SplinePoints[0].Location.Equals(FVector(500.0, 0.0, 0.0), 0.01));
+		TestEqual(TEXT("one wave"), Props.Waves.Num(), 1);
+		TestEqual(TEXT("travelling along +Y is 90 degrees"), Props.Waves[0].DirectionDeg, 90.0);
+		TestEqual(TEXT("a steepness past one is held to one"), Props.Waves[0].Steepness, 1.0);
+		TestTrue(TEXT("a look colour is held to 0 to 1"), Props.Albedo.IsSet() && Props.Albedo->B == 1.f);
+		TestFalse(TEXT("no collision is written as off"), Props.bCollision);
+	}
+
+	// What cannot be carried says why.
+	{
+		FMantleWaterBodyData Custom;
+		Custom.Type = EMantleWaterBodyKind::Custom;
+		FMantleWaterBodyProps Props;
+		FString Why;
+		TArray<FString> Notes;
+		TestFalse(TEXT("a custom body without a mesh is refused"), FMantleWaterBodyExport::BuildProps(Custom, Props, Why, Notes));
+		TestFalse(TEXT("with a reason"), Why.IsEmpty());
+		FMantleWaterBodyData Lake;
+		Lake.Type = EMantleWaterBodyKind::Lake;
+		Lake.Points = { Point(FVector::ZeroVector, 100.f), Point(FVector(10.0, 0.0, 0.0), 100.f) };
+		TestFalse(TEXT("a lake of two points is refused"), FMantleWaterBodyExport::BuildProps(Lake, Props, Why, Notes));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleWaterBodyPlaceFileTest,
+	"Mantle.Editor.Water.PropertiesAndZoneRoundTripThePlaceFile",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleWaterBodyPlaceFileTest::RunTest(const FString& Parameters)
+{
+	// A lake, a river and an ocean written as the exporter writes them, with the zone, and read back by the place parser.
+	auto Square = [](const double Half, const double Depth)
+	{
+		TArray<FMantleWaterSplineSample> Points;
+		const FVector2D Corners[] = { FVector2D(Half, 0.0), FVector2D(0.0, Half), FVector2D(-Half, 0.0), FVector2D(0.0, -Half) };
+		for (const FVector2D& Corner : Corners)
+		{
+			FMantleWaterSplineSample& Sample = Points.AddDefaulted_GetRef();
+			Sample.Location = FVector(Corner.X, Corner.Y, 0.0);
+			Sample.Type = TEXT("Curve");
+			Sample.Depth = Depth;
+		}
+		return Points;
+	};
+	FMantleWaterWaveSample Wave;
+	Wave.WaveLength = 1500.f;
+	Wave.Amplitude = 40.f;
+	Wave.Steepness = 0.5f;
+	Wave.Direction = FVector(1.0, 0.0, 0.0);
+	Wave.PhaseOffset = 2.5f;
+
+	FMantleWaterBodyData Lake;
+	Lake.Type = EMantleWaterBodyKind::Lake;
+	Lake.bHasMetadata = true;
+	Lake.Points = Square(2000.0, 500.0);
+	Lake.Waves.bHasWaves = true;
+	Lake.Waves.Waves.Add(Wave);
+	Lake.Look.Albedo = FLinearColor(0.02f, 0.1f, 0.2f);
+	Lake.Collision.Enabled = TEXT("QueryAndPhysics");
+	Lake.Collision.HeightOffset = -20.f;
+
+	FMantleWaterBodyData River = Lake;
+	River.Type = EMantleWaterBodyKind::River;
+	River.Waves = FMantleWaterWaves();
+	River.Look = FMantleWaterLook();
+	River.Points.SetNum(3);
+	for (FMantleWaterSplineSample& Sample : River.Points)
+	{
+		Sample.Width = 600.f;
+		Sample.Velocity = 120.f;
+	}
+
+	FMantleWaterBodyData Ocean = Lake;
+	Ocean.Type = EMantleWaterBodyKind::Ocean;
+	Ocean.Points = Square(100000.0, 500.0);
+	Ocean.OceanExtents = FVector2D(409600.0, 409600.0);
+	Ocean.Collision.OceanCollisionExtents = FVector(200000.0, 200000.0, 10000.0);
+	Ocean.bOceanCentersOnZone = true;
+
+	FMantlePlace Place;
+	Place.SchemaVersion = MANTLE_PLACE_SCHEMA_VERSION;
+	Place.PlaceId = TEXT("plc_water001");
+	Place.Revision.Number = 1;
+	Place.Metadata.Name = TEXT("Waterworks");
+	Place.Metadata.AuthorId = TEXT("usr_4b1d");
+	int32 Index = 0;
+	const FMantleWaterBodyData* const Bodies[] = { &Lake, &River, &Ocean };
+	for (const FMantleWaterBodyData* Body : Bodies)
+	{
+		FMantleEntity& Entity = Place.Entities.AddDefaulted_GetRef();
+		Entity.Id = FString::Printf(TEXT("ent_water%d"), Index++);
+		Entity.Name = TEXT("Water");
+		Entity.Type = EMantleEntityType::WaterBody;
+		FMantleWaterBodyProps Props;
+		FString Why;
+		TArray<FString> Notes;
+		if (!TestTrue(TEXT("each body builds"), FMantleWaterBodyExport::BuildProps(*Body, Props, Why, Notes)))
+		{
+			return false;
+		}
+		Entity.Props.Set<FMantleWaterBodyProps>(MoveTemp(Props));
+	}
+	FMantleWaterZoneData Zone;
+	Zone.Extent = FVector2D(102400.0, 102400.0);
+	Zone.Transform = FTransform(FRotator(0.0, 45.0, 0.0), FVector(10.0, 20.0, 30.0));
+	Place.Settings.Water = FMantleWaterBodyExport::BuildZone(Zone);
+
+	const FString Json = FMantlePlaceExporter::ToJson(Place);
+	const FMantleParseResult Parsed = FMantlePlaceParser::ParseFromString(Json);
+	if (!TestTrue(TEXT("the file parses as a place"), Parsed.bSuccess))
+	{
+		AddError(Parsed.ErrorSummary());
+		return false;
+	}
+	TestEqual(TEXT("all three bodies are read back"), Parsed.Place.Entities.Num(), 3);
+	TestTrue(TEXT("and the zone"), Parsed.Place.Settings.Water.IsSet());
+	if (Parsed.Place.Settings.Water.IsSet())
+	{
+		TestEqual(TEXT("with its yaw"), Parsed.Place.Settings.Water->ZoneYawDeg, 45.0);
+		TestEqual(TEXT("and extent"), Parsed.Place.Settings.Water->ZoneExtent.X, 102400.0);
+	}
+	if (const FMantleWaterBodyProps* Back = Parsed.Place.Entities.Num() == 3 ? Parsed.Place.Entities[2].Props.TryGet<FMantleWaterBodyProps>() : nullptr)
+	{
+		TestTrue(TEXT("the ocean keeps its centring"), Back->CenterOnZone.IsSet() && *Back->CenterOnZone);
+		TestEqual(TEXT("and its waves"), Back->Waves.Num(), 1);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleWaterBodyExportGateTest,
+	"Mantle.Editor.Water.ExportsABodyOnlyWhereTheTargetReadsIt",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleWaterBodyExportGateTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleWaterBodyExportTestPrivate;
+
+	if (!FMantleWaterBodyExport::IsWaterPluginLoaded())
+	{
+		AddInfo(TEXT("The Water plugin is not loaded in this editor, so there is no water body to spawn; skipped."));
+		return true;
+	}
+	FWaterTestWorld Fixture;
+	if (!TestNotNull(TEXT("a world"), Fixture.World))
+	{
+		return false;
+	}
+	AActor* Lake = SpawnWaterActor(Fixture.World, TEXT("/Script/Water.WaterBodyLake"), FVector(0.0, 0.0, 100.0));
+	if (!TestNotNull(TEXT("a lake"), Lake))
+	{
+		return false;
+	}
+
+	auto CountBodies = [](const FMantleExportResult& Result)
+	{
+		int32 Count = 0;
+		for (const FMantleEntity& Entity : Result.Place.Entities)
+		{
+			Count += Entity.Type == EMantleEntityType::WaterBody ? 1 : 0;
+		}
+		return Count;
+	};
+
+	// A target that reads waterBodies gets a WaterBody entity (the plugin's own default lake spline is enough).
+	{
+		const FMantleTargetFeaturesScope Scope(FMantleTargetFeatures::All());
+		EMantleEntityType Type = EMantleEntityType::Group;
+		TestTrue(TEXT("a lake classifies"), FMantlePlaceExporter::ClassifyActor(Lake, Type));
+		TestEqual(TEXT("as a WaterBody"), Type, EMantleEntityType::WaterBody);
+		const FMantleExportResult Result = FMantlePlaceExporter::Export(Fixture.World, FMantleExportOptions());
+		TestEqual(TEXT("the place has one water body"), CountBodies(Result), 1);
+		TestTrue(TEXT("and the zone"), Result.Place.Settings.Water.IsSet());
+	}
+
+	// One that does not keeps today's skip, with its warning.
+	{
+		const FMantleTargetFeaturesScope Scope(FMantleTargetFeatures::None());
+		const FMantleExportResult Result = FMantlePlaceExporter::Export(Fixture.World, FMantleExportOptions());
+		TestEqual(TEXT("the place has no water body"), CountBodies(Result), 0);
+		TestFalse(TEXT("and no zone"), Result.Place.Settings.Water.IsSet());
 	}
 	return true;
 }

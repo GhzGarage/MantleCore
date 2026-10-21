@@ -1,6 +1,8 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleWaterBodyExport.h"
 
+#include "MantleCoverage.h"
+
 #include "Components/PrimitiveComponent.h"
 #include "Components/SplineComponent.h"
 #include "Dom/JsonObject.h"
@@ -217,7 +219,7 @@ namespace MantleWaterBodyExportPrivate
 	bool IsLookParameter(const FName Name)
 	{
 		static const TCHAR* const Words[] = { TEXT("Absorption"), TEXT("Scatter"), TEXT("Color"), TEXT("Colour"), TEXT("Opacity"), TEXT("Fresnel"),
-			TEXT("Foam"), TEXT("Refraction"), TEXT("Roughness"), TEXT("Specular"), TEXT("Turbid"), TEXT("Murk"), TEXT("Depth"), TEXT("Caustic") };
+			TEXT("Foam"), TEXT("Refraction"), TEXT("Albedo"), TEXT("Roughness"), TEXT("Specular"), TEXT("Turbid"), TEXT("Murk"), TEXT("Depth"), TEXT("Caustic") };
 		const FString Text = Name.ToString();
 		for (const TCHAR* Word : Words)
 		{
@@ -267,6 +269,23 @@ namespace MantleWaterBodyExportPrivate
 					Param.Name = Info.Name;
 					Param.bColour = true;
 					Param.Colour = Value;
+				}
+				// The water master's three look colours, by the names it gives them.
+				const FString Key = Info.Name.ToString().Replace(TEXT(" "), TEXT(""));
+				if (Material->GetVectorParameterValue(FHashedMaterialParameterInfo(Info), Value))
+				{
+					if (Key.Equals(TEXT("WaterAlbedo"), ESearchCase::IgnoreCase))
+					{
+						Out.Albedo = Value;
+					}
+					else if (Key.Equals(TEXT("Scattering"), ESearchCase::IgnoreCase))
+					{
+						Out.Scattering = Value;
+					}
+					else if (Key.Equals(TEXT("Absorption"), ESearchCase::IgnoreCase))
+					{
+						Out.Absorption = Value;
+					}
 				}
 			}
 		}
@@ -329,10 +348,11 @@ namespace MantleWaterBodyExportPrivate
 			for (int32 Index = 0; Index < Helper.Num(); ++Index)
 			{
 				const FReflect One(Inner->Struct, Helper.GetRawPtr(Index));
-				FMantleWaterWave& Wave = Out.Waves.AddDefaulted_GetRef();
+				FMantleWaterWaveSample& Wave = Out.Waves.AddDefaulted_GetRef();
 				Wave.WaveLength = One.Float(TEXT("WaveLength"));
 				Wave.Amplitude = One.Float(TEXT("Amplitude"));
 				Wave.Steepness = One.Float(TEXT("Steepness"));
+				Wave.PhaseOffset = One.Float(TEXT("PhaseOffset"));
 				if (const FVector* Direction = One.StructOf<FVector>(TEXT("Direction")))
 				{
 					Wave.Direction = *Direction;
@@ -348,7 +368,7 @@ namespace MantleWaterBodyExportPrivate
 		{
 			return;
 		}
-		Out.Transform = Spline->GetComponentTransform();
+		Out.SplineTransform = Spline->GetComponentTransform();
 		Out.bClosedLoop = Spline->IsClosedLoop();
 
 		// The metadata's curves hold one key for each spline point, by the point's index.
@@ -363,7 +383,7 @@ namespace MantleWaterBodyExportPrivate
 		const int32 Num = Spline->GetNumberOfSplinePoints();
 		for (int32 Index = 0; Index < Num; ++Index)
 		{
-			FMantleWaterSplinePoint& Point = Out.Points.AddDefaulted_GetRef();
+			FMantleWaterSplineSample& Point = Out.Points.AddDefaulted_GetRef();
 			Point.Location = Spline->GetLocationAtSplinePoint(Index, ESplineCoordinateSpace::Local);
 			Point.ArriveTangent = Spline->GetArriveTangentAtSplinePoint(Index, ESplineCoordinateSpace::Local);
 			Point.LeaveTangent = Spline->GetLeaveTangentAtSplinePoint(Index, ESplineCoordinateSpace::Local);
@@ -377,7 +397,7 @@ namespace MantleWaterBodyExportPrivate
 		}
 	}
 
-	bool ReadBody(const AActor* Actor, const FWaterClasses& Classes, FMantleWaterBodyData& Out)
+	bool ReadBodyActor(const AActor* Actor, const FWaterClasses& Classes, FMantleWaterBodyData& Out)
 	{
 		const UActorComponent* Component = Actor->FindComponentByClass(Classes.BodyComponent);
 		if (!Component)
@@ -386,19 +406,19 @@ namespace MantleWaterBodyExportPrivate
 		}
 		if (Component->IsA(Classes.River))
 		{
-			Out.Type = EMantleWaterBodyType::River;
+			Out.Type = EMantleWaterBodyKind::River;
 		}
 		else if (Component->IsA(Classes.Ocean))
 		{
-			Out.Type = EMantleWaterBodyType::Ocean;
+			Out.Type = EMantleWaterBodyKind::Ocean;
 		}
 		else if (Component->IsA(Classes.Custom))
 		{
-			Out.Type = EMantleWaterBodyType::Custom;
+			Out.Type = EMantleWaterBodyKind::Custom;
 		}
 		else if (Component->IsA(Classes.Lake))
 		{
-			Out.Type = EMantleWaterBodyType::Lake;
+			Out.Type = EMantleWaterBodyKind::Lake;
 		}
 		else
 		{
@@ -410,8 +430,9 @@ namespace MantleWaterBodyExportPrivate
 		Out.Name = Actor->GetActorLabel();
 		Out.Path = Actor->GetPathName();
 		Out.Transform = Actor->GetActorTransform();
+		Out.SplineTransform = Out.Transform;
 
-		ReadSpline(ActorData, Out.Type == EMantleWaterBodyType::River, Out);
+		ReadSpline(ActorData, Out.Type == EMantleWaterBodyKind::River, Out);
 		ReadWaves(ActorData, Body, Out.Waves);
 		ReadLook(Body, Out.Look);
 
@@ -430,8 +451,9 @@ namespace MantleWaterBodyExportPrivate
 		if (const UStaticMesh* Mesh = Cast<UStaticMesh>(Body.Object(TEXT("WaterMeshOverride"))))
 		{
 			Out.MeshPath = Mesh->GetPathName();
+			Out.Mesh = const_cast<UStaticMesh*>(Mesh);
 		}
-		Out.bAffectsLandscape = Body.BoolOr(TEXT("bAffectsLandscape"), false) && Out.Type != EMantleWaterBodyType::Custom;
+		Out.bAffectsLandscape = Body.BoolOr(TEXT("bAffectsLandscape"), false) && Out.Type != EMantleWaterBodyKind::Custom;
 		double Depth = 0.0;
 		if (Body.Number(TEXT("FixedWaterDepth"), Depth))
 		{
@@ -445,7 +467,7 @@ namespace MantleWaterBodyExportPrivate
 		return true;
 	}
 
-	void ReadZone(const AActor* Actor, FMantleWaterZone& Out)
+	void ReadZone(const AActor* Actor, FMantleWaterZoneData& Out)
 	{
 		const FReflect Zone(Actor);
 		Out.Name = Actor->GetActorLabel();
@@ -478,13 +500,13 @@ namespace MantleWaterBodyExportPrivate
 		}
 	}
 
-	const TCHAR* TypeName(const EMantleWaterBodyType Type)
+	const TCHAR* TypeName(const EMantleWaterBodyKind Type)
 	{
 		switch (Type)
 		{
-		case EMantleWaterBodyType::Ocean: return TEXT("ocean");
-		case EMantleWaterBodyType::Lake: return TEXT("lake");
-		case EMantleWaterBodyType::River: return TEXT("river");
+		case EMantleWaterBodyKind::Ocean: return TEXT("ocean");
+		case EMantleWaterBodyKind::Lake: return TEXT("lake");
+		case EMantleWaterBodyKind::River: return TEXT("river");
 		default: return TEXT("custom");
 		}
 	}
@@ -521,7 +543,7 @@ namespace MantleWaterBodyExportPrivate
 			Json->SetObjectField(TEXT("generator"), Waves.Generator);
 		}
 		TArray<TSharedPtr<FJsonValue>> List;
-		for (const FMantleWaterWave& Wave : Waves.Waves)
+		for (const FMantleWaterWaveSample& Wave : Waves.Waves)
 		{
 			TSharedRef<FJsonObject> One = MakeShared<FJsonObject>();
 			One->SetNumberField(TEXT("waveLength"), Wave.WaveLength);
@@ -575,7 +597,7 @@ namespace MantleWaterBodyExportPrivate
 		Spline->SetBoolField(TEXT("closedLoop"), Body.bClosedLoop);
 		Spline->SetBoolField(TEXT("hasMetadata"), Body.bHasMetadata);
 		TArray<TSharedPtr<FJsonValue>> Points;
-		for (const FMantleWaterSplinePoint& Point : Body.Points)
+		for (const FMantleWaterSplineSample& Point : Body.Points)
 		{
 			TSharedRef<FJsonObject> One = MakeShared<FJsonObject>();
 			One->SetArrayField(TEXT("location"), VectorArray(Point.Location));
@@ -583,7 +605,7 @@ namespace MantleWaterBodyExportPrivate
 			One->SetArrayField(TEXT("leaveTangent"), VectorArray(Point.LeaveTangent));
 			One->SetArrayField(TEXT("rotation"), VectorArray(FVector(Point.Rotation.Pitch, Point.Rotation.Yaw, Point.Rotation.Roll)));
 			One->SetStringField(TEXT("type"), Point.Type);
-			if (Body.Type == EMantleWaterBodyType::River)
+			if (Body.Type == EMantleWaterBodyKind::River)
 			{
 				One->SetNumberField(TEXT("width"), Point.Width);
 			}
@@ -606,7 +628,7 @@ namespace MantleWaterBodyExportPrivate
 		Collision->SetStringField(TEXT("profile"), Body.Collision.Profile);
 		Collision->SetBoolField(TEXT("generateOverlapEvents"), Body.Collision.bGenerateOverlapEvents);
 		Collision->SetNumberField(TEXT("heightOffset"), Body.Collision.HeightOffset);
-		if (Body.Type == EMantleWaterBodyType::Ocean)
+		if (Body.Type == EMantleWaterBodyKind::Ocean)
 		{
 			Collision->SetArrayField(TEXT("extents"), VectorArray(Body.Collision.OceanCollisionExtents));
 		}
@@ -618,7 +640,7 @@ namespace MantleWaterBodyExportPrivate
 		}
 		Json->SetBoolField(TEXT("affectsLandscape"), Body.bAffectsLandscape);
 		Json->SetNumberField(TEXT("fixedWaterDepth"), Body.FixedWaterDepth);
-		if (Body.Type == EMantleWaterBodyType::Ocean)
+		if (Body.Type == EMantleWaterBodyKind::Ocean)
 		{
 			Json->SetArrayField(TEXT("oceanExtents"), { MakeShared<FJsonValueNumber>(Body.OceanExtents.X), MakeShared<FJsonValueNumber>(Body.OceanExtents.Y) });
 			Json->SetBoolField(TEXT("centerOnWaterZone"), Body.bOceanCentersOnZone);
@@ -626,7 +648,7 @@ namespace MantleWaterBodyExportPrivate
 		return Json;
 	}
 
-	TSharedRef<FJsonObject> ZoneJson(const FMantleWaterZone& Zone)
+	TSharedRef<FJsonObject> ZoneJson(const FMantleWaterZoneData& Zone)
 	{
 		TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
 		Json->SetStringField(TEXT("name"), Zone.Name);
@@ -648,7 +670,7 @@ namespace MantleWaterBodyExportPrivate
 	}
 }
 
-int32 FMantleWaterBodies::Count(const EMantleWaterBodyType Type) const
+int32 FMantleWaterBodies::Count(const EMantleWaterBodyKind Type) const
 {
 	int32 Total = 0;
 	for (const FMantleWaterBodyData& Body : Bodies)
@@ -661,8 +683,8 @@ int32 FMantleWaterBodies::Count(const EMantleWaterBodyType Type) const
 FString FMantleWaterBodies::SummaryLine() const
 {
 	return FString::Printf(TEXT("MANTLE_CHECK_WATER ocean=%d lake=%d river=%d custom=%d zones=%d plugin=%d"),
-		Count(EMantleWaterBodyType::Ocean), Count(EMantleWaterBodyType::Lake), Count(EMantleWaterBodyType::River),
-		Count(EMantleWaterBodyType::Custom), Zones.Num(), bWaterPluginLoaded ? 1 : 0);
+		Count(EMantleWaterBodyKind::Ocean), Count(EMantleWaterBodyKind::Lake), Count(EMantleWaterBodyKind::River),
+		Count(EMantleWaterBodyKind::Custom), Zones.Num(), bWaterPluginLoaded ? 1 : 0);
 }
 
 bool FMantleWaterBodyExport::IsWaterPluginLoaded()
@@ -685,7 +707,7 @@ FMantleWaterBodies FMantleWaterBodyExport::Read(UWorld* World)
 	for (TActorIterator<AActor> It(World, Classes.BodyActor); It; ++It)
 	{
 		FMantleWaterBodyData Body;
-		if (!It->IsTemplate() && ReadBody(*It, Classes, Body))
+		if (!It->IsTemplate() && ReadBodyActor(*It, Classes, Body))
 		{
 			Result.Bodies.Add(MoveTemp(Body));
 		}
@@ -703,7 +725,7 @@ FMantleWaterBodies FMantleWaterBodyExport::Read(UWorld* World)
 
 	// By path, so the order does not depend on the order actors were spawned in.
 	Result.Bodies.Sort([](const FMantleWaterBodyData& A, const FMantleWaterBodyData& B) { return A.Path < B.Path; });
-	Result.Zones.Sort([](const FMantleWaterZone& A, const FMantleWaterZone& B) { return A.Path < B.Path; });
+	Result.Zones.Sort([](const FMantleWaterZoneData& A, const FMantleWaterZoneData& B) { return A.Path < B.Path; });
 	return Result;
 }
 
@@ -718,7 +740,7 @@ TSharedRef<FJsonObject> FMantleWaterBodyExport::ToJson(const FMantleWaterBodies&
 		Bodies.Add(MakeShared<FJsonValueObject>(BodyJson(Body)));
 	}
 	TArray<TSharedPtr<FJsonValue>> Zones;
-	for (const FMantleWaterZone& Zone : Water.Zones)
+	for (const FMantleWaterZoneData& Zone : Water.Zones)
 	{
 		Zones.Add(MakeShared<FJsonValueObject>(ZoneJson(Zone)));
 	}
@@ -791,4 +813,209 @@ int32 FMantleWaterBodyExport::CountBodiesCarving(const AActor* Landscape)
 		Count += Ground.IntersectXY(Reach) ? 1 : 0;
 	}
 	return Count;
+}
+
+bool FMantleWaterBodyExport::IsWaterBodyActor(const AActor* Actor)
+{
+	// One class lookup, not the whole set: this runs for every actor of a level.
+	const UClass* BodyActor = Actor ? FindObject<UClass>(nullptr, MantleWaterBodyExportPrivate::BodyActorPath) : nullptr;
+	return BodyActor && !Actor->IsTemplate() && Actor->IsA(BodyActor);
+}
+
+bool FMantleWaterBodyExport::ReadBody(const AActor* Actor, FMantleWaterBodyData& Out)
+{
+	const MantleWaterBodyExportPrivate::FWaterClasses Classes;
+	return Actor && Classes.Valid() && MantleWaterBodyExportPrivate::ReadBodyActor(Actor, Classes, Out);
+}
+
+const FMantleWaterZoneData* FMantleWaterBodyExport::PrimaryZone(const FMantleWaterBodies& Water)
+{
+	const FMantleWaterZoneData* Best = nullptr;
+	for (const FMantleWaterZoneData& Zone : Water.Zones)
+	{
+		if (!Best || Zone.OverlapPriority > Best->OverlapPriority)
+		{
+			Best = &Zone;
+		}
+	}
+	return Best;
+}
+
+bool FMantleWaterBodyExport::BuildProps(const FMantleWaterBodyData& Body, FMantleWaterBodyProps& Props, FString& OutWhy, TArray<FString>& OutNotes)
+{
+	using EKind = EMantleWaterBodyKind;
+	Props = FMantleWaterBodyProps();
+	switch (Body.Type)
+	{
+	case EKind::Lake: Props.BodyType = EMantleWaterBodyType::Lake; break;
+	case EKind::River: Props.BodyType = EMantleWaterBodyType::River; break;
+	case EKind::Ocean: Props.BodyType = EMantleWaterBodyType::Ocean; break;
+	default: Props.BodyType = EMantleWaterBodyType::Custom; break;
+	}
+	const bool bCustom = Body.Type == EKind::Custom;
+	const bool bRiver = Body.Type == EKind::River;
+	bool bClamped = false;
+	auto Clamp = [&bClamped](const double Value, const double Min, const double Max)
+	{
+		const double Held = FMath::Clamp(Value, Min, Max);
+		bClamped |= Held != Value;
+		return Held;
+	};
+
+	if (bCustom)
+	{
+		if (Body.MeshPath.IsEmpty())
+		{
+			OutWhy = TEXT("is a custom water body with no Water Mesh Override, so there is no mesh to publish for it");
+			return false;
+		}
+	}
+	else
+	{
+		const int32 Min = bRiver ? FMantlePlaceLimits::MinWaterRiverPoints : FMantlePlaceLimits::MinWaterLoopPoints;
+		if (Body.Points.Num() < Min)
+		{
+			OutWhy = FString::Printf(TEXT("has a spline of %d points; a %s needs at least %d"), Body.Points.Num(), bRiver ? TEXT("river") : TEXT("lake or ocean"), Min);
+			return false;
+		}
+		if (Body.Points.Num() > FMantlePlaceLimits::MaxWaterSplinePointsPerBody)
+		{
+			OutWhy = FString::Printf(TEXT("has a spline of %d points; a water body may have at most %d"), Body.Points.Num(), FMantlePlaceLimits::MaxWaterSplinePointsPerBody);
+			return false;
+		}
+		// The place format keeps points in the actor's own space; the spline component may sit offset from the actor.
+		const FTransform ToActor = Body.SplineTransform * Body.Transform.Inverse();
+		for (const FMantleWaterSplineSample& Sample : Body.Points)
+		{
+			FMantleWaterSplinePoint& Point = Props.SplinePoints.AddDefaulted_GetRef();
+			Point.Location = ToActor.TransformPosition(Sample.Location);
+			Point.ArriveTangent = ToActor.TransformVector(Sample.ArriveTangent);
+			Point.LeaveTangent = ToActor.TransformVector(Sample.LeaveTangent);
+			if (!MantleParseWaterSplinePointType(Sample.Type.Left(1).ToLower() + Sample.Type.Mid(1), Point.Interp))
+			{
+				Point.Interp = EMantleWaterSplinePointType::Curve;
+			}
+			Point.Depth = Clamp(Body.bHasMetadata ? Sample.Depth : Body.FixedWaterDepth, FMantlePlaceLimits::MinWaterSplineDepth, FMantlePlaceLimits::MaxWaterSplineDepth);
+			if (bRiver)
+			{
+				Point.Width = Clamp(Sample.Width, FMantlePlaceLimits::MinWaterRiverWidth, FMantlePlaceLimits::MaxWaterRiverWidth);
+				Point.Velocity = Clamp(Sample.Velocity, 0.0, FMantlePlaceLimits::MaxWaterRiverVelocity);
+			}
+		}
+	}
+
+	// Waves: the final Gerstner set, never a river's. The highest waves stay when there are more than a body holds.
+	if (!bRiver && Body.Waves.bHasWaves && Body.Waves.Waves.Num() > 0)
+	{
+		TArray<FMantleWaterWaveSample> Waves = Body.Waves.Waves;
+		if (Waves.Num() > FMantlePlaceLimits::MaxWaterWavesPerBody)
+		{
+			Waves.StableSort([](const FMantleWaterWaveSample& A, const FMantleWaterWaveSample& B) { return A.Amplitude > B.Amplitude; });
+			OutNotes.Add(FString::Printf(TEXT("%d waves, of which the %d highest are kept"), Waves.Num(), FMantlePlaceLimits::MaxWaterWavesPerBody));
+			Waves.SetNum(FMantlePlaceLimits::MaxWaterWavesPerBody);
+		}
+		for (const FMantleWaterWaveSample& Sample : Waves)
+		{
+			FMantleWaterWave& Wave = Props.Waves.AddDefaulted_GetRef();
+			Wave.Wavelength = Clamp(Sample.WaveLength, FMantlePlaceLimits::MinWaterWavelength, FMantlePlaceLimits::MaxWaterWavelength);
+			Wave.Amplitude = Clamp(Sample.Amplitude, 0.0, FMantlePlaceLimits::MaxWaterAmplitude);
+			Wave.Steepness = Clamp(Sample.Steepness, 0.0, 1.0);
+			// The wave's travel direction in world space, degrees from +X toward +Y.
+			Wave.DirectionDeg = FMath::RadiansToDegrees(FMath::Atan2(Sample.Direction.Y, Sample.Direction.X));
+			Wave.PhaseOffset = Clamp(Sample.PhaseOffset, -FMantlePlaceLimits::MaxWaterPhaseOffset, FMantlePlaceLimits::MaxWaterPhaseOffset);
+		}
+	}
+	else if (!bRiver && Body.Waves.bHasWaves && Body.Waves.Generator.IsValid())
+	{
+		OutNotes.Add(TEXT("its wave generator has made no waves yet, so the water is flat"));
+	}
+
+	auto Unit = [](const FLinearColor& Color) { return FLinearColor(FMath::Clamp(Color.R, 0.f, 1.f), FMath::Clamp(Color.G, 0.f, 1.f), FMath::Clamp(Color.B, 0.f, 1.f)); };
+	if (Body.Look.Albedo.IsSet()) { Props.Albedo = Unit(*Body.Look.Albedo); }
+	if (Body.Look.Scattering.IsSet()) { Props.Scattering = Unit(*Body.Look.Scattering); }
+	if (Body.Look.Absorption.IsSet()) { Props.Absorption = Unit(*Body.Look.Absorption); }
+
+	Props.bCollision = Body.Collision.Enabled != TEXT("NoCollision");
+	if (!FMath::IsNearlyZero(Body.Collision.HeightOffset))
+	{
+		Props.CollisionHeightOffset = Clamp(Body.Collision.HeightOffset, -FMantlePlaceLimits::MaxWaterCollisionShift, FMantlePlaceLimits::MaxWaterCollisionShift);
+	}
+	if (Body.Type == EKind::Ocean)
+	{
+		const FVector& Box = Body.Collision.OceanCollisionExtents;
+		if (Box.X > 0.0 && Box.Y > 0.0 && Box.Z > 0.0)
+		{
+			Props.CollisionExtent = FVector(Clamp(Box.X, FMantlePlaceLimits::MinWaterExtent, FMantlePlaceLimits::MaxWaterExtent),
+				Clamp(Box.Y, FMantlePlaceLimits::MinWaterExtent, FMantlePlaceLimits::MaxWaterExtent),
+				Clamp(Box.Z, FMantlePlaceLimits::MinWaterExtent, FMantlePlaceLimits::MaxWaterExtent));
+		}
+		if (Body.OceanExtents.X > 0.0 && Body.OceanExtents.Y > 0.0)
+		{
+			Props.OceanExtent = FVector2D(Clamp(Body.OceanExtents.X, FMantlePlaceLimits::MinWaterExtent, FMantlePlaceLimits::MaxWaterExtent),
+				Clamp(Body.OceanExtents.Y, FMantlePlaceLimits::MinWaterExtent, FMantlePlaceLimits::MaxWaterExtent));
+		}
+		Props.CenterOnZone = Body.bOceanCentersOnZone;
+	}
+	if (bClamped)
+	{
+		OutNotes.Add(TEXT("some values were held to the place format's ranges"));
+	}
+	return true;
+}
+
+FMantleWaterZone FMantleWaterBodyExport::BuildZone(const FMantleWaterZoneData& Zone)
+{
+	FMantleWaterZone Out;
+	if (Zone.Extent.X > 0.0 && Zone.Extent.Y > 0.0)
+	{
+		Out.ZoneExtent = FVector2D(FMath::Clamp(Zone.Extent.X, FMantlePlaceLimits::MinWaterExtent, FMantlePlaceLimits::MaxWaterExtent),
+			FMath::Clamp(Zone.Extent.Y, FMantlePlaceLimits::MinWaterExtent, FMantlePlaceLimits::MaxWaterExtent));
+	}
+	Out.ZoneLocation = Zone.Transform.GetLocation();
+	Out.ZoneYawDeg = FRotator::NormalizeAxis(Zone.Transform.Rotator().Yaw);
+	return Out;
+}
+
+bool FMantleWaterBodyExport::Admit(const AActor* Actor, const FString& Label, int32& Bodies, int32& SplinePoints, FMantleCoverage* Coverage)
+{
+	auto Report = [Coverage](const EMantleCoverageOutcome Outcome, const FString& Name, const FString& Detail)
+	{
+		if (Coverage)
+		{
+			Coverage->Add(MantleCoverageCategory::Water, Outcome, Name, Detail);
+		}
+	};
+	FMantleWaterBodyData Body;
+	if (!ReadBody(Actor, Body))
+	{
+		Report(EMantleCoverageOutcome::Dropped, Label, TEXT("a water body that could not be read."));
+		return false;
+	}
+	FMantleWaterBodyProps Props;
+	FString Why;
+	TArray<FString> Notes;
+	if (!BuildProps(Body, Props, Why, Notes))
+	{
+		Report(EMantleCoverageOutcome::Dropped, Label, FString::Printf(TEXT("left out: it %s."), *Why));
+		return false;
+	}
+	if (Bodies >= FMantlePlaceLimits::MaxWaterBodiesPerPlace)
+	{
+		Report(EMantleCoverageOutcome::Dropped, Label, FString::Printf(TEXT("left out: a place holds at most %d water bodies."), FMantlePlaceLimits::MaxWaterBodiesPerPlace));
+		return false;
+	}
+	if (SplinePoints + Props.SplinePoints.Num() > FMantlePlaceLimits::MaxWaterSplinePointsPerPlace)
+	{
+		Report(EMantleCoverageOutcome::Dropped, Label, FString::Printf(TEXT("left out: a place's water bodies hold at most %d spline points in all."), FMantlePlaceLimits::MaxWaterSplinePointsPerPlace));
+		return false;
+	}
+	++Bodies;
+	SplinePoints += Props.SplinePoints.Num();
+	FString Detail = TEXT("published as a water body: its shape, depth, waves, collision and look colours. The water material's other settings (foam, caustics, flow maps) are not carried.");
+	if (Notes.Num() > 0)
+	{
+		Detail += TEXT(" ") + FString::Join(Notes, TEXT("; ")) + TEXT(".");
+	}
+	Report(EMantleCoverageOutcome::Approximated, Label, Detail);
+	return true;
 }
