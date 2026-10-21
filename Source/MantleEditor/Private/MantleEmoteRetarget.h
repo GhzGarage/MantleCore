@@ -99,6 +99,15 @@ struct FMantleEmoteRetarget
 	static bool MatchRestHandsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError);
 
 	/**
+	 * Removes the constant wrist error from Retargeter (the game's RTG_UEFN_to_Mantle_*): the hands' retarget pose offsets left a
+	 * fixed twist about the forearm (26 degrees on the MetaHuman) against the source's, so every frame's wrist was off by that
+	 * much. Only hand_l and hand_r are turned, about the forearm axis, by what the two retarget poses differ from their
+	 * reference poses in twist; the fingers follow the hand. The bend at the wrist is not touched (unsigned angle, see the PR). A held weapon tilts with the hand. In
+	 * memory, package dirtied; the caller saves it.
+	 */
+	static bool MatchWristsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError);
+
+	/**
 	 * A mesh on Skeleton to retarget from (its proportions): the skeleton's preview mesh, else a skeletal mesh in the
 	 * project on that skeleton, a "Body" first, then by package path. Null when there is none.
 	 */

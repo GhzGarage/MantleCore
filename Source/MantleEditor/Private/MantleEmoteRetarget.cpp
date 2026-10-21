@@ -891,6 +891,74 @@ bool FMantleEmoteRetarget::MatchRestHandsInPlace(UObject* Retargeter, const FRef
 	return true;
 }
 
+bool FMantleEmoteRetarget::MatchWristsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote,
+	FString& OutError)
+{
+	using namespace MantleEmoteRetargetPrivate;
+	FRetargeterCopy Asset;
+	if (!Asset.Open(Retargeter, OutError))
+	{
+		return false;
+	}
+	const TMap<FName, FQuat> SourceOffsets = Asset.OffsetsOf(Source, FRetargeterCopy::Source);
+	const TMap<FName, FQuat> TargetOffsets = Asset.OffsetsOf(Target, FRetargeterCopy::Target);
+	// Component-space bone transforms of a skeleton's reference pose, or its retarget pose (reference * offsets).
+	auto Globals = [](const FReferenceSkeleton& Skeleton, const TMap<FName, FQuat>* Offsets)
+	{
+		TArray<FTransform> Out;
+		for (int32 Bone = 0; Bone < Skeleton.GetRawBoneNum(); ++Bone)
+		{
+			FTransform Local = Skeleton.GetRawRefBonePose()[Bone];
+			if (const FQuat* Offset = Offsets ? Offsets->Find(Skeleton.GetBoneName(Bone)) : nullptr)
+			{
+				Local.SetRotation((Local.GetRotation() * *Offset).GetNormalized());
+			}
+			const int32 Parent = Skeleton.GetRawParentIndex(Bone);
+			Out.Add(Parent == INDEX_NONE ? Local : Local * Out[Parent]);
+		}
+		return Out;
+	};
+	// The hand's twist about the forearm, as Mantle.Dev.CheckEmote measures it.
+	auto Twist = [](const TArray<FTransform>& Pose, const int32 Lower, const int32 Hand)
+	{
+		const FVector Axis = (Pose[Hand].GetLocation() - Pose[Lower].GetLocation()).GetSafeNormal();
+		const FQuat Relative = (Pose[Hand].GetRotation() * Pose[Lower].GetRotation().Inverse()).GetNormalized();
+		return FMath::RadiansToDegrees(2.0 * FMath::Atan2(FVector(Relative.X, Relative.Y, Relative.Z) | Axis, static_cast<double>(Relative.W)));
+	};
+	const TArray<FTransform> SourceRef = Globals(Source, nullptr), SourcePose = Globals(Source, &SourceOffsets);
+	const TArray<FTransform> TargetRef = Globals(Target, nullptr);
+	TArray<FTransform> TargetPose = Globals(Target, &TargetOffsets);
+	OutNote.Reset();
+	for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
+	{
+		auto Find = [Side](const FReferenceSkeleton& Skeleton, const TCHAR* Stem) { return Skeleton.FindRawBoneIndex(FName(*FString::Printf(TEXT("%s_%s"), Stem, Side))); };
+		const int32 SL = Find(Source, TEXT("lowerarm")), SH = Find(Source, TEXT("hand"));
+		const int32 TL = Find(Target, TEXT("lowerarm")), TH = Find(Target, TEXT("hand"));
+		if (SL == INDEX_NONE || SH == INDEX_NONE || TL == INDEX_NONE || TH == INDEX_NONE)
+		{
+			continue;
+		}
+		// How far each retarget pose's wrist sits from its own reference pose; the animation carries the source's difference
+		// from its reference onto the target, so what the two differ by is the error every frame.
+		const double TwistGap = FMath::UnwindDegrees((Twist(TargetPose, TL, TH) - Twist(TargetRef, TL, TH)) - (Twist(SourcePose, SL, SH) - Twist(SourceRef, SL, SH)));
+		const FVector Axis = (TargetPose[TH].GetLocation() - TargetPose[TL].GetLocation()).GetSafeNormal();
+		const FQuat Turn(Axis, FMath::DegreesToRadians(-TwistGap));
+		const int32 Parent = Target.GetRawParentIndex(TH);
+		const FQuat ParentGlobal = Parent == INDEX_NONE ? FQuat::Identity : TargetPose[Parent].GetRotation();
+		const FQuat NewLocal = (ParentGlobal.Inverse() * Turn * TargetPose[TH].GetRotation()).GetNormalized();
+		const FName Hand = Target.GetBoneName(TH);
+		const FQuat NewOffset = (Target.GetRawRefBonePose()[TH].GetRotation().Inverse() * NewLocal).GetNormalized();
+		Asset.SetTargetOffset(Hand, NewOffset);
+		OutNote += FString::Printf(TEXT("%shand_%s turned %.1f degrees about the forearm"), OutNote.IsEmpty() ? TEXT("") : TEXT("; "), Side, -TwistGap);
+	}
+	if (OutNote.IsEmpty())
+	{
+		OutError = TEXT("the source or target has no lowerarm and hand bones.");
+		return false;
+	}
+	return true;
+}
+
 void FMantleEmoteRetarget::ReleaseRestHandsCopy(UObject* Copy)
 {
 	if (Copy)
