@@ -881,10 +881,68 @@ bool FMantleEnvironmentCubemapMeanTest::RunTest(const FString& Parameters)
 	Ldr->SRGB = false;
 	TestNearlyEqual(TEXT("a linear one is not"), FMantleEnvironmentExport::CubemapMeanLuminance(Ldr, false), 188.0 / 255.0, 0.01);
 
-	// Not six faces: unreadable.
-	UTextureCube* Flat = NewObject<UTextureCube>(GetTransientPackage());
-	Flat->Source.Init(Size, Size, 1, 1, TSF_BGRA8, LdrTexels.GetData());
-	TestTrue(TEXT("a source without six faces is unreadable"), FMantleEnvironmentExport::CubemapMeanLuminance(Flat, false) < 0.0);
+	// Where it was read from is said.
+	FString ReadFrom;
+	FMantleEnvironmentExport::CubemapMeanLuminance(Float, false, &ReadFrom);
+	TestTrue(TEXT("a six-face source says so"), ReadFrom.Contains(TEXT("six")));
+
+	// No source data at all: unreadable.
+	UTextureCube* Empty = NewObject<UTextureCube>(GetTransientPackage());
+	TestTrue(TEXT("a cubemap with no source data is unreadable"), FMantleEnvironmentExport::CubemapMeanLuminance(Empty, false) < 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleEnvironmentCubemapLongLatTest,
+	"Mantle.Editor.EnvironmentExport.CubemapMeanLongLat",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleEnvironmentCubemapLongLatTest::RunTest(const FString& Parameters)
+{
+	// #722: an imported HDR panorama is a cubemap whose source is one long-lat image. 8 by 4 texels: the rows' latitudes are +-67.5 and +-22.5.
+	constexpr int32 Width = 8;
+	constexpr int32 Height = 4;
+	auto MakeLongLat = [](const TFunctionRef<float(int32)>& RowValue)
+	{
+		UTextureCube* Cube = NewObject<UTextureCube>(GetTransientPackage());
+		TArray<float> Texels;
+		for (int32 Row = 0; Row < Height; ++Row)
+		{
+			for (int32 Column = 0; Column < Width; ++Column)
+			{
+				Texels.Append({ RowValue(Row), RowValue(Row), RowValue(Row), 1.0f });
+			}
+		}
+		Cube->Source.Init(Width, Height, 1, 1, TSF_RGBA32F, reinterpret_cast<const uint8*>(Texels.GetData()));
+		return Cube;
+	};
+
+	UTextureCube* Flat = MakeLongLat([](int32) { return 0.5f; });
+	FString ReadFrom;
+	TestNearlyEqual(TEXT("a long-lat image of 0.5 has mean 0.5"), FMantleEnvironmentExport::CubemapMeanLuminance(Flat, false, &ReadFrom), 0.5, 1.0e-4);
+	TestTrue(TEXT("and says it was a long-lat image"), ReadFrom.Contains(TEXT("long-lat")));
+
+	// Rows are weighted by cos(latitude): a bright top row of 4 over dark rows is (4 cos 67.5) / (2 (cos 67.5 + cos 22.5)), not 1.
+	UTextureCube* Top = MakeLongLat([](int32 Row) { return Row == 0 ? 4.0f : 0.0f; });
+	const double NearPole = FMath::Cos(FMath::DegreesToRadians(67.5));
+	const double NearHorizon = FMath::Cos(FMath::DegreesToRadians(22.5));
+	TestNearlyEqual(TEXT("a bright top row counts by the solid angle it covers"), FMantleEnvironmentExport::CubemapMeanLuminance(Top, false),
+		4.0 * NearPole / (2.0 * (NearPole + NearHorizon)), 1.0e-4);
+
+	// A black lower hemisphere: the lower two rows count as black, the upper keep their weight.
+	UTextureCube* Halves = MakeLongLat([](int32 Row) { return Row < 2 ? 1.0f : 0.2f; });
+	TestNearlyEqual(TEXT("two halves of 1 and 0.2 average 0.6"), FMantleEnvironmentExport::CubemapMeanLuminance(Halves, false), 0.6, 1.0e-4);
+	TestNearlyEqual(TEXT("with the lower half black it is 0.5"), FMantleEnvironmentExport::CubemapMeanLuminance(Halves, true), 0.5, 1.0e-4);
+
+	// A half-float long-lat image, as an EXR or HDR import may keep it.
+	UTextureCube* Half = NewObject<UTextureCube>(GetTransientPackage());
+	TArray<FFloat16> HalfTexels;
+	for (int32 Texel = 0; Texel < Width * Height; ++Texel)
+	{
+		HalfTexels.Append({ FFloat16(2.0f), FFloat16(2.0f), FFloat16(2.0f), FFloat16(1.0f) });
+	}
+	Half->Source.Init(Width, Height, 1, 1, TSF_RGBA16F, reinterpret_cast<const uint8*>(HalfTexels.GetData()));
+	TestNearlyEqual(TEXT("a half-float long-lat image of 2 has mean 2"), FMantleEnvironmentExport::CubemapMeanLuminance(Half, false), 2.0, 1.0e-3);
 	return true;
 }
 

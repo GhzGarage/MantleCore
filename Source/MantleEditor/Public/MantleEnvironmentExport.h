@@ -137,20 +137,22 @@ public:
 	/**
 	 * A sky light's average brightness: for a captured scene the mean radiance over the sphere (the zeroth spherical harmonic of
 	 * the capture, taken from a one-off capture when the light's own is not readable), for a specified cubemap that cubemap's
-	 * mean (CubemapMeanLuminance), as a luminance, times the light's intensity, indirect lighting intensity and colour. Negative
+	 * mean (CubemapMeanLuminance), as a luminance, times the light's intensity, indirect lighting intensity and colour. OutSource, when
+	 * given, says in words where the mean was read from. Negative
 	 * when it cannot be read (a capture is a render-thread result a headless export may not have).
 	 */
-	static double SkyLightMeanLuminance(USkyLightComponent* Component);
+	static double SkyLightMeanLuminance(USkyLightComponent* Component, FString* OutSource = nullptr);
 
 	/**
-	 * The mean luminance over the sphere of a cubemap's source data (#722): the six faces sampled on a grid of about 32 texels a
-	 * side, each texel weighted by the solid angle it covers, linear (an sRGB source is converted; RGBE and float sources are
-	 * read as they are). The mean does not depend on the sky light's cubemap angle. With bLowerHemisphereBlack the faces' lower
-	 * half is counted as black, as the sky light's Lower Hemisphere Is Black does (the side faces' lower rows, and the -Z face).
-	 * Negative when the source cannot be read: no cubemap, no source data, not six square faces or a format not handled
-	 * (BGRA8, BGRE8, RGBA16, RGBA16F, RGBA32F).
+	 * The mean luminance over the sphere of a cubemap (#722), linear (an sRGB 8-bit source is converted; RGBE, float and 16-bit
+	 * sources are read as they are). Read from the texture's source data when it has it: six square faces (sampled on a grid of about 32
+	 * texels a side, each weighted by the solid angle it covers) or one long-lat image, as an imported HDR panorama is kept (each row
+	 * weighted by cos(latitude)), in G8, BGRA8, BGRE8, G16, RGBA16, R16F, RGBA16F, R32F or RGBA32F. Failing that, from a small mip of
+	 * the built cube when it is uncompressed. The mean does not depend on the sky light's cubemap angle. With bLowerHemisphereBlack
+	 * the lower half of the sphere is counted as black, as the sky light's Lower Hemisphere Is Black does. OutSource, when given, says
+	 * where it was read from. Negative when it cannot be read: no cubemap, no readable data, or a block-compressed build alone.
 	 */
-	static double CubemapMeanLuminance(UTextureCube* Cubemap, bool bLowerHemisphereBlack);
+	static double CubemapMeanLuminance(UTextureCube* Cubemap, bool bLowerHemisphereBlack, FString* OutSource = nullptr);
 
 	/**
 	 * True when the sun, shining from TowardSun (a unit vector from the world to the sun), is blocked at every one of
