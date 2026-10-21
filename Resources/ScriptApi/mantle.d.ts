@@ -148,12 +148,22 @@ interface Player {
 	armor: number | undefined;
 	/** The item id of the avatar (body) the player has on, or nil before their look has arrived. Read-only. (server only) */
 	readonly avatar: string | undefined;
+	/** The seconds of air the character has left, from 0 to MaxBreath (it counts in small steps, the same on every machine, and moves only while BreathEnabled is true); nil while the player has no character. Setting it (server only) clamps to 0..MaxBreath and restarts the wait before it refills. Every new character starts full. */
+	breath: number | undefined;
+	/** Whether the player can run out of air underwater (false unless a script turns it on, so swimming is free in places that never use it); nil while the player has no character. With it on, Breath drains one second a second while IsUnderwater, refills at the surface after BreathRegenDelay, and once it is gone the character takes DrownDamage every second until it surfaces or dies (Died then says "Drown"). Turning it on starts the breath full. Setting it (server only) lasts for the rest of the session, through respawns. */
+	breathEnabled: boolean | undefined;
+	/** How many seconds of breath come back each second at the surface (10 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session. */
+	breathRegen: number | undefined;
+	/** How many seconds after the head comes out of the water before breath starts coming back (0.5 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..60 and lasts for the rest of the session. */
+	breathRegenDelay: number | undefined;
 	/** The player's body in the world, or nil while respawning. */
 	readonly character: Entity | undefined;
 	/** Whether the player can crouch or slide (true unless a script changes it); nil while the player has no character. Setting it (server only) to false stands a crouching player up and the crouch key does nothing until it is true again. It lasts for the rest of the session, through respawns. */
 	crouchEnabled: boolean | undefined;
 	/** How fast the character moves while crouched, in centimetres per second (225 unless a script changes it; it scales with WalkSpeed until you set it). nil while the player has no character. Setting it (server only) clamps to 0..1500 and lasts for the rest of the session, through respawns. */
 	crouchSpeed: number | undefined;
+	/** How much health a character out of breath loses each second, dealt once a second and tagged "Drown" (10 unless a script changes it). It goes past Armor and Shield, and nobody is credited for the kill. 0 lets a character stay under forever once its breath is gone. nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session. Only counts while BreathEnabled is true. */
+	drownDamage: number | undefined;
 	/** The character's health, from 0 to MaxHealth; nil while the player has no character. Weapons and TakeDamage lower this same value. Setting it (server only) clamps to 0..MaxHealth, and 0 kills the character with no killer. Setting it on a dead player, or one driving a vehicle, does nothing: use Respawn to bring a player back. */
 	health: number | undefined;
 	/** Whether the character is crouched right now (by the key, a slide or ForceCrouch). nil while the player has no character. Read-only. */
@@ -162,10 +172,16 @@ interface Player {
 	readonly isRagdolled: boolean | undefined;
 	/** Whether the character is sprinting right now: holding the sprint key and moving forward fast enough. nil while the player has no character. Read-only. */
 	readonly isSprinting: boolean | undefined;
+	/** Whether the character is swimming in water right now (wading in the shallows is not swimming). nil while the player has no character. Read-only. */
+	readonly isSwimming: boolean | undefined;
+	/** Whether the character is swimming with its head under the surface right now: the test breath uses. nil while the player has no character. Read-only. */
+	readonly isUnderwater: boolean | undefined;
 	/** How high the character's jump rises, in centimetres (about 90 under normal gravity unless a script changes it). nil while the player has no character. Setting it (server only) clamps to 0..1000 and lasts for the rest of the session, through respawns; 0 stops ordinary jumps. */
 	jumpHeight: number | undefined;
 	/** How much stamina a jump costs (0 unless a script changes it, so jumping is free); with a cost, a character with less stamina than that cannot jump. nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session. Only counts while StaminaEnabled is true. */
 	jumpStaminaCost: number | undefined;
+	/** How many seconds the character can stay underwater on a full breath (20 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 1..3600 and lasts for the rest of the session, through respawns. Lowering it below Breath lowers Breath too; raising it does not refill. */
+	maxBreath: number | undefined;
 	/** The most health the character can have (100 unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 1..10000 and lasts for the rest of the session: every respawn starts with full health at this maximum. Lowering it below Health lowers Health too; raising it does not heal. */
 	maxHealth: number | undefined;
 	/** The size of the shield pool (0, no shield, unless a script changes it); nil while the player has no character. Setting it (server only) clamps to 0..10000 and lasts for the rest of the session. A shield above the new size drops to it; raising an existing shield does not fill the pool (set Shield for that), but giving a shield to a player who had none starts it full. */
@@ -206,6 +222,10 @@ interface Player {
 	walkSpeed: number | undefined;
 	/** What the player is wearing: slot name ("hair", "top", "footwear", "acc_hat", ...) to item id. Empty when nothing is worn or their look has not arrived. Read-only; a fresh table on every read. (server only) */
 	readonly wearing: Record<string, string>;
+	/** The character's Breath changed: holding it underwater, getting it back at the surface or a script setting it. It reports steps of about half a percent of MaxBreath, not every frame. Fires on the server and on every client while BreathEnabled is true. */
+	readonly breathChanged: Signal<[player: Player, old: number, new: number]>;
+	/** The character's Breath is full again after it had used some. Fires on the server and on every client. */
+	readonly breathRestored: Signal<[player: Player]>;
 	/** The character crouched (the key, a slide or ForceCrouch). Fires on the server and on every client. */
 	readonly crouchStarted: Signal<[player: Player]>;
 	/** The character stood up from a crouch. Fires on the server and on every client. */
@@ -216,6 +236,8 @@ interface Player {
 	readonly died: Signal<[player: Player, killer: Player | undefined, damageType: string]>;
 	/** The character's health changed: damage, healing, Health set, or a respawn's refill. Fires on the server and on every client. */
 	readonly healthChanged: Signal<[player: Player, old: number, new: number]>;
+	/** The character's Breath reached 0: from now on it takes DrownDamage every second until it surfaces. Fires on the server and on every client. */
+	readonly outOfBreath: Signal<[player: Player]>;
 	/** The character was knocked down (Ragdoll, a hard hit, a blast, or being thrown off a vehicle). Fires on the server and on every client. */
 	readonly ragdolled: Signal<[player: Player]>;
 	/** A knocked-down character stood back up (its time ended or Recover was called). It does not fire if the character died while down: Died does. Fires on the server and on every client. */
