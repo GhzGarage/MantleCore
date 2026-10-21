@@ -91,6 +91,15 @@ public:
 		ToolTip = "The Mantle client that Test Locally runs your level in. Leave empty to use the Mantle you installed from Steam or the Epic Games Store. Pick Mantle-Win64-Shipping.exe (or Mantle.exe) in a Mantle install folder to use a specific one."))
 	FFilePath PreviewClientExecutable;
 
+	/**
+	 * For developers: a Mantle client project (its .uproject, such as mantle/client/Mantle.uproject) that Test Locally runs
+	 * with the engine's UnrealEditor.exe -game instead of the open project. Used when Preview Client Executable is empty or
+	 * UnrealEditor.exe (empty: this editor's own UnrealEditor.exe). The command-line -MantlePreviewProject=<path> wins over this.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Preview", meta = (DisplayName = "Preview Client Project", FilePathFilter = "uproject",
+		ToolTip = "Developers only. A Mantle client project (.uproject) that Test Locally runs with UnrealEditor.exe -game, instead of this project. Leave empty to use the Preview Client Executable or the Steam or Epic install. Works with an empty Preview Client Executable (this editor's UnrealEditor.exe) or with UnrealEditor.exe picked there. The command line -MantlePreviewProject=<path> overrides it."))
+	FFilePath PreviewClientProject;
+
 	/** Whether avatars may upload as-is (bAllowAsIsAvatars). */
 	static bool AllowsAsIsAvatars();
 

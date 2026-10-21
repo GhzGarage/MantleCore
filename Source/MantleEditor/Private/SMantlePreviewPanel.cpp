@@ -2,12 +2,14 @@
 #include "SMantlePreviewPanel.h"
 
 #include "MantlePreviewClient.h"
+#include "MantleSettings.h"
 
 #include "Editor.h"
 #include "Engine/World.h"
 #include "Framework/Docking/TabManager.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "HAL/PlatformProcess.h"
+#include "Misc/CommandLine.h"
 #include "Misc/MessageDialog.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -429,12 +431,21 @@ FText SMantlePreviewPanel::GetClientText() const
 	const FMantleTestLocally& TestLocallyFlow = FMantleTestLocally::Get();
 	if (!TestLocallyFlow.HasClient())
 	{
+		const FString Project = MantlePreviewClient::ProjectOverride(FCommandLine::Get(), UMantleSettings::Get()->PreviewClientProject.FilePath);
+		if (!Project.IsEmpty())
+		{
+			return FText::Format(LOCTEXT("ClientNoneProject", "Client: not looked for yet; will run the project {0}"), FText::FromString(Project));
+		}
 		return LOCTEXT("ClientNone", "Client: not looked for yet");
 	}
 	const FMantlePreviewClientInfo& Client = TestLocallyFlow.GetClient();
-	return FText::Format(LOCTEXT("ClientFormat", "Client: {0}, version {1}"),
-		FText::FromString(Client.Source),
-		Client.ClientVersion.IsEmpty() ? LOCTEXT("ClientVersionUnknown", "unknown") : FText::FromString(Client.ClientVersion));
+	const FText Version = Client.ClientVersion.IsEmpty() ? LOCTEXT("ClientVersionUnknown", "unknown") : FText::FromString(Client.ClientVersion);
+	if (!Client.Project.IsEmpty())
+	{
+		return FText::Format(LOCTEXT("ClientProjectFormat", "Client: {0}, project {1}, version {2}"),
+			FText::FromString(Client.Source), FText::FromString(Client.Project), Version);
+	}
+	return FText::Format(LOCTEXT("ClientFormat", "Client: {0}, version {1}"), FText::FromString(Client.Source), Version);
 }
 
 FText SMantlePreviewPanel::GetBlockedText() const

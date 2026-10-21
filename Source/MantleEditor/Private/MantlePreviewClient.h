@@ -18,6 +18,9 @@ struct FMantlePreviewClientInfo
 	/** "steam" | "epic" | "setting" | "dev-editor". */
 	FString Source;
 
+	/** The .uproject a dev-editor client runs with -game (the open project, or the Preview Client Project). Empty otherwise. */
+	FString Project;
+
 	/** From the client's -MantlePreviewCapabilities answer. */
 	int32 PreviewProtocol = 0;
 	TArray<int32> ManifestSchemas;
@@ -63,6 +66,26 @@ namespace MantlePreviewClient
 	 * features. A key the answer lacks leaves Info's value alone, so an answer without "features" means none.
 	 */
 	void ReadCapabilities(const TSharedPtr<FJsonObject>& Answer, FMantlePreviewClientInfo& InOutInfo);
+
+	/**
+	 * The client project to run instead of the open one: -MantlePreviewProject=<path> on CommandLine if present, else the
+	 * Preview Client Project setting value. Trimmed; empty when neither is set. A relative path is not resolved here.
+	 */
+	FString ProjectOverride(const TCHAR* CommandLine, const FString& SettingValue);
+
+	/**
+	 * Which exe runs a preview when the Preview Client Project is Project (empty: none). Empty Project: OutExe is Configured
+	 * as is. Otherwise Configured must be empty (OutExe becomes this editor's UnrealEditor.exe) or UnrealEditor.exe; any
+	 * other exe is an error, since a packaged client cannot run another project.
+	 */
+	bool ResolveExecutable(const FString& Configured, const FString& Project, FString& OutExe, FString& OutError);
+
+	/**
+	 * Fills Executable, PrefixArgs ({"<uproject>", "-game"}), Source ("dev-editor") and Project of OutInfo for UnrealEditor.exe Exe
+	 * running ProjectOverride (empty: the open project). False, with OutError, when that project file is missing or is not a
+	 * .uproject. Does not look for the cook tool.
+	 */
+	bool DescribeDevEditor(const FString& Exe, const FString& ProjectOverride, FMantlePreviewClientInfo& OutInfo, FString& OutError);
 
 	/** True while the process Launch started is still running. */
 	bool IsRunning();
