@@ -238,6 +238,7 @@ bool FMantleGarmentOutfitCarryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("away from it it stays"), OverBump[1].Equals(FVector3f(2, 2, 0.3f), 1e-3f));
 
 	// A surface with no triangles is refused.
+	AddExpectedError(TEXT("MANTLE_GARMENTFIT FAIL clearance"), EAutomationExpectedErrorFlags::Contains, 1);
 	TArray<FVector3f> Any = { FVector3f::ZeroVector };
 	TestFalse(TEXT("no skin is refused"), FMantleGarmentOutfit::CarryWithSkin(Any, FMantleSkinnedMeshLOD(), Smaller, MeanCm, Error));
 	return true;
