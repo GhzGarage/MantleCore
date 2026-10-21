@@ -528,8 +528,8 @@ public:
 	/**
 	 * A static mesh actor's physics block (#456), from the editor's Simulate Physics and mass
 	 * settings: false, with nothing written, when Simulate Physics is off. The mass is the Mass (kg)
-	 * override when set, else the mass the editor computes from the collision, clamped to the
-	 * schema's range; the dampings are clamped too. It starts anchored (simulate false) when the
+	 * override when set, clamped to the schema's range; otherwise it is left unset so the game
+	 * computes it and floats by the material's density. The dampings are clamped too. It starts anchored (simulate false) when the
 	 * component's actor carries the MantleAnchored tag (MantlePhysicsAnchoredTag). The material
 	 * (#528) is the preset MatchPhysicsMaterial finds for the component's Phys Material Override, else
 	 * its mesh's simple-collision physical material; one that matches no preset publishes as default,

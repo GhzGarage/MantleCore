@@ -138,7 +138,7 @@ struct MANTLERUNTIME_API FMantlePlaceLimits
 	/** How far from a point of interest NPCs stand, 0 to this many cm. */
 	static constexpr double MaxCrowdPointRadius = 1000.0;
 
-	/** A StaticMesh's physics.mass, this many kg to MaxPhysicsMass (#456). The exporter clamps the editor's mass into range. */
+	/** A StaticMesh's physics.mass, this many kg to MaxPhysicsMass (#456). The exporter writes it only for a Mass Override, clamped into range. */
 	static constexpr double MinPhysicsMass = 0.1;
 	static constexpr double MaxPhysicsMass = 100000.0;
 
