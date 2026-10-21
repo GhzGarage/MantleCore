@@ -1,7 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
-#include "MantleAccessorySettings.h"
 #include "MantleCosmeticPreviewViewport.h"
 #include "MantleAccessoryPlacement.h"
+#include "MantleAccessorySettings.h"
 #include "MantleAvatarContract.h"
 #include "MantleClipAnimInstance.h"
 #include "MantleCosmeticPreview.h"
