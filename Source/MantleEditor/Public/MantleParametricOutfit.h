@@ -50,6 +50,13 @@ struct MANTLEEDITOR_API FMantleParametricOutfit
 	static bool FindSourceBody(const USkeletalMesh* AuthoringBody, TSharedPtr<void>& OutLease, USkeletalMesh*& OutBody, FString& OutError);
 
 	/**
+	 * Pure (tested): whether a converted body is a third-party character's, from the class of the asset it was converted from
+	 * (its ConvertedFromKey; empty when that is no asset, as an assembly folder is): any asset but a MetaHuman Creator
+	 * character. Its folder can't tell: Convert puts a Creator character's output under <character>/Converted too.
+	 */
+	static bool IsThirdPartyConversion(const FTopLevelAssetPath& SourceClass);
+
+	/**
 	 * Route 1: the garment wrapped as an Outfit on its MetaHuman authoring body (Draft.AuthoringBody, a Mantle-converted Creator
 	 * body, which must be the body the garment sits on: checked by how close its closest vertices are to the skin). Null with OutWhy.
 	 */

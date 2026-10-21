@@ -800,7 +800,10 @@ bool FMantleParametricOutfit::FindSourceBody(const USkeletalMesh* AuthoringBody,
 		OutError = TEXT("the authoring body is not one Mantle converted from a MetaHuman Creator character");
 		return false;
 	}
-	if (Built->Left(Cut).Contains(TEXT("/Converted/")))
+	const FString* ConvertedFrom = AuthoringBody->GetPackage()->GetMetaData().FindValue(AuthoringBody, FMantleAvatarConverter::ConvertedFromKey);
+	const FAssetData Source = ConvertedFrom ? FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().GetAssetByObjectPath(FSoftObjectPath(*ConvertedFrom))
+		: FAssetData();
+	if (IsThirdPartyConversion(Source.IsValid() ? Source.AssetClassPath : FTopLevelAssetPath()))
 	{
 		// A third-party character's body conformed to a MetaHuman: its clothing goes through Make Outfit from garment, which
 		// poses and fits the garment to that body, not straight onto it.
@@ -930,6 +933,11 @@ UChaosOutfitAsset* FMantleParametricOutfit::WrapOnAuthoringBody(const FMantleCos
 		return nullptr;
 	}
 	return WrapGarment(Draft.Source.Get(), Draft.KeepSlots, SourceBody, KeepAlive, OutWhy);
+}
+
+bool FMantleParametricOutfit::IsThirdPartyConversion(const FTopLevelAssetPath& SourceClass)
+{
+	return !SourceClass.IsNull() && SourceClass != UMetaHumanCharacter::StaticClass()->GetClassPathName();
 }
 
 bool FMantleParametricOutfit::IsWholeBody(TConstArrayView<FVector3f> Points)
