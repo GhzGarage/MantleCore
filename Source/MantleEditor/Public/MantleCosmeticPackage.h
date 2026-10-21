@@ -236,6 +236,7 @@ struct MANTLEEDITOR_API FMantleCosmeticPackage
 	/** #51, local only: bought hair was sized to the standard head, and the words the preview shows for it. */
 	bool bHairHeadFitted = false;
 	FMantleHairFitReport::FResult HairHeadFit;
+	FMantleHairFitMeshes HairHeadFitMeshes;
 
 	bool HasErrors() const { return FMantleCosmeticChecks::HasErrors(Issues); }
 

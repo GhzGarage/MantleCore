@@ -3060,6 +3060,11 @@ namespace MantleCosmeticExportPrivate
 		for (const FString& Warning : Fit.Warnings) Package.Issues.Add(FMantleCosmeticChecks::Warning(Warning));
 		Package.Notes.Append(Fit.Notes);
 		if (!Fit.bFitted) return;
+		Package.HairHeadFitMeshes.BeforePositions = Cards.Glb.Positions;
+		Package.HairHeadFitMeshes.AfterPositions = Fit.Positions;
+		Package.HairHeadFitMeshes.HairTriangles = HairIndices;
+		Package.HairHeadFitMeshes.HeadPositions = Face.Glb.Positions;
+		Package.HairHeadFitMeshes.HeadTriangles = HeadIndices;
 		Cards.Glb.Positions = Fit.Positions;
 		Package.HairHeadFit = Fit.Report;
 		Package.bHairHeadFitted = true;

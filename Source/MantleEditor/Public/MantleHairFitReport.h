@@ -8,6 +8,18 @@
  * input, the panel shows the output. The creator never types a scale or an offset; they read these and press "Looks good"
  * or "Adjust" (which uploads the hair as authored, so they can place it by hand).
  */
+/** The geometry behind the before/after preview, in the export's space (Unreal, cm): the hair as authored and as fitted, and the head it was fitted to. */
+struct MANTLEEDITOR_API FMantleHairFitMeshes
+{
+	TArray<FVector3f> BeforePositions;
+	TArray<FVector3f> AfterPositions;
+	/** Triangles (three indices each) into the hair positions. */
+	TArray<uint32> HairTriangles;
+	TArray<FVector3f> HeadPositions;
+	TArray<uint32> HeadTriangles;
+	bool IsValid() const { return AfterPositions.Num() > 0 && BeforePositions.Num() == AfterPositions.Num() && HeadPositions.Num() > 0; }
+};
+
 struct MANTLEEDITOR_API FMantleHairFitReport
 {
 	/** Shown above the before/after picture whenever the fit ran. */
