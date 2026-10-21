@@ -6,6 +6,10 @@
 
 #include "Engine/World.h"
 #include "EngineDefines.h"
+#include "EngineUtils.h"
+#include "GameFramework/Actor.h"
+#include "LevelInstance/LevelInstanceInterface.h"
+#include "LevelInstance/LevelInstanceSubsystem.h"
 #include "WorldPartition/WorldPartition.h"
 #include "HAL/PlatformMemory.h"
 #include "WorldPartition/LoaderAdapter/LoaderAdapterShape.h"
@@ -133,16 +137,26 @@ FMantlePlaceWorldPartition::FLoadResult FMantlePlaceWorldPartition::LoadAll(UWor
 	{
 		return Result;
 	}
+	// Cells first: a Level Instance may sit in a cell that was not loaded.
+	LoadWorldPartitionCells(World, Result);
+	LoadLevelInstances(World, Result);
+#endif
+	return Result;
+}
+
+void FMantlePlaceWorldPartition::LoadWorldPartitionCells(UWorld* World, FLoadResult& Result)
+{
+#if WITH_EDITOR
 	UWorldPartition* WorldPartition = World->GetWorldPartition();
 	if (!WorldPartition || !WorldPartition->IsInitialized())
 	{
-		return Result;
+		return;
 	}
 	TArray<FString> Examples;
 	Result.UnloadedBefore = CountUnloaded(GatherEntries(World), Examples);
 	if (Result.UnloadedBefore == 0)
 	{
-		return Result;
+		return;
 	}
 
 	Result.CommitBeforeMB = static_cast<int64>(FPlatformMemory::GetStats().UsedVirtual >> 20);
@@ -158,12 +172,86 @@ FMantlePlaceWorldPartition::FLoadResult FMantlePlaceWorldPartition::LoadAll(UWor
 	Result.CommitAfterMB = static_cast<int64>(FPlatformMemory::GetStats().UsedVirtual >> 20);
 	UE_LOG(LogMantle, Log, TEXT("World Partition: %s"), *DescribeLoad(Result));
 #endif
-	return Result;
+}
+
+void FMantlePlaceWorldPartition::LoadLevelInstances(UWorld* World, FLoadResult& Result)
+{
+#if WITH_EDITOR
+	ULevelInstanceSubsystem* Subsystem = IsValid(World) && !World->IsGameWorld() ? World->GetSubsystem<ULevelInstanceSubsystem>() : nullptr;
+	if (!Subsystem)
+	{
+		return;
+	}
+	TSet<const AActor*> Tried;
+	for (int32 Depth = 0; Depth < MaxLevelInstanceDepth; ++Depth)
+	{
+		// The unloaded ones first, then load them: loading changes the world's actor list.
+		TArray<AActor*> Unloaded;
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			AActor* Actor = *It;
+			ILevelInstanceInterface* Instance = IsValid(Actor) ? Cast<ILevelInstanceInterface>(Actor) : nullptr;
+			if (!Instance || Tried.Contains(Actor) || !Instance->IsLoadingEnabled() || !Instance->IsWorldAssetValid()
+				|| Instance->IsLoaded() || Subsystem->IsLoading(Instance) || Instance->IsInAnyEditMode())
+			{
+				continue;
+			}
+			// A Packed Level Actor publishes as instanced meshes; its level is not loaded for it.
+			bool bPacked = false;
+			for (const UClass* Class = Actor->GetClass(); Class && !bPacked; Class = Class->GetSuperClass())
+			{
+				bPacked = Class->GetFName() == FName(TEXT("PackedLevelActor"));
+			}
+			if (!bPacked)
+			{
+				Unloaded.Add(Actor);
+			}
+		}
+		if (Unloaded.Num() == 0)
+		{
+			break;
+		}
+		for (AActor* Actor : Unloaded)
+		{
+			Tried.Add(Actor);
+			if (!IsValid(Actor))
+			{
+				continue;
+			}
+			ILevelInstanceInterface* Instance = CastChecked<ILevelInstanceInterface>(Actor);
+			Subsystem->BlockLoadLevelInstance(Instance);
+			if (Instance->IsLoaded())
+			{
+				Result.LevelInstances.Add(Actor);
+				UE_LOG(LogMantle, Log, TEXT("Level Instance: loaded '%s' (%s) for the publish"), *Actor->GetActorLabel(), *Instance->GetWorldAsset().GetAssetName());
+			}
+			else
+			{
+				++Result.LevelInstancesFailed;
+				UE_LOG(LogMantle, Warning, TEXT("Level Instance: '%s' (%s) would not load"), *Actor->GetActorLabel(), *Instance->GetWorldAsset().GetAssetName());
+			}
+		}
+	}
+#endif
 }
 
 void FMantlePlaceWorldPartition::ReleaseLoaded(UWorld* World, FLoadResult& Result)
 {
 #if WITH_EDITOR
+	// The Level Instances this publish loaded go first, the last loaded (the nested ones) first; the ones the creator loaded stay.
+	ULevelInstanceSubsystem* Subsystem = IsValid(World) ? World->GetSubsystem<ULevelInstanceSubsystem>() : nullptr;
+	for (int32 Index = Result.LevelInstances.Num() - 1; Index >= 0; --Index)
+	{
+		AActor* Actor = Cast<AActor>(Result.LevelInstances[Index].Get());
+		ILevelInstanceInterface* Instance = IsValid(Actor) ? Cast<ILevelInstanceInterface>(Actor) : nullptr;
+		if (Subsystem && Instance && Instance->IsLoaded() && !Instance->IsInAnyEditMode())
+		{
+			Subsystem->BlockUnloadLevelInstance(Instance);
+			UE_LOG(LogMantle, Log, TEXT("Level Instance: let go of '%s'"), *Actor->GetActorLabel());
+		}
+	}
+	Result.LevelInstances.Reset();
+
 	UWorldPartitionEditorLoaderAdapter* Adapter = Cast<UWorldPartitionEditorLoaderAdapter>(Result.Adapter.Get());
 	Result.Adapter.Reset();
 	if (!Adapter)
@@ -183,11 +271,24 @@ void FMantlePlaceWorldPartition::ReleaseLoaded(UWorld* World, FLoadResult& Resul
 
 FString FMantlePlaceWorldPartition::DescribeLoad(const FLoadResult& Result)
 {
-	FString Text = FString::Printf(TEXT("Loaded %d World Partition actors in cells that were not loaded, so they publish with the rest (committed memory %lld MB, was %lld MB)."),
-		Result.Loaded(), Result.CommitAfterMB, Result.CommitBeforeMB);
-	if (Result.UnloadedAfter > 0)
+	FString Text;
+	if (Result.UnloadedBefore > 0)
 	{
-		Text += FString::Printf(TEXT(" %d actors are still not loaded (a data layer that is off, or a cell that would not load)."), Result.UnloadedAfter);
+		Text = FString::Printf(TEXT("Loaded %d World Partition actors in cells that were not loaded, so they publish with the rest (committed memory %lld MB, was %lld MB)."),
+			Result.Loaded(), Result.CommitAfterMB, Result.CommitBeforeMB);
+		if (Result.UnloadedAfter > 0)
+		{
+			Text += FString::Printf(TEXT(" %d actors are still not loaded (a data layer that is off, or a cell that would not load)."), Result.UnloadedAfter);
+		}
+	}
+	if (Result.LevelInstances.Num() > 0 || Result.LevelInstancesFailed > 0)
+	{
+		Text += Text.IsEmpty() ? TEXT("") : TEXT(" ");
+		Text += FString::Printf(TEXT("Loaded %d Level Instance(s) that were not loaded in the editor, so what is inside them publishes with the rest."), Result.LevelInstances.Num());
+		if (Result.LevelInstancesFailed > 0)
+		{
+			Text += FString::Printf(TEXT(" %d would not load, so what is inside them is left out."), Result.LevelInstancesFailed);
+		}
 	}
 	return Text;
 }

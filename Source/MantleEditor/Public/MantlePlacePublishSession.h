@@ -311,6 +311,9 @@ private:
 	bool bThinInstances = false;
 	/** GhzGarage/mantle#818: the World Partition cells Prepare loaded, let go in EndPublish. */
 	TWeakObjectPtr<UObject> LoadedCells;
+
+	/** The Level Instance actors that load also loaded (GhzGarage/mantle#818); EndPublish unloads them. */
+	TArray<TWeakObjectPtr<UObject>> LoadedLevelInstances;
 	/** GhzGarage/mantle#818: what loading them cost, for the Check step's notes. */
 	FString WorldPartitionNote;
 };

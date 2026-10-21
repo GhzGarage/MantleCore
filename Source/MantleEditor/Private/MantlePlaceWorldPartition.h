@@ -15,6 +15,8 @@ class UWorld;
  * would be missing from the place without a word. Check this place does not change what the creator
  * has loaded, so it names World Partition and how to load the rest; Export refuses a partial level.
  * Publish (GhzGarage/mantle#818) loads every cell itself first (LoadAll) and lets them go when it ends.
+ * LoadAll also loads the Level Instances the editor has not loaded (what is inside an unloaded one is otherwise left out), and
+ * ReleaseLoaded unloads those again.
  */
 class FMantlePlaceWorldPartition
 {
@@ -68,7 +70,11 @@ public:
 		/** The adapter holding the loaded cells; ReleaseLoaded lets it go. */
 		TWeakObjectPtr<UObject> Adapter;
 
-		bool bLoaded() const { return Adapter.IsValid(); }
+		/** The Level Instance actors LoadAll loaded (ReleaseLoaded unloads them, nested ones first), and how many it tried and could not load. */
+		TArray<TWeakObjectPtr<UObject>> LevelInstances;
+		int32 LevelInstancesFailed = 0;
+
+		bool bLoaded() const { return Adapter.IsValid() || LevelInstances.Num() > 0; }
 		int32 Loaded() const { return UnloadedBefore - UnloadedAfter; }
 	};
 
@@ -79,7 +85,20 @@ public:
 	 */
 	static FLoadResult LoadAll(UWorld* World);
 
-	/** Lets go of the cells LoadAll loaded, which unloads them (the cells the creator loaded themselves stay). */
+	/** How many levels deep LoadLevelInstances follows Level Instances inside Level Instances. */
+	static constexpr int32 MaxLevelInstanceDepth = 8;
+
+	/**
+	 * Loads every Level Instance of World the editor has not loaded (GhzGarage/mantle#818), nested ones too, into Result.LevelInstances.
+	 * A Packed Level Actor is not one (it publishes as instanced meshes). One that will not load is counted in LevelInstancesFailed and
+	 * stays as it was: Export then says what is inside it is left out. Editor only.
+	 */
+	static void LoadLevelInstances(UWorld* World, FLoadResult& Result);
+
+	/** LoadAll's World Partition half: loads every cell of World's World Partition, if it has one with unloaded actors. */
+	static void LoadWorldPartitionCells(UWorld* World, FLoadResult& Result);
+
+	/** Lets go of the cells LoadAll loaded, which unloads them (the cells the creator loaded themselves stay), and unloads the Level Instances it loaded. */
 	static void ReleaseLoaded(UWorld* World, FLoadResult& Result);
 
 	/** The plain-words note for a publish that loaded cells: how many actors, and the memory before and after. */
