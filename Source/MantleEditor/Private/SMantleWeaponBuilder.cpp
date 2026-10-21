@@ -849,8 +849,7 @@ FText SMantleWeaponBuilder::SummaryText() const
 		Lines.Add(FString::Printf(TEXT("Use time: %s; wait between uses: %.1f seconds; %s"),
 			C.bOverrideUseSeconds ? *FString::Printf(TEXT("%.1f seconds"), C.UseSeconds) : TEXT("the animation's own length"), C.CooldownSeconds,
 			C.bMoveWhileUsing ? TEXT("can walk while using") : TEXT("stands still while using")));
-		return FText::FromString(FString::Join(Lines, TEXT("
-")));
+		return FText::FromString(FString::Join(Lines, TEXT("\n")));
 	}
 	if (Delivery == EMantleWeaponDocDelivery::Projectile || bSpellsBesideBeam)
 	{
