@@ -294,10 +294,21 @@ bool FMantleAccessoryFeetPivotTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("its notes say it was centred"), HasNote(Package, TEXT("centred on the socket")));
 	TestTrue(TEXT("the source's bounds are untouched"), Chain->GetBoundingBox().Equals(BoundsBefore, 1e-4));
 
-	// Too big for the slot either way: still refused, not quietly moved.
+	// Too big for the slot either way: refused and not moved. The rule itself, on boxes: 40 cm centres (its farthest
+	// corner then reaches 34.6 of 35 cm), a 45 cm cube does not (39), nor does a flat 60 cm one (over the size limit).
 	TStrongObjectPtr<UStaticMesh> Huge(MakeDisc(30, 30, Material.Get(), FVector3f(0.0f, 0.0f, 150.0f), 40.0f));
 	const FMantleCosmeticPackage Refused = FMantleCosmeticExport::BuildCore(NeckDraft(Huge.Get()), *Contract);
 	TestTrue(TEXT("an accessory too big for the slot is still refused"), Refused.HasErrors());
+	TestFalse(TEXT("and not moved"), HasNote(Refused, TEXT("centred on the socket")));
+	const FMantleContractAccessoryBounds* Neck = Contract->AccessoryBounds.Find(TEXT("acc_neck"));
+	if (TestNotNull(TEXT("acc_neck has bounds"), Neck))
+	{
+		auto Box = [](const float Side, const float Height) { return FBox3f(FVector3f(-Side / 2, -Side / 2, 150.0f), FVector3f(Side / 2, Side / 2, 150.0f + Height)); };
+		TestFalse(TEXT("a 40 cm cube far from its pivot is centred"), FMantleAccessorySettings::RecenterOffset(Box(40.0f, 40.0f), *Neck).IsZero());
+		TestTrue(TEXT("a 45 cm cube would still reach too far when centred, so it is not moved"), FMantleAccessorySettings::RecenterOffset(Box(45.0f, 45.0f), *Neck).IsZero());
+		TestTrue(TEXT("a 60 cm item is too big, so it is not moved"), FMantleAccessorySettings::RecenterOffset(Box(60.0f, 2.0f), *Neck).IsZero());
+		TestTrue(TEXT("an item whose pivot already reaches is not moved"), FMantleAccessorySettings::RecenterOffset(Box(10.0f, 10.0f).ShiftBy(FVector3f(0.0f, 0.0f, -150.0f)), *Neck).IsZero());
+	}
 	return true;
 }
 
@@ -340,7 +351,12 @@ bool FMantleAccessoryNormalMapTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("its colour uploads as before"), UploadedWidth(Without, Without.Materials[0].AlbedoKey) > 0);
 		if (With.Materials.Num() == 1)
 		{
-			TestEqual(TEXT("its colour is the same with or without a normal"), Without.Materials[0].AlbedoKey, With.Materials[0].AlbedoKey);
+			const FMantleCosmeticUploadAsset* AlbedoWith = With.FindAsset(With.Materials[0].AlbedoKey);
+			const FMantleCosmeticUploadAsset* AlbedoWithout = Without.FindAsset(Without.Materials[0].AlbedoKey);
+			if (TestTrue(TEXT("both upload a colour texture"), AlbedoWith && AlbedoWithout))
+			{
+				TestTrue(TEXT("its colour texture is the same with or without a normal"), AlbedoWith->Bytes == AlbedoWithout->Bytes);
+			}
 		}
 	}
 	if (TestTrue(TEXT("an accessory with a 2048 normal map exports, not refused"), Export(2048, Over)))

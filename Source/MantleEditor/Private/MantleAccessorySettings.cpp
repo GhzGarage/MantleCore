@@ -9,6 +9,8 @@
 #include "ReferenceSkeleton.h"
 #include "Engine/StaticMesh.h"
 #include "MantleMeshReduce.h"
+#include "MantlePlaceAssets.h"
+#include "StaticMeshResources.h"
 
 namespace MantleAccessorySettingsPrivate
 {

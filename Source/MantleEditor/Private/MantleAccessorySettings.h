@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MantleAvatarContract.h"
 #include "MantleCosmeticExport.h"
 
 /** Creator corrections, keyed by source object path and accessory slot; never alter the source mesh. */
