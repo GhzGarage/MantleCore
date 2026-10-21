@@ -231,12 +231,12 @@ namespace MantleEmoteCheckPrivate
 		}
 	}
 
-	/** A close-up of Bone's place on the posed mesh (Components[0]), 13 cm each way. */
+	/** A close-up of Bone's place on the posed mesh (Components[0]), 20 cm each way. */
 	FBox HandFrame(TConstArrayView<USkeletalMeshComponent*> Components, const FName Bone)
 	{
 		const USkeletalMeshComponent* Component = Components.IsValidIndex(0) ? Components[0] : nullptr;
 		const FVector Center = Component && Component->GetBoneIndex(Bone) != INDEX_NONE ? Component->GetBoneLocation(Bone) : FVector::ZeroVector;
-		return FBox(Center - FVector(13.0), Center + FVector(13.0));
+		return FBox(Center - FVector(20.0), Center + FVector(20.0));
 	}
 
 	/** A sequence's bone keys, read once, sampled at any time as the emote writer does (slerp and lerp between keys). */
