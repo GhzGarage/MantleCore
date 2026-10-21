@@ -471,7 +471,7 @@ interface AssetsService {
 }
 const Assets: AssetsService;
 
-/** The local player's avatar: open the avatar screen and play their equipped emotes. On the server, read a player's look with Player.Avatar and Player.Wearing. */
+/** The local player's avatar: open the avatar editor over the place and play their equipped emotes. On the server, read a player's look with Player.Avatar and Player.Wearing. */
 interface AvatarService {
 	/** The avatar editor closed (client only), by the player or by CloseEditor. saved is true when the player saved a look while it was open; LookChanged says what changed once their account has it. */
 	readonly editorClosed: Signal<[saved: boolean]>;
@@ -483,8 +483,6 @@ interface AvatarService {
 	closeEditor(): boolean;
 	/** Whether the avatar editor is open on this client, whoever opened it. (client only) */
 	isEditorOpen(): boolean;
-	/** Open Mantle's avatar screen, where the player changes their own look. Returns false when there is no local player to open it for. A script cannot change the look itself. (client only) */
-	openCustomizer(): boolean;
 	/** Open the avatar editor over the running place, where the player changes their own look while the world goes on behind it. options.Categories limits what it offers: any of "body" (the avatar, skin tone, eye colour, height and the rest of Body), "hair" (hair, eyebrows, eyelashes, facial hair), "clothes" (top, bottom, footwear), "accessories", "emotes" or "all", or slot names such as "top" or "acc_hat". Leave it out for everything (only then are outfits offered). options.Title is a heading over the panel ("Barber"), up to 40 characters. options.FreezeCharacter (default true) holds the character still and turns the camera onto it; false leaves the player in control and the camera where it is. The player sees only items they own or that are free, and Save puts the look on their account exactly as Mantle's own avatar screen does. Esc, the pad's B or Close shut it, asking first about unsaved changes. Returns false, opening nothing, when there is no local character, or the editor or another Mantle screen is already open. An unknown category is an error. (client only) */
 	openEditor(options?: { categories?: (string)[] | undefined; title?: string | undefined; freezeCharacter?: boolean | undefined } | undefined): boolean;
 	/** Play one of the local player's equipped emotes, by its item id (an emote on their emote wheel). Returns false, and plays nothing, when itemId is not one of their equipped emotes, when they have no character, or when called again too soon. true means the request went to the server, which checks it again and can still refuse it (the player is moving, in the air, seated or dead). (client only) */

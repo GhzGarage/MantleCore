@@ -429,7 +429,7 @@ class _AssetsService:
 Assets: _AssetsService
 
 class _AvatarService:
-    """The local player's avatar: open the avatar screen and play their equipped emotes. On the server, read a player's look with Player.Avatar and Player.Wearing."""
+    """The local player's avatar: open the avatar editor over the place and play their equipped emotes. On the server, read a player's look with Player.Avatar and Player.Wearing."""
     editor_closed: Signal
     editor_opened: Signal
     look_changed: Signal
@@ -438,9 +438,6 @@ class _AvatarService:
         ...
     def is_editor_open(self) -> bool:
         """Whether the avatar editor is open on this client, whoever opened it."""
-        ...
-    def open_customizer(self) -> bool:
-        """Open Mantle's avatar screen, where the player changes their own look. Returns false when there is no local player to open it for. A script cannot change the look itself."""
         ...
     def open_editor(self, options: Optional[dict[str, Any]] = ..., /) -> bool:
         """Open the avatar editor over the running place, where the player changes their own look while the world goes on behind it. options.Categories limits what it offers: any of 'body' (the avatar, skin tone, eye colour, height and the rest of Body), 'hair' (hair, eyebrows, eyelashes, facial hair), 'clothes' (top, bottom, footwear), 'accessories', 'emotes' or 'all', or slot names such as 'top' or 'acc_hat'. Leave it out for everything (only then are outfits offered). options.Title is a heading over the panel ('Barber'), up to 40 characters. options.FreezeCharacter (default true) holds the character still and turns the camera onto it; false leaves the player in control and the camera where it is. The player sees only items they own or that are free, and Save puts the look on their account exactly as Mantle's own avatar screen does. Esc, the pad's B or Close shut it, asking first about unsaved changes. Returns false, opening nothing, when there is no local character, or the editor or another Mantle screen is already open. An unknown category is an error."""
