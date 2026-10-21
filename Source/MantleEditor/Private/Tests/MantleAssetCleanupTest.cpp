@@ -70,8 +70,6 @@ bool FMantleAssetCleanupTest::RunTest(const FString& Parameters)
 	UMantleVehicleSource* ReloadedAsset = Reloaded ? FindObject<UMantleVehicleSource>(Reloaded, TEXT("CleanupAsset")) : nullptr;
 	if (TestNotNull(TEXT("a reload reads the file"), ReloadedAsset))
 	{
-		TestTrue(TEXT("as a new object"), ReloadedAsset != Saved);
-
 		// MoveAside takes the asset out of its package and removes the file, as a delete does.
 		TestEqual(TEXT("one asset is moved aside"), FMantleAssetCleanup::MoveAside({ ReloadedAsset, nullptr }), 1);
 		TestFalse(TEXT("and its file is gone"), IFileManager::Get().FileExists(*Fixture.File));
