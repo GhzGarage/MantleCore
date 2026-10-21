@@ -22,6 +22,32 @@ struct FMantleEmoteMotion
 };
 
 /**
+ * How the converted clip's hands compare with the source's over a clip (FMantleEmoteCheck::CompareHands): the bend of
+ * each finger at its first two joints (the angle between one segment and the next, so it does not depend on either
+ * skeleton's bone axes), and each wrist's place relative to the head, in the head's frame, the source's scaled to the
+ * converted body's head height.
+ */
+struct FMantleHandMatch
+{
+	int32 Frames = 0;
+	int32 Joints = 0;
+
+	/** Mean of converted minus source bend (degrees): negative is straighter fingers than the source's, an under-curl. */
+	double BendBiasDegrees = 0.0;
+
+	/** Mean absolute difference, and the worst joint's mean absolute difference (degrees). */
+	double BendErrorDegrees = 0.0;
+	double BendWorstDegrees = 0.0;
+	FName BendWorstJoint;
+
+	/** Mean distance between the converted and the source wrist-to-head vectors (cm). */
+	double WristErrorCm = 0.0;
+
+	/** Mean of converted minus source wrist-to-head distance (cm): negative is hands closer to the head than the source's. */
+	double WristCloserCm = 0.0;
+};
+
+/**
  * #283 emote trials: Mantle.Dev.CheckEmote <AnimSequence> <Directory> [Label] [female|male|<SkeletalMesh>] [size]. Runs the
  * Cosmetics panel's real emote export (FMantleEditorActions::MakeCosmeticDraft, FMantleCosmeticExport::Build: identify the
  * skeleton, retarget onto the UEFN mannequin, sample, validate, encode) without uploading; reads the MAN1 back as players'
@@ -43,6 +69,16 @@ struct FMantleEmoteCheck
 
 	/** FMantleEmoteMotion of Clip on Skeleton (the driver's reference skeleton gives the keys a track leaves out). Pure. */
 	static FMantleEmoteMotion Measure(const FMantleAnimClip& Clip, const FReferenceSkeleton& Skeleton);
+
+	/**
+	 * FMantleHandMatch of two clips sampled at the same moments: component-space poses (FTransform per bone of Source and of
+	 * Converted, in each skeleton's bone order). Bones either skeleton lacks are skipped. Pure.
+	 */
+	static FMantleHandMatch CompareHands(TConstArrayView<TArray<FTransform>> SourcePoses, const FReferenceSkeleton& Source,
+		TConstArrayView<TArray<FTransform>> ConvertedPoses, const FReferenceSkeleton& Converted);
+
+	/** Component-space pose of Skeleton from local transforms (LocalOf gives a bone's local transform). Pure. */
+	static TArray<FTransform> ComponentPose(const FReferenceSkeleton& Skeleton, TFunctionRef<FTransform(int32 Bone)> LocalOf);
 
 	/** Tiles (each Tile x Tile, row-major) into a sheet Columns wide; missing tiles stay black. Pure. */
 	static TArray<FColor> Tile(const TArray<TArray<FColor>>& Tiles, int32 Tile, int32 Columns, int32& OutWidth, int32& OutHeight);

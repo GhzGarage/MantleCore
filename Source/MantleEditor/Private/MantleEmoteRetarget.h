@@ -9,6 +9,7 @@ class UObject;
 class UAnimSequence;
 class USkeletalMesh;
 class USkeleton;
+struct FReferenceSkeleton;
 struct FMantleAnimClipData;
 struct FMantleSkinJointName;
 
@@ -59,6 +60,24 @@ struct FMantleEmoteRetarget
 	static bool IsBodyBone(FName Bone);
 
 	/**
+	 * mantle #840 step 1, rest-pose match: the bones whose rest shape the UEFN target's retarget pose copies from the
+	 * source's. Each hand and its fingers (metacarpals and 01 to 03 of the thumb, index, middle, ring and pinky), and with
+	 * bArms the clavicle, upper and lower arm. Unreal's auto-align writes no offsets for fingers, so the FK finger chains
+	 * otherwise carry the difference between the two rest hands into every frame (a constant 17 to 35 degree under-curl).
+	 */
+	static TArray<FName> HandBones(bool bArms);
+
+	/**
+	 * The target retarget pose's local rotation offsets (IK Rig's: retarget local = reference local * offset) that give
+	 * each of Bones the source retarget pose's component-space rotation, parent-first, so the two rest hands have the same
+	 * shape. Every Epic skeleton Mantle retargets from (UE4 and UE5 Mannequin, MetaHuman) shares the UEFN mannequin's bone
+	 * axes. Offsets are each skeleton's current ones by bone name (absent: identity); a bone missing on either skeleton is
+	 * left alone. OutLargestDegrees: the largest change from the target's current offset. Pure.
+	 */
+	static TMap<FName, FQuat> MatchRestRotations(const FReferenceSkeleton& Source, const TMap<FName, FQuat>& SourceOffsets,
+		const FReferenceSkeleton& Target, const TMap<FName, FQuat>& TargetOffsets, TConstArrayView<FName> Bones, double* OutLargestDegrees = nullptr);
+
+	/**
 	 * A mesh on Skeleton to retarget from (its proportions): the skeleton's preview mesh, else a skeletal mesh in the
 	 * project on that skeleton, a "Body" first, then by package path. Null when there is none.
 	 */
@@ -71,7 +90,7 @@ struct FMantleEmoteRetarget
 	 * skeleton with Sequence's length (within a frame).
 	 */
 	static bool RetargetAndSample(UAnimSequence* Sequence, const FString& SkeletonId, USkeletalMesh* SourceMesh, USkeletalMesh* TargetMesh,
-		const FMantleAvatarContract& Contract, FMantleAnimClipData& OutClip, FString& OutError);
+		const FMantleAvatarContract& Contract, FMantleAnimClipData& OutClip, FString& OutError, FString* OutHandsNote = nullptr);
 
 	/**
 	 * The retarget itself, through any retargeter: IK Rig's batch retarget of Sequence (played on SourceMesh) onto

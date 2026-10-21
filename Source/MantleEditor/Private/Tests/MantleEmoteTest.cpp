@@ -715,4 +715,172 @@ bool FMantleEmoteSampleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace MantleEmoteTestPrivate
+{
+	/** root, hand_r, index_01_r (5 cm on), index_02_r (3 cm on), index_03_r (2 cm on), each turned by its Turn about z. */
+	FReferenceSkeleton MakeHand(const TArray<float>& TurnDegrees)
+	{
+		FReferenceSkeleton Skeleton;
+		FReferenceSkeletonModifier Modifier(Skeleton, nullptr);
+		const TCHAR* Names[] = { TEXT("root"), TEXT("hand_r"), TEXT("index_01_r"), TEXT("index_02_r"), TEXT("index_03_r") };
+		const double Lengths[] = { 0.0, 100.0, 5.0, 3.0, 2.0 };
+		for (int32 Bone = 0; Bone < 5; ++Bone)
+		{
+			const FQuat Turn(FVector::UpVector, FMath::DegreesToRadians(TurnDegrees.IsValidIndex(Bone) ? TurnDegrees[Bone] : 0.0f));
+			Modifier.Add(FMeshBoneInfo(Names[Bone], Names[Bone], Bone - 1), FTransform(Turn, FVector(Lengths[Bone], 0.0, 0.0)));
+		}
+		return Skeleton;
+	}
+
+	TArray<FTransform> RefComponentPose(const FReferenceSkeleton& Skeleton, const TMap<FName, FQuat>& Offsets)
+	{
+		return FMantleEmoteCheck::ComponentPose(Skeleton, [&](const int32 Bone)
+		{
+			FTransform Local = Skeleton.GetRawRefBonePose()[Bone];
+			if (const FQuat* Offset = Offsets.Find(Skeleton.GetBoneName(Bone)))
+			{
+				Local.SetRotation(Local.GetRotation() * *Offset);
+			}
+			return Local;
+		});
+	}
+
+	/** A sampled clip's component pose at Frame on Skeleton (its keys, else the reference). */
+	TArray<FTransform> ClipPose(const FMantleAnimClipData& Clip, const FReferenceSkeleton& Skeleton, const int32 Frame)
+	{
+		return FMantleEmoteCheck::ComponentPose(Skeleton, [&](const int32 Bone)
+		{
+			FTransform Local = Skeleton.GetRawRefBonePose()[Bone];
+			const FMantleAnimClipTrackData* Track = Clip.Tracks.FindByPredicate([&](const FMantleAnimClipTrackData& Each) { return Each.Bone == Skeleton.GetBoneName(Bone); });
+			if (Track && Bone > 0)
+			{
+				Local.SetRotation(FQuat(Track->Rotations[FMath::Min(Frame, Track->Rotations.Num() - 1)]));
+				if (Track->Translations.Num() > 0)
+				{
+					Local.SetTranslation(FVector(Track->Translations[FMath::Min(Frame, Track->Translations.Num() - 1)]));
+				}
+			}
+			return Local;
+		});
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleEmoteRestHandsTest, "Mantle.Editor.Emote.RestHands",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMantleEmoteRestHandsTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleEmoteTestPrivate;
+	// The source's rest index finger curls 20 degrees at each joint; the target's is straight, its hand turned 10 degrees.
+	const FReferenceSkeleton Source = MakeHand({ 0.0f, 0.0f, 20.0f, 20.0f, 20.0f });
+	const FReferenceSkeleton Target = MakeHand({ 0.0f, 10.0f, 0.0f, 0.0f, 0.0f });
+	double Largest = 0.0;
+	const TArray<FName> Bones = FMantleEmoteRetarget::HandBones(false);
+	TestTrue(TEXT("the hand bones hold the hands and fingers"), Bones.Contains(FName(TEXT("hand_r"))) && Bones.Contains(FName(TEXT("pinky_metacarpal_l"))));
+	TestFalse(TEXT("without arms there is no upper arm"), Bones.Contains(FName(TEXT("upperarm_l"))));
+	TestTrue(TEXT("with arms there is"), FMantleEmoteRetarget::HandBones(true).Contains(FName(TEXT("upperarm_l"))));
+	const TMap<FName, FQuat> Offsets = FMantleEmoteRetarget::MatchRestRotations(Source, {}, Target, {}, Bones, &Largest);
+	TestEqual(TEXT("the hand and three finger bones get offsets"), Offsets.Num(), 4);
+	const TArray<FTransform> SourcePose = RefComponentPose(Source, {});
+	const TArray<FTransform> TargetPose = RefComponentPose(Target, Offsets);
+	for (int32 Bone = 1; Bone < 5; ++Bone)
+	{
+		TestTrue(FString::Printf(TEXT("%s turns as the source's"), *Source.GetBoneName(Bone).ToString()),
+			TargetPose[Bone].GetRotation().Equals(SourcePose[Bone].GetRotation(), 1e-5));
+	}
+	TestTrue(FString::Printf(TEXT("the largest change is the 20 degree curl (%.2f)"), Largest), FMath::IsNearlyEqual(Largest, 20.0, 0.01));
+
+	// The hand comparison: the same pose bends the same; a finger 15 degrees straighter at each joint is an under-curl.
+	const FMantleHandMatch Same = FMantleEmoteCheck::CompareHands({ SourcePose }, Source, { SourcePose }, Source);
+	TestEqual(TEXT("two joints of the index finger are compared"), Same.Joints, 2);
+	TestTrue(TEXT("a pose against itself has no error"), FMath::Abs(Same.BendBiasDegrees) < 1e-6 && Same.WristErrorCm < 1e-6);
+	const FReferenceSkeleton Straighter = MakeHand({ 0.0f, 0.0f, 5.0f, 5.0f, 5.0f });
+	const FMantleHandMatch Under = FMantleEmoteCheck::CompareHands({ SourcePose }, Source, { RefComponentPose(Straighter, {}) }, Straighter);
+	TestTrue(FString::Printf(TEXT("15 degrees straighter is a -15 degree bend (%.2f)"), Under.BendBiasDegrees), FMath::IsNearlyEqual(Under.BendBiasDegrees, -15.0, 0.01));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleEmoteFingerCurlTest, "Mantle.Editor.Emote.FingerCurl",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMantleEmoteFingerCurlTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleEmoteTestPrivate;
+	// mantle #840: a UE5 Mannequin fist retargeted onto the UEFN mannequin keeps its curl. Without the rest-hand match the
+	// FK finger chains carry the two rest hands' difference (a 17 to 35 degree under-curl).
+	const FMantleAvatarContract* C = Contract(*this);
+	USkeletalMesh* Manny = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/UE5_Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
+	USkeletalMesh* Target = C ? FMantleBuiltInMannequin::UEFNMannequin(*C) : nullptr;
+	if (!C || !TestNotNull(TEXT("the project has the UE5 Mannequin SKM_Manny_Simple"), Manny) || !TestNotNull(TEXT("a UEFN mannequin"), Target))
+	{
+		return false;
+	}
+	const FReferenceSkeleton& Reference = Manny->GetRefSkeleton();
+	UPackage* Package = CreatePackage(TEXT("/Game/__MantleEmoteTest/AS_EmoteFist"));
+	UAnimSequence* Sequence = NewObject<UAnimSequence>(Package, TEXT("AS_EmoteFist"), RF_Public | RF_Standalone | RF_Transient);
+	Sequence->SetSkeleton(Manny->GetSkeleton());
+	Sequence->SetPreviewMesh(Manny);
+	const int32 Frames = 30;
+	{
+		IAnimationDataController& Controller = Sequence->GetController();
+		Controller.InitializeModel();
+		Controller.OpenBracket(FText::FromString(TEXT("Emote fist test")), false);
+		Controller.SetFrameRate(FFrameRate(30, 1), false);
+		Controller.SetNumberOfFrames(FFrameNumber(Frames), false);
+		for (const FName Bone : FMantleEmoteRetarget::HandBones(false))
+		{
+			const int32 Index = Reference.FindRawBoneIndex(Bone);
+			const FString Name = Bone.ToString();
+			if (Index == INDEX_NONE || Name.StartsWith(TEXT("hand_")) || Name.Contains(TEXT("metacarpal")))
+			{
+				continue;
+			}
+			// Each finger joint closes 70 degrees over the second, about the bone's own curl axis (z on Epic's hands).
+			const FTransform Ref = Reference.GetRawRefBonePose()[Index];
+			TArray<FVector> Positions;
+			TArray<FQuat> Rotations;
+			TArray<FVector> Scales;
+			for (int32 Key = 0; Key <= Frames; ++Key)
+			{
+				Positions.Add(Ref.GetTranslation());
+				Rotations.Add(Ref.GetRotation() * FQuat(FVector::UpVector, FMath::DegreesToRadians(70.0 * Key / Frames)));
+				Scales.Add(FVector::OneVector);
+			}
+			Controller.AddBoneCurve(Bone, false);
+			Controller.SetBoneTrackKeys(Bone, Positions, Rotations, Scales, false);
+		}
+		Controller.NotifyPopulated();
+		Controller.CloseBracket(false);
+	}
+	FMantleAnimClipData Clip;
+	FString Error;
+	FString HandsNote;
+	const bool bRetargeted = FMantleEmoteRetarget::RetargetAndSample(Sequence, TEXT("ue5mannequin"), Manny, Target, *C, Clip, Error, &HandsNote);
+	FMantleAnimClipData Source;
+	FString SourceError;
+	FMantleAnimClipWriter::Sample(Sequence, *C, Source, SourceError);
+	Sequence->ClearFlags(RF_Public | RF_Standalone);
+	Sequence->MarkAsGarbage();
+	if (!TestTrue(FString::Printf(TEXT("the fist retargets (%s)"), *Error), bRetargeted))
+	{
+		return false;
+	}
+	AddInfo(HandsNote);
+	TArray<TArray<FTransform>> SourcePoses;
+	TArray<TArray<FTransform>> ConvertedPoses;
+	for (int32 Frame = 0; Frame < Clip.FrameCount; Frame += 3)
+	{
+		SourcePoses.Add(ClipPose(Source, Reference, Frame));
+		ConvertedPoses.Add(ClipPose(Clip, Target->GetRefSkeleton(), Frame));
+	}
+	const FMantleHandMatch Hands = FMantleEmoteCheck::CompareHands(SourcePoses, Reference, ConvertedPoses, Target->GetRefSkeleton());
+	AddInfo(FString::Printf(TEXT("bend %+.2f degrees, error %.2f, worst %s %.2f, joints %d"), Hands.BendBiasDegrees, Hands.BendErrorDegrees,
+		*Hands.BendWorstJoint.ToString(), Hands.BendWorstDegrees, Hands.Joints));
+	TestTrue(TEXT("every finger joint of both hands is compared"), Hands.Joints == 20);
+	TestTrue(FString::Printf(TEXT("the fingers curl as much as the source's (%+.1f degrees on average)"), Hands.BendBiasDegrees), FMath::Abs(Hands.BendBiasDegrees) < 5.0);
+	TestTrue(FString::Printf(TEXT("no finger joint is off by much (worst %s %.1f degrees)"), *Hands.BendWorstJoint.ToString(), Hands.BendWorstDegrees),
+		Hands.BendWorstDegrees < 10.0);
+	return true;
+}
+
 #endif

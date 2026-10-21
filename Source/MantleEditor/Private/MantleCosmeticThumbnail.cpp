@@ -424,9 +424,10 @@ bool FMantleCosmeticThumbnail::Capture(const FMantleThumbnailSubject& Subject, i
 			}
 		}
 	}
+	FBox Frame = Subject.Frame;
 	if (Subject.Pose)
 	{
-		Subject.Pose(Scene, SkeletalComponents);
+		Subject.Pose(Scene, SkeletalComponents, Frame);
 	}
 	if (Subject.StaticMesh)
 	{
@@ -461,7 +462,7 @@ bool FMantleCosmeticThumbnail::Capture(const FMantleThumbnailSubject& Subject, i
 	// history, so no eye adaptation, temporal AA, Lumen or motion blur; fixed exposure.
 	Camera->ShowFlags.DisableAdvancedFeatures();
 	Camera->ShowFlags.SetMotionBlur(false);
-	const FVector Location = FrameCamera(Subject.Frame, Subject.View, FieldOfViewDegrees, FrameMargin);
+	const FVector Location = FrameCamera(Frame.IsValid ? Frame : Subject.Frame, Subject.View, FieldOfViewDegrees, FrameMargin);
 	Scene.AddComponent(Camera, FTransform(Subject.View, Location));
 
 	// Everything the picture needs in before it is taken, or a material draws as the engine's grey world grid: loads,
