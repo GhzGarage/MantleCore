@@ -7,6 +7,7 @@
 #include "MantleAvatarReposeFixer.h"
 #include "MantleAvatarStripFixer.h"
 #include "MantleCosmeticExport.h"
+#include "MantleGarmentClearance.h"
 #include "MantleMetaHumanPose.h"
 #include "MantleNailSeating.h"
 #include "MantleOutfitSections.h"
@@ -224,31 +225,7 @@ namespace MantleGarmentOutfitPrivate
 	{
 		FMantleSkinnedMeshLOD Surface;
 		TArray<int32> PointOf;
-		TMap<FVector3f, int32> Welded;
-		for (const FVector3f& Position : Mesh.Positions)
-		{
-			const int32* Found = Welded.Find(Position);
-			PointOf.Add(Found ? *Found : Welded.Add(Position, Surface.Positions.Add(Position)));
-		}
-		Surface.Normals.Init(FVector3f::ZeroVector, Surface.Positions.Num());
-		for (int32 Vertex = 0; Vertex < Mesh.Positions.Num(); ++Vertex)
-		{
-			if (Mesh.Normals.IsValidIndex(Vertex))
-			{
-				Surface.Normals[PointOf[Vertex]] += Mesh.Normals[Vertex];
-			}
-		}
-		for (FVector3f& Normal : Surface.Normals)
-		{
-			Normal = Normal.GetSafeNormal();
-		}
-		for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives)
-		{
-			for (const uint32 Index : Primitive.Indices)
-			{
-				Surface.Indices.Add(static_cast<uint32>(PointOf[Primitive.FirstVertex + static_cast<int32>(Index)]));
-			}
-		}
+		FMantleGarmentOutfit::WeldedSurface(Mesh, Surface, PointOf);
 		if (!FMantleAvatarRefit::PushOutOfBody(Surface, Body, Out, OutError))
 		{
 			return false;
@@ -671,6 +648,71 @@ bool FMantleGarmentOutfit::TransferWeights(FMantleGlbMesh& Garment, const FMantl
 	return true;
 }
 
+void FMantleGarmentOutfit::WeldedSurface(const FMantleGlbMesh& Mesh, FMantleSkinnedMeshLOD& Out, TArray<int32>& OutPointOf)
+{
+	Out = FMantleSkinnedMeshLOD();
+	OutPointOf.Reset();
+	TMap<FVector3f, int32> Welded;
+	for (const FVector3f& Position : Mesh.Positions)
+	{
+		const int32* Found = Welded.Find(Position);
+		OutPointOf.Add(Found ? *Found : Welded.Add(Position, Out.Positions.Add(Position)));
+	}
+	Out.Normals.Init(FVector3f::ZeroVector, Out.Positions.Num());
+	for (int32 Vertex = 0; Vertex < Mesh.Positions.Num(); ++Vertex)
+	{
+		if (Mesh.Normals.IsValidIndex(Vertex))
+		{
+			Out.Normals[OutPointOf[Vertex]] += Mesh.Normals[Vertex];
+		}
+	}
+	for (FVector3f& Normal : Out.Normals)
+	{
+		Normal = Normal.GetSafeNormal();
+	}
+	for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives)
+	{
+		for (const uint32 Index : Primitive.Indices)
+		{
+			Out.Indices.Add(static_cast<uint32>(OutPointOf[Primitive.FirstVertex + static_cast<int32>(Index)]));
+		}
+	}
+}
+
+FString FMantleGarmentOutfit::DescribeClearance(TConstArrayView<FVector3f> Points, const FMantleSkinnedMeshLOD& Surface)
+{
+	FMantleGarmentClearance Clearance;
+	FString Error;
+	if (!FMantleGarmentClearance::Compute(Points, Surface, Clearance, FMantleGarmentClearance::DefaultSearchCm, &Error))
+	{
+		return FString::Printf(TEXT("not measured: %s"), *Error);
+	}
+	TArray<float> Tracked;
+	int32 Under = 0;
+	int32 Within = 0;
+	double Sum = 0.0;
+	for (int32 Point = 0; Point < Points.Num(); ++Point)
+	{
+		if (!Clearance.IsTracked(Point))
+		{
+			continue;
+		}
+		const float Cm = Clearance.ClearanceCm[Point];
+		Tracked.Add(Cm);
+		Under += Cm < -0.05f ? 1 : 0;
+		Within += FMath::Abs(Cm) <= 1.0f ? 1 : 0;
+		Sum += Cm;
+	}
+	if (Tracked.IsEmpty())
+	{
+		return FString::Printf(TEXT("tracked 0/%d"), Points.Num());
+	}
+	Tracked.Sort();
+	const auto Percentile = [&Tracked](const int32 Percent) { return Tracked[FMath::Min(Tracked.Num() - 1, Tracked.Num() * Percent / 100)]; };
+	return FString::Printf(TEXT("tracked %d/%d, under %d, mean %.2f, p10 %.2f p50 %.2f p90 %.2f cm, within 1 cm %d%%"), Tracked.Num(), Points.Num(), Under,
+		Sum / Tracked.Num(), Percentile(10), Percentile(50), Percentile(90), FMath::RoundToInt32(100.0 * Within / Tracked.Num()));
+}
+
 bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletalMesh*> Garments, const FString& TurnOff, const FString& Confirm,
 	FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal)
 {
@@ -935,6 +977,57 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT k=%.5f offset=%s body gap %.3f cm"), OutResult.InputScale, *OutResult.Offset.ToString(), OutResult.BodyGapCm);
 	OutResult.Notes.Add(FString::Printf(TEXT("The MetaHuman's skin is on average %.2f cm from the original body's (after the A-pose and the scale %.4f)."), OutResult.BodyGapCm, OutResult.InputScale));
 
+	// The original body (posed, on the MetaHuman) and the conformed MetaHuman as surfaces, for the fit log: how far the
+	// original skin is outside the MetaHuman's, by the bone it follows (positive: the MetaHuman is smaller there).
+	FMantleGlbMesh OriginalBody = PosedBody;
+	for (FVector3f& Position : OriginalBody.Positions)
+	{
+		Position += OutResult.Offset;
+	}
+	FMantleSkinnedMeshLOD OriginalSurface, TwinSurface;
+	TArray<int32> OriginalPointOf, TwinPointOf;
+	WeldedSurface(OriginalBody, OriginalSurface, OriginalPointOf);
+	WeldedSurface(MetaHumanSkin, TwinSurface, TwinPointOf);
+	{
+		FMantleGarmentClearance Gap;
+		if (FMantleGarmentClearance::Compute(OriginalSurface.Positions, TwinSurface, Gap))
+		{
+			TMap<FName, TPair<double, int32>> ByBone;
+			TBitArray<> Seen(false, OriginalSurface.Positions.Num());
+			for (int32 Vertex = 0; Vertex < OriginalPointOf.Num(); ++Vertex)
+			{
+				const int32 Point = OriginalPointOf[Vertex];
+				if (!Gap.IsTracked(Point) || Seen[Point])
+				{
+					continue;
+				}
+				Seen[Point] = true;
+				int32 Best = 0;
+				for (int32 Slot = 1; Slot < OriginalBody.NumInfluences; ++Slot)
+				{
+					Best = OriginalBody.InfluenceWeights[Vertex * OriginalBody.NumInfluences + Slot] > OriginalBody.InfluenceWeights[Vertex * OriginalBody.NumInfluences + Best] ? Slot : Best;
+				}
+				const int32 Joint = OriginalBody.InfluenceJoints[Vertex * OriginalBody.NumInfluences + Best];
+				TPair<double, int32>& Entry = ByBone.FindOrAdd(OriginalBody.Joints.IsValidIndex(Joint) ? OriginalBody.Joints[Joint].Name : NAME_None);
+				Entry.Key += Gap.ClearanceCm[Point];
+				++Entry.Value;
+			}
+			TArray<TPair<FName, double>> Means;
+			for (const TPair<FName, TPair<double, int32>>& Entry : ByBone)
+			{
+				if (Entry.Value.Value >= 20) { Means.Emplace(Entry.Key, Entry.Value.Key / Entry.Value.Value); }
+			}
+			Means.Sort([](const TPair<FName, double>& A, const TPair<FName, double>& B) { return FMath::Abs(A.Value) > FMath::Abs(B.Value); });
+			TArray<FString> Lines;
+			for (int32 Index = 0; Index < Means.Num() && Index < 14; ++Index)
+			{
+				Lines.Add(FString::Printf(TEXT("%s %+.2f"), *Means[Index].Key.ToString(), Means[Index].Value));
+			}
+			UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT original skin over the MetaHuman: %s; by bone (cm): %s"),
+				*DescribeClearance(OriginalSurface.Positions, TwinSurface), *FString::Join(Lines, TEXT(", ")));
+		}
+	}
+
 	// 3 and 4, per garment.
 	for (USkeletalMesh* Garment : Garments)
 	{
@@ -967,6 +1060,8 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		{
 			Position += OutResult.Offset;
 		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the original body: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, OriginalSurface));
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman as posed: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, TwinSurface));
 		if (!TransferWeights(*Geometry, MetaHumanSkin, Piece.FarVertices, Piece.MeanSkinCm, Error))
 		{
 			Piece.Error = Error;
@@ -978,12 +1073,14 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 			Piece.Error = Error;
 			continue;
 		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman in its A-pose: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, AuthoringSurface));
 		FMantleRefitPushOut Pushed;
 		if (!GarmentPushOut(*Geometry, AuthoringSurface, Pushed, Error))
 		{
 			Piece.Error = Error;
 			continue;
 		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s pushed out: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, AuthoringSurface));
 		Piece.PushOut = Pushed.ToString();
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT push out %s: %s"), *Garment->GetName(), *Piece.PushOut);
 		Piece.Vertices = Geometry->Positions.Num();

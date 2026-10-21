@@ -727,8 +727,17 @@ namespace MantleParametricOutfitPrivate
 			Description = Garment.CreateMeshDescription(0, MoveTemp(Converted));
 		}
 		if (!Description) { OutError = TEXT("the resized garment has no geometry to push out of the body"); return false; }
+		const auto Clearance = [Description, &Surface]()
+		{
+			TArray<FVector3f> Points;
+			const TVertexAttributesConstRef<FVector3f> Positions = Description->GetVertexPositions();
+			for (const FVertexID Vertex : Description->Vertices().GetElementIDs()) { Points.Add(Positions[Vertex]); }
+			return FMantleGarmentOutfit::DescribeClearance(Points, Surface);
+		};
+		const FString Before = Clearance();
 		FMantleRefitPushOut Pushed;
 		if (!FMantleAvatarRefit::PushOutOfBody(*Description, Surface, Pushed, OutError)) { return false; }
+		UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_GARMENT_FIT resized onto %s: %s; pushed out: %s"), *Body.GetName(), *Before, *Clearance());
 		OutNote = Pushed.ToString();
 		if (Pushed.Moved > 0)
 		{

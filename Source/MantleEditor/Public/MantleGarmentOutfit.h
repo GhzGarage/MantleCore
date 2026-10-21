@@ -10,6 +10,7 @@ struct FMantleConvertGarment;
 struct FMantleConvertMetaHumanWork;
 struct FMantleOutfitSection;
 struct FMeshDescription;
+struct FMantleSkinnedMeshLOD;
 struct FReferenceSkeleton;
 
 /** One garment FMantleGarmentOutfit made into an Outfit. */
@@ -106,6 +107,15 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * Body has no skin.
 	 */
 	static bool TransferWeights(FMantleGlbMesh& Garment, const FMantleGlbMesh& Body, int32& OutFar, double& OutMeanCm, FString& OutError);
+
+	/** Pure (tested): Mesh as one point per position (render copies welded), their normals summed, its triangles; OutPointOf maps each vertex to its point. */
+	static void WeldedSurface(const FMantleGlbMesh& Mesh, FMantleSkinnedMeshLOD& Out, TArray<int32>& OutPointOf);
+
+	/**
+	 * Pure (tested): how Points sit over Surface (FMantleGarmentClearance within its default search), for the log:
+	 * "tracked 1650/1660, under 12, mean 0.84, p10 0.10 p50 0.61 p90 1.92 cm, within 1 cm 71%".
+	 */
+	static FString DescribeClearance(TConstArrayView<FVector3f> Points, const FMantleSkinnedMeshLOD& Surface);
 
 	/**
 	 * Steps 1 to 4 for Body and each of Garments. TurnOff and Confirm are Convert's fix keys (comma-separated), as the
