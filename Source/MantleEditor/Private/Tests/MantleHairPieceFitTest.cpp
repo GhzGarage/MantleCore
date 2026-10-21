@@ -1,12 +1,13 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleHairPieceFit.h"
+#include "MantleHairScalpFit.h"
 
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 // The whole-piece fit (unit scale, scale/offset search) and the head samples it scores against.
-// Synthetic head (a sphere), synthetic hair (a cap shell with a ring that hugs the skin), no assets.
+// Synthetic head (a sphere), synthetic hair cards (short, and long hair far wider at the bottom than the head), no assets.
 
 // Named, not anonymous: MantleEditor builds as a unity build.
 namespace MantleHairPieceFitTestPrivate
@@ -50,66 +51,85 @@ namespace MantleHairPieceFitTestPrivate
 	}
 
 	/**
-	 * Hair in the head's frame: a cap of radius 9 cm centred 1 cm above the head's centre (so its top is 1 cm above the
-	 * head's top, and its rim hovers 0.4 cm off the skin), 17.1 cm wide, plus a ring of points 1.5 mm off the skin low on
-	 * the back of the head. Any shift that is not exactly right sinks the ring, so the right transform is the only one
-	 * that keeps 97% outside and hugs the skin.
+	 * Hair cards in the head's frame (the sphere above: centre (0, 0, 160), radius 9). Each card is a strip 0.8 cm wide
+	 * rooted 1 mm off the skin at a polar angle of 10 to 55 degrees, combed down over the sphere to the equator. Short hair
+	 * stops there, its tip lifted 1.65 cm off the skin; long hair stays 1.5 mm off it to the equator. Long hair then falls 30 cm and flares out to 16 cm from the axis, so it is 32 cm wide at the
+	 * bottom, far wider than at the scalp (as bought long hair is). Each card's first two vertices are its root end.
 	 */
-	void PieceFitHair(TArray<FVector3f>& Out)
+	void PieceFitCards(bool bLong, TArray<FVector3f>& P, TArray<uint32>& I)
 	{
-		const double Radius = 9.0;
-		const FVector Centre(0.0, 0.0, 161.0);
-		const double ThetaMax = FMath::Asin(0.95);
-		const auto Add = [&Out](const FVector& P) { Out.Add(FVector3f(static_cast<float>(P.X), static_cast<float>(P.Y), static_cast<float>(P.Z))); };
-		Add(Centre + FVector(0.0, 0.0, Radius));
-		const int32 CapRings = 12;
-		for (int32 R = 1; R <= CapRings; ++R)
+		const FVector Centre(0.0, 0.0, 160.0);
+		const auto Add = [&P](const FVector& V) { P.Add(FVector3f(static_cast<float>(V.X), static_cast<float>(V.Y), static_cast<float>(V.Z))); };
+		for (const double ThetaDeg : {10.0, 25.0, 40.0, 55.0})
 		{
-			const double Theta = ThetaMax * R / CapRings;
-			const int32 Count = 2 * FMath::Max(1, FMath::RoundToInt(18.0 * FMath::Sin(Theta)));
-			for (int32 J = 0; J < Count; ++J)
+			for (int32 J = 0; J < 12; ++J)
 			{
-				const double Phi = 2.0 * UE_DOUBLE_PI * J / Count;
-				Add(Centre + Radius * FVector(FMath::Sin(Theta) * FMath::Cos(Phi), FMath::Sin(Theta) * FMath::Sin(Phi), FMath::Cos(Theta)));
+				const double Phi = 2.0 * UE_DOUBLE_PI * (J + 0.25 * (ThetaDeg / 15.0)) / 12.0;
+				const FVector Out(FMath::Cos(Phi), FMath::Sin(Phi), 0.0);
+				const FVector Side = FVector(-FMath::Sin(Phi), FMath::Cos(Phi), 0.0) * 0.4;
+				TArray<FVector> Spine;
+				const int32 Over = 6;
+				for (int32 K = 0; K <= Over; ++K)
+				{
+					const double Theta = FMath::DegreesToRadians(ThetaDeg + (90.0 - ThetaDeg) * K / Over);
+					// The root sits 1 mm off the skin; the card lifts off it towards its tip, as a real card does.
+					const double R = K == 0 ? 9.1 : 9.15 + (bLong ? 0.0 : 1.5 * K / Over);
+					Spine.Add(Centre + R * (Out * FMath::Sin(Theta) + FVector(0.0, 0.0, FMath::Cos(Theta))));
+				}
+				if (bLong)
+				{
+					for (int32 K = 1; K <= 6; ++K) Spine.Add(Centre + Out * (9.15 + (16.0 - 9.15) * K / 6.0) - FVector(0.0, 0.0, 30.0 * K / 6.0));
+				}
+				const uint32 Base = P.Num();
+				for (const FVector& S : Spine) { Add(S - Side); Add(S + Side); }
+				for (int32 K = 0; K + 1 < Spine.Num(); ++K)
+				{
+					const uint32 A = Base + 2 * K;
+					I.Append({A, A + 1, A + 3, A, A + 3, A + 2});
+				}
 			}
-		}
-		const FVector HeadCentre(0.0, 0.0, 160.0);
-		const double RingTheta = FMath::DegreesToRadians(115.0);
-		for (int32 J = 0; J < 120; ++J)
-		{
-			const double Phi = 2.0 * UE_DOUBLE_PI * J / 120;
-			Add(HeadCentre + 9.15 * FVector(FMath::Sin(RingTheta) * FMath::Cos(Phi), FMath::Sin(RingTheta) * FMath::Sin(Phi), FMath::Cos(RingTheta)));
 		}
 	}
 
-	/** A search small enough to reason about: only the right answer keeps the ring off the skin and hugs it. */
-	FMantleHairPieceFit::FSearch PieceFitSmallSearch()
+	/** The vendor's copy of head-frame hair: Vendor = (Fitted - Offset) * Scale, so the fit should find 1 / Scale and Offset. */
+	TArray<FVector3f> PieceFitVendorCopy(const TArray<FVector3f>& Fitted, float Scale, const FVector3f& Offset)
 	{
-		FMantleHairPieceFit::FSearch Search;
-		Search.Scales = {0.95, 1.15};
-		Search.OffsetsY = {0.0, 1.0, 2.0};
-		Search.TopOffsets = {1.0, 2.0, 3.0};
-		return Search;
+		TArray<FVector3f> Out;
+		for (const FVector3f& P : Fitted) Out.Add((P - Offset) * Scale);
+		return Out;
+	}
+
+	/** How far, at most and at the median, the fit puts each card's root (its first vertex) from where it belongs, cm. */
+	void PieceFitRootError(const FMantleHairPieceFit::FResult& Fit, const TArray<FVector3f>& Vendor, const TArray<FVector3f>& Fitted,
+		bool bLong, double& OutMedian, double& OutWorst)
+	{
+		const int32 PerCard = 2 * (7 + (bLong ? 6 : 0));
+		TArray<double> Errors;
+		for (int32 V = 0; V < Fitted.Num(); V += PerCard) Errors.Add((Fit.Apply(Vendor[V]) - Fitted[V]).Size());
+		Errors.Sort();
+		OutMedian = Errors[Errors.Num() / 2];
+		OutWorst = Errors.Last();
 	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMantleHairPieceFitSearchGridTest,
-	"Mantle.Editor.HairPieceFit.DefaultSearchIsThePrototypesGrid",
+	"Mantle.Editor.HairPieceFit.DefaultSearchReachesThreeTimesTheStartingSize",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
 bool FMantleHairPieceFitSearchGridTest::RunTest(const FString& Parameters)
 {
 	const FMantleHairPieceFit::FSearch Search = FMantleHairPieceFit::FSearch::Default();
-	TestEqual(TEXT("scales"), Search.Scales.Num(), 26);
+	TestEqual(TEXT("scales"), Search.Scales.Num(), 23);
 	TestNearlyEqual(TEXT("first scale"), Search.Scales[0], 0.8, 1.e-9);
-	TestNearlyEqual(TEXT("last scale"), Search.Scales.Last(), 1.425, 1.e-9);
-	TestEqual(TEXT("y offsets"), Search.OffsetsY.Num(), 13);
-	TestNearlyEqual(TEXT("first y offset"), Search.OffsetsY[0], -6.0, 1.e-9);
-	TestNearlyEqual(TEXT("last y offset"), Search.OffsetsY.Last(), 6.0, 1.e-9);
-	TestEqual(TEXT("top offsets"), Search.TopOffsets.Num(), 23);
-	TestNearlyEqual(TEXT("first top offset"), Search.TopOffsets[0], -12.0, 1.e-9);
-	TestNearlyEqual(TEXT("last top offset"), Search.TopOffsets.Last(), 10.0, 1.e-9);
+	TestNearlyEqual(TEXT("last scale"), Search.Scales.Last(), 3.0, 1.e-9);
+	TestEqual(TEXT("y offsets"), Search.OffsetsY.Num(), 11);
+	TestNearlyEqual(TEXT("first y offset"), Search.OffsetsY[0], -10.0, 1.e-9);
+	TestNearlyEqual(TEXT("last y offset"), Search.OffsetsY.Last(), 10.0, 1.e-9);
+	TestEqual(TEXT("top offsets"), Search.TopOffsets.Num(), 15);
+	TestNearlyEqual(TEXT("first top offset"), Search.TopOffsets[0], -16.0, 1.e-9);
+	TestNearlyEqual(TEXT("last top offset"), Search.TopOffsets.Last(), 12.0, 1.e-9);
+	TestTrue(TEXT("a finer pass follows"), Search.FineScaleStep > 0.0 && Search.FineOffsetStep > 0.0);
 	return true;
 }
 
@@ -145,55 +165,41 @@ bool FMantleHairPieceFitHeadSamplesFaceOutTest::RunTest(const FString& Parameter
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FMantleHairPieceFitRecoversKnownTransformTest,
-	"Mantle.Editor.HairPieceFit.RecoversAKnownScaleAndOffset",
+	FMantleHairPieceFitScalpTest,
+	"Mantle.Editor.HairPieceFit.TheScalpIsTheTopAndBackOfTheHeadNotTheFace",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FMantleHairPieceFitRecoversKnownTransformTest::RunTest(const FString& Parameters)
+bool FMantleHairPieceFitScalpTest::RunTest(const FString& Parameters)
 {
 	using namespace MantleHairPieceFitTestPrivate;
-	TArray<FVector3f> HeadPositions; TArray<uint32> HeadIndices;
-	PieceFitSphere(false, HeadPositions, HeadIndices);
+	TArray<FVector3f> Positions; TArray<uint32> Indices;
+	PieceFitSphere(false, Positions, Indices);
 	FMantleHairHeadSamples Head; FString Error;
-	if (!TestTrue(TEXT("head builds"), Head.Build(HeadPositions, HeadIndices, Error))) { AddError(Error); return false; }
-
-	// The hair as it should end up, then moved off the head by a known scale (1.25) and offset (Y +1 cm, Z -35 cm, undone by
-	// the fit): P0 = (Fitted - (0, 1, -35)) / 1.25. The fit's own unit scale squares the 17.1 cm width to 18 cm, so the
-	// searched scale it must find is 17.1 / 18 = 0.95, and the offsets are 1 and -35.
-	TArray<FVector3f> Fitted; PieceFitHair(Fitted);
-	const double KnownScale = 1.25;
-	TArray<FVector3f> Piece;
-	const float Inverse = static_cast<float>(1.0 / KnownScale);
-	for (const FVector3f& P : Fitted) Piece.Add(FVector3f(P.X * Inverse, (P.Y - 1.f) * Inverse, (P.Z + 35.f) * Inverse));
-
-	FMantleHairPieceFit::FResult Fit;
-	if (!TestTrue(TEXT("fit runs"), FMantleHairPieceFit::Fit(Head, Piece, PieceFitSmallSearch(), Fit, Error))) { AddError(Error); return false; }
-	TestTrue(TEXT("outside the skin by the bar"), Fit.bMeetsOutsideBar);
-	TestNearlyEqual(TEXT("unit scale"), Fit.UnitScale, KnownScale / 0.95, 1.e-4);
-	TestNearlyEqual(TEXT("searched scale"), Fit.Scale, 0.95, 1.e-9);
-	TestNearlyEqual(TEXT("total scale"), Fit.TotalScale(), KnownScale, 1.e-4);
-	TestNearlyEqual(TEXT("y offset"), Fit.OffsetY, 1.0, 1.e-9);
-	TestNearlyEqual(TEXT("top offset"), Fit.TopOffset, 1.0, 1.e-9);
-	TestNearlyEqual(TEXT("z offset"), Fit.OffsetZ, -35.0, 0.011);
-	TestEqual(TEXT("candidates"), Fit.CandidatesScored, 18);
-
-	// Applying it puts every point back where the hair should end up.
-	double Worst = 0.0;
-	for (int32 I = 0; I < Piece.Num(); ++I) Worst = FMath::Max(Worst, static_cast<double>((Fit.Apply(Piece[I]) - Fitted[I]).Size()));
-	TestTrue(TEXT("fitted points land on the target within 0.1 mm"), Worst < 0.01);
-
-	TArray<FVector3f> Moved = Piece;
-	FMantleHairPieceFit::ApplyTo(Fit, Moved);
-	TestTrue(TEXT("ApplyTo agrees with Apply"), Moved.Num() == Piece.Num() && (Moved[5] - Fit.Apply(Piece[5])).Size() < 1.e-4f);
+	if (!TestTrue(TEXT("head builds"), Head.Build(Positions, Indices, Error))) { AddError(Error); return false; }
+	TestTrue(TEXT("the scalp has points"), Head.NumScalpPoints() > 100 && Head.NumScalpPoints() <= FMantleHairHeadSamples::MaxScalpPoints);
+	int32 Crown = 0, CrownScalp = 0, Face = 0, FaceScalp = 0, Nape = 0, NapeScalp = 0, Chin = 0, ChinScalp = 0;
+	for (int32 I = 0; I < Head.Num(); ++I)
+	{
+		const FVector& P = Head.Point(I);
+		const bool bScalp = Head.NearestScalpPoint(I) != INDEX_NONE;
+		if (P.Z > 166.0) { ++Crown; CrownScalp += bScalp; }
+		if (P.Y > 6.0 && P.Z > 156.0 && P.Z < 162.0) { ++Face; FaceScalp += bScalp; }
+		if (P.Y < -6.0 && P.Z > 156.0 && P.Z < 162.0) { ++Nape; NapeScalp += bScalp; }
+		if (P.Z < 153.0) { ++Chin; ChinScalp += bScalp; }
+	}
+	TestTrue(TEXT("the crown is scalp"), Crown > 0 && CrownScalp == Crown);
+	TestTrue(TEXT("the back of the head is scalp"), Nape > 0 && NapeScalp == Nape);
+	TestTrue(TEXT("the face is not"), Face > 0 && FaceScalp == 0);
+	TestTrue(TEXT("nor is the bottom of the head"), Chin > 0 && ChinScalp == 0);
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FMantleHairPieceFitIdempotentTest,
-	"Mantle.Editor.HairPieceFit.AnAlreadyFittedPieceStaysPut",
+	FMantleHairPieceFitLongHairTest,
+	"Mantle.Editor.HairPieceFit.LongHairWiderThanTheHeadSitsWithItsRootsOnTheScalp",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FMantleHairPieceFitIdempotentTest::RunTest(const FString& Parameters)
+bool FMantleHairPieceFitLongHairTest::RunTest(const FString& Parameters)
 {
 	using namespace MantleHairPieceFitTestPrivate;
 	TArray<FVector3f> HeadPositions; TArray<uint32> HeadIndices;
@@ -201,56 +207,80 @@ bool FMantleHairPieceFitIdempotentTest::RunTest(const FString& Parameters)
 	FMantleHairHeadSamples Head; FString Error;
 	if (!TestTrue(TEXT("head builds"), Head.Build(HeadPositions, HeadIndices, Error))) { AddError(Error); return false; }
 
-	// The piece already sits where the fit puts it: fitting it again changes nothing.
-	TArray<FVector3f> Piece; PieceFitHair(Piece);
+	// Long hair 32 cm wide at the bottom: sizing it to 18 cm wide, as the fit starts, makes it far too small (the old fit
+	// then lifted it above the crown). The vendor made it at 2.5 times the size, somewhere else.
+	TArray<FVector3f> Fitted; TArray<uint32> Indices;
+	PieceFitCards(true, Fitted, Indices);
+	const TArray<FVector3f> Vendor = PieceFitVendorCopy(Fitted, 2.5f, FVector3f(0.f, 3.f, -16.f));
+	const TArray<FVector3f> Ends = FMantleScalpFit::FindCardEnds(Vendor, Indices);
+	TestEqual(TEXT("two ends per card"), Ends.Num(), 2 * 48);
+
 	FMantleHairPieceFit::FResult Fit;
-	if (!TestTrue(TEXT("fit runs"), FMantleHairPieceFit::Fit(Head, Piece, PieceFitSmallSearch(), Fit, Error))) { AddError(Error); return false; }
-	TestNearlyEqual(TEXT("total scale stays 1"), Fit.TotalScale(), 1.0, 1.e-4);
-	TestNearlyEqual(TEXT("y offset stays 0"), Fit.OffsetY, 0.0, 1.e-9);
-	TestNearlyEqual(TEXT("z offset stays 0"), Fit.OffsetZ, 0.0, 0.011);
-	double Worst = 0.0;
-	for (const FVector3f& P : Piece) Worst = FMath::Max(Worst, static_cast<double>((Fit.Apply(P) - P).Size()));
-	TestTrue(TEXT("no point moves more than 0.1 mm"), Worst < 0.01);
-
-	// And a second pass over the fitted result agrees with the first.
-	TArray<FVector3f> Again = Piece;
-	FMantleHairPieceFit::ApplyTo(Fit, Again);
-	FMantleHairPieceFit::FResult Second;
-	if (!TestTrue(TEXT("second fit runs"), FMantleHairPieceFit::Fit(Head, Again, PieceFitSmallSearch(), Second, Error))) { AddError(Error); return false; }
-	TestNearlyEqual(TEXT("second pass total scale"), Second.TotalScale(), 1.0, 1.e-4);
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FMantleHairPieceFitDefaultSearchTest,
-	"Mantle.Editor.HairPieceFit.DefaultSearchFindsAFitOutsideTheSkin",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-bool FMantleHairPieceFitDefaultSearchTest::RunTest(const FString& Parameters)
-{
-	using namespace MantleHairPieceFitTestPrivate;
-	TArray<FVector3f> HeadPositions; TArray<uint32> HeadIndices;
-	PieceFitSphere(false, HeadPositions, HeadIndices);
-	FMantleHairHeadSamples Head; FString Error;
-	if (!TestTrue(TEXT("head builds"), Head.Build(HeadPositions, HeadIndices, Error))) { AddError(Error); return false; }
-
-	// The same hair, twice the size and far away: the full prototype grid still finds a fit that clears the bar.
-	TArray<FVector3f> Piece; PieceFitHair(Piece);
-	for (FVector3f& P : Piece) P = FVector3f(P.X * 2.f + 3.f, P.Y * 2.f - 50.f, P.Z * 2.f + 40.f);
-	FMantleHairPieceFit::FResult Fit;
-	if (!TestTrue(TEXT("fit runs"), FMantleHairPieceFit::Fit(Head, Piece, Fit, Error))) { AddError(Error); return false; }
-	TestEqual(TEXT("candidates"), Fit.CandidatesScored, 26 * 13 * 23);
-	TestTrue(TEXT("a fit reaches the outside bar"), Fit.bMeetsOutsideBar && Fit.OutsideFraction >= FMantleHairPieceFit::MinOutsideFraction);
-	TestTrue(TEXT("the searched scale is on the grid"), Fit.Scale >= 0.8 - 1.e-9 && Fit.Scale <= 1.425 + 1.e-9);
-	float MinX = TNumericLimits<float>::Max(), MaxX = -TNumericLimits<float>::Max();
-	for (const FVector3f& P : Piece) { const float X = Fit.Apply(P).X; MinX = FMath::Min(MinX, X); MaxX = FMath::Max(MaxX, X); }
-	TestTrue(TEXT("the fitted piece is the searched scale times 18 cm wide"), FMath::Abs((MaxX - MinX) - 18.0 * Fit.Scale) < 0.01);
+	if (!TestTrue(TEXT("fit runs"), FMantleHairPieceFit::Fit(Head, Vendor, Ends, Fit, Error))) { AddError(Error); return false; }
+	TestTrue(TEXT("keeps out of the head"), Fit.bKeepsOutOfHead);
+	TestTrue(TEXT("the searched scale is well past the old 1.425 limit"), Fit.Scale > 1.6);
+	// A root within SeatCm (1 cm) of the scalp counts as seated, so the piece fit is good to about a centimetre and a tenth of
+	// the size; the scalp fit (stage 2) then pulls the roots in.
+	TestTrue(FString::Printf(TEXT("total scale within 10%% of the vendor's (%.4f for 0.4, offsets %.2f, %.2f, seated %.2f, coverage %.2f)"),
+		Fit.TotalScale(), Fit.OffsetY, Fit.OffsetZ, Fit.SeatedFraction, Fit.ScalpCoverage), FMath::Abs(Fit.TotalScale() * 2.5 - 1.0) < 0.10);
+	TestTrue(TEXT("most roots are seated on the scalp"), Fit.SeatedFraction > 0.8);
+	double Median = 0.0, Worst = 0.0;
+	PieceFitRootError(Fit, Vendor, Fitted, true, Median, Worst);
+	TestTrue(FString::Printf(TEXT("roots land where they belong (median %.2f cm, worst %.2f cm)"), Median, Worst), Median < 1.5 && Worst < 2.5);
 	TestTrue(TEXT("Describe gives words"), Fit.Describe().StartsWith(TEXT("Hair fitted to the head")));
+	return true;
+}
 
-	// Nothing to fit, nothing to fit to.
-	FMantleHairPieceFit::FResult Empty;
-	TestFalse(TEXT("empty hair fails"), FMantleHairPieceFit::Fit(Head, TConstArrayView<FVector3f>(), Empty, Error));
-	TestFalse(TEXT("no head fails"), FMantleHairPieceFit::Fit(FMantleHairHeadSamples(), Piece, Empty, Error));
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHairPieceFitShortHairTest,
+	"Mantle.Editor.HairPieceFit.ShortHairAlreadyOnTheHeadStaysPut",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHairPieceFitShortHairTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleHairPieceFitTestPrivate;
+	TArray<FVector3f> HeadPositions; TArray<uint32> HeadIndices;
+	PieceFitSphere(false, HeadPositions, HeadIndices);
+	FMantleHairHeadSamples Head; FString Error;
+	if (!TestTrue(TEXT("head builds"), Head.Build(HeadPositions, HeadIndices, Error))) { AddError(Error); return false; }
+
+	TArray<FVector3f> Fitted; TArray<uint32> Indices;
+	PieceFitCards(false, Fitted, Indices);
+	const TArray<FVector3f> Ends = FMantleScalpFit::FindCardEnds(Fitted, Indices);
+	FMantleHairPieceFit::FResult Fit;
+	if (!TestTrue(TEXT("fit runs"), FMantleHairPieceFit::Fit(Head, Fitted, Ends, Fit, Error))) { AddError(Error); return false; }
+	TestTrue(TEXT("keeps out of the head"), Fit.bKeepsOutOfHead);
+	TestTrue(FString::Printf(TEXT("total scale stays within 10%% of 1 (%.4f, offsets %.2f, %.2f, seated %.2f, coverage %.2f)"),
+		Fit.TotalScale(), Fit.OffsetY, Fit.OffsetZ, Fit.SeatedFraction, Fit.ScalpCoverage), FMath::Abs(Fit.TotalScale() - 1.0) < 0.10);
+	double Median = 0.0, Worst = 0.0;
+	PieceFitRootError(Fit, Fitted, Fitted, false, Median, Worst);
+	TestTrue(FString::Printf(TEXT("roots stay within the seating distance (median %.2f cm, worst %.2f cm)"), Median, Worst), Median < 1.5 && Worst < 2.5);
+
+	// Shrunk onto a patch of the head is not a fit: a candidate must cover the scalp as well as seat its roots.
+	TestTrue(FString::Printf(TEXT("the roots spread over the scalp (%.2f)"), Fit.ScalpCoverage), Fit.ScalpCoverage > 0.3);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHairPieceFitFailsTest,
+	"Mantle.Editor.HairPieceFit.NothingToFitOrNothingToFitToFails",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHairPieceFitFailsTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleHairPieceFitTestPrivate;
+	TArray<FVector3f> HeadPositions; TArray<uint32> HeadIndices;
+	PieceFitSphere(false, HeadPositions, HeadIndices);
+	FMantleHairHeadSamples Head; FString Error;
+	if (!TestTrue(TEXT("head builds"), Head.Build(HeadPositions, HeadIndices, Error))) { AddError(Error); return false; }
+	TArray<FVector3f> Hair; TArray<uint32> Indices;
+	PieceFitCards(false, Hair, Indices);
+	const TArray<FVector3f> Ends = FMantleScalpFit::FindCardEnds(Hair, Indices);
+	FMantleHairPieceFit::FResult Fit;
+	TestFalse(TEXT("empty hair fails"), FMantleHairPieceFit::Fit(Head, TConstArrayView<FVector3f>(), Ends, Fit, Error));
+	TestFalse(TEXT("no cards fails"), FMantleHairPieceFit::Fit(Head, Hair, TConstArrayView<FVector3f>(), Fit, Error));
+	TestFalse(TEXT("no head fails"), FMantleHairPieceFit::Fit(FMantleHairHeadSamples(), Hair, Ends, Fit, Error));
+	TestTrue(TEXT("a bad index gives no ends"), FMantleScalpFit::FindCardEnds(Hair, TArray<uint32>{0u, 1u, 999999u}).IsEmpty());
 	return true;
 }
 

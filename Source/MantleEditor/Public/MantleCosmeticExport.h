@@ -151,6 +151,9 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	 */
 	TOptional<FLinearColor> HairColor;
 
+	/** #51: the creator pressed Adjust on the hair head-fit preview, so bought hair uploads where they made it. */
+	bool bPlaceHairByHand = false;
+
 	/**
 	 * #483, garments: the material slots (indices into the mesh's Materials, the same on every LOD) whose sections
 	 * upload, so a one-piece outfit splits into one item per slot and the source character's skin stays behind. Unset

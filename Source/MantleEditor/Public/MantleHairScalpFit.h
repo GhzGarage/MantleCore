@@ -98,6 +98,8 @@ private:
  *    at 3 cm per axis), the displacement spreads inward with a cosine falloff over 3 cm of surface distance, and any
  *    cap vertex within 0.5 mm of the skin lifts to 1 mm.
  *  - Last resort: any card vertex still more than 1 mm inside the skin moves out along the normal to the clearance.
+ *  - Neither the push nor the last resort touches hair more than HeadDepthCm below the head's top (#51): long hair over
+ *    the shoulders would be shoved out of the head mesh's collar, which is not the wearer's body.
  *
  * "Cap" versus "cards" is the pack's own structure, as in the prototype: the caller passes the vendor's solid cap piece
  * as Cap, and everything else as Cards. Positions are the whole-piece-fitted ones, in the head's space (cm). Pure.
@@ -121,11 +123,13 @@ struct MANTLEEDITOR_API FMantleScalpFit
 	static constexpr double CapWrapCm = 3.0;
 	/** Cap vertices closer to the skin than this are lifted to CapEdgeOffsetCm, cm. */
 	static constexpr double CapLiftBelowCm = 0.05;
+	/** Card vertices lower than this below the head's top (over the neck and shoulders) are neither pushed nor lifted, cm. */
+	static constexpr double HeadDepthCm = 18.0;
 	/** A card's root end is the 12% of its length nearer the head. */
 	static constexpr double CardEndFraction = 0.12;
 
-	/** The creator is asked to check the fit when the last-resort lift touched more than this many vertices ... */
-	static constexpr int32 CheckFitLiftCount = 400;
+	/** The creator is asked to check the fit when the last-resort lift touched more than this share of the card vertices on the head ... */
+	static constexpr double CheckFitLiftShare = 0.05;
 	/** ... or moved a vertex farther than this, cm. */
 	static constexpr double CheckFitLiftCm = 3.0;
 
@@ -185,6 +189,13 @@ struct MANTLEEDITOR_API FMantleScalpFit
 	 * is that end's vertex nearest the skin. Distances are signed distances per vertex. Cards under four vertices are skipped.
 	 */
 	static TArray<int32> FindCardRoots(const TArray<FVector>& Positions, TConstArrayView<uint32> Indices, const TArray<double>& Distances);
+
+	/**
+	 * Both ends of every card (cards as FindCardRoots finds them), two positions per card: the vertices at the two ends of its
+	 * long axis. Which end is the root depends on where the card sits, so the whole-piece fit (FMantleHairPieceFit) takes the
+	 * end nearer the head for each candidate. Empty when a triangle names a missing vertex.
+	 */
+	static TArray<FVector3f> FindCardEnds(TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Indices);
 
 	/**
 	 * Normalised Gaussian over the head vertices flagged in Mask: Out[i] = sum(w * Value * mask) / sum(w * mask) with

@@ -158,6 +158,8 @@ private:
 	/** Exports and checks the draft (with a progress dialog); fills Package and the issue list. */
 	bool BuildPackage();
 	void ShowIssues(const TArray<FMantleCosmeticIssue>& Issues, const TArray<FString>& Notes);
+	/** #51: under the checks, the hair head-fit words with one-click Looks good / Adjust (nothing for hair that was not fitted). */
+	void ShowHairHeadFit();
 
 	FText GetFilesText() const;
 	FText GetStatusText() const;
