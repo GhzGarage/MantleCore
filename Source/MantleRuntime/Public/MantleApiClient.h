@@ -579,6 +579,15 @@ public:
 	 * answer holds one result per line, in order: its verdict, the stored line and hiddenFrom.
 	 */
 	static void ServerChatIngestAsync(const FString& BodyJson, FMantleApiCallback OnDone);
+
+	/**
+	 * ServerHttpSummaryAsync (GhzGarage/mantle#548, #1012): POST /server/http/summary, once a minute, what this server's
+	 * scripts did over outbound HTTP: {"minute":"<RFC 3339>","entries":[{"script","host","port","requests","status2xx",
+	 * "status3xx","status4xx","status5xx","failures","refusals","bytesOut","bytesIn"}]}, at most 200 entries. Metadata
+	 * only (a host, never a URL, path, header or body); the backend keeps it so an abuse report can be traced after this
+	 * server's logs are gone. Authenticated by the dedicated-server token.
+	 */
+	static void ServerHttpSummaryAsync(const FString& BodyJson, FMantleApiCallback OnDone);
 	/**
 	 * GhzGarage/mantle#813: POST /server/seats/heartbeat, once a minute with the account ids of
 	 * every player connected to this server, in place of each player's own heartbeat. Answers

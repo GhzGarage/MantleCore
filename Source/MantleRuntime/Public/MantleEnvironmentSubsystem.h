@@ -368,7 +368,7 @@ public:
 	 * - Fixed with a bias: the volume overrides the exposure compensation only, to the game's own plus the bias.
 	 * - Auto: the volume overrides the metering method (histogram), the brightness range (the place's, else the engine's
 	 *   default one) and the compensation, so the exposure adapts as the editor's does.
-	 * A script's non-zero Environment.ExposureBias replaces the compensation (it always has been an absolute value).
+	 * A script's non-zero Environment.ExposureBias is added to the game's own exposure, in place of the place's bias.
 	 */
 	void SetPlaceExposure(const TOptional<FMantleExposureSettings>& Exposure);
 
@@ -383,7 +383,7 @@ public:
 
 	/**
 	 * Writes the exposure part of a post-process volume's Settings (UpdatePostProcess's, split out so it can be tested without
-	 * a world): the compensation (ScriptBias when a script set one, else EngineBias plus the place's bias) and, for an
+	 * a world): the compensation (EngineBias plus ScriptBias when a script set one, else the place's bias) and, for an
 	 * auto place exposure, the histogram metering and the brightness range. Overrides nothing a fixed, unbiased exposure
 	 * does not change.
 	 */

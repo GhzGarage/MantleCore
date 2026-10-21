@@ -470,10 +470,20 @@ declare extern type AssetsService with
 end
 declare Assets: AssetsService
 
---- The local player's avatar: open the avatar screen and play their equipped emotes. On the server, read a player's look with Player.Avatar and Player.Wearing.
+--- The local player's avatar: open the avatar editor over the place and play their equipped emotes. On the server, read a player's look with Player.Avatar and Player.Wearing.
 declare extern type AvatarService with
-	--- Open Mantle's avatar screen, where the player changes their own look. Returns false when there is no local player to open it for. A script cannot change the look itself. (client only)
-	function OpenCustomizer(self): boolean
+	--- The avatar editor closed (client only), by the player or by CloseEditor. saved is true when the player saved a look while it was open; LookChanged says what changed once their account has it.
+	EditorClosed: Signal<(boolean)>
+	--- The avatar editor opened on this client (client only).
+	EditorOpened: Signal<()>
+	--- The local player's saved look changed (client only): once per slot whose item changed, when their account confirms a save, from the avatar editor or Mantle's own avatar screen. slot is "avatar" or a slot name such as "hair", "top" or "acc_hat"; oldItem and newItem are item ids, nil for nothing worn there. For effects and the place's own bookkeeping: the look is already the player's.
+	LookChanged: Signal<(string, string?, string?)>
+	--- Close the avatar editor as its Close button would, without asking: unsaved changes are put back, and a save already sent still lands. Returns false when it was not open. (client only)
+	function CloseEditor(self): boolean
+	--- Whether the avatar editor is open on this client, whoever opened it. (client only)
+	function IsEditorOpen(self): boolean
+	--- Open the avatar editor over the running place, where the player changes their own look while the world goes on behind it. options.Categories limits what it offers: any of "body" (the avatar, skin tone, eye colour, height and the rest of Body), "hair" (hair, eyebrows, eyelashes, facial hair), "clothes" (top, bottom, footwear), "accessories", "emotes" or "all", or slot names such as "top" or "acc_hat". Leave it out for everything (only then are outfits offered). options.Title is a heading over the panel ("Barber"), up to 40 characters. options.FreezeCharacter (default true) holds the character still and turns the camera onto it; false leaves the player in control and the camera where it is. The player sees only items they own or that are free, and Save puts the look on their account exactly as Mantle's own avatar screen does. Esc, the pad's B or Close shut it, asking first about unsaved changes. Returns false, opening nothing, when there is no local character, or the editor or another Mantle screen is already open. An unknown category is an error. (client only)
+	function OpenEditor(self, options: {Categories: {string}?, Title: string?, FreezeCharacter: boolean?}?): boolean
 	--- Play one of the local player's equipped emotes, by its item id (an emote on their emote wheel). Returns false, and plays nothing, when itemId is not one of their equipped emotes, when they have no character, or when called again too soon. true means the request went to the server, which checks it again and can still refuse it (the player is moving, in the air, seated or dead). (client only)
 	function PlayEmote(self, itemId: string): boolean
 end
@@ -625,7 +635,7 @@ declare extern type EnvironmentService with
 	Contrast: number
 	--- How long one day lasts, in real minutes: 30.
 	DayLength: number
-	--- Brighten (above 0) or darken (below 0) the whole picture, in stops, from -4 to 4. Set it on the server.
+	--- Brighten (above 0) or darken (below 0) the whole picture, in stops, from -4 to 4: 0 is the game's own exposure and +1 doubles the brightness. While set (not 0) it replaces the place's own exposure bias. Set it on the server.
 	ExposureBias: number
 	--- The fog's colour as "#RRGGBB", or nil for the sky's own. Set it on the server.
 	FogColor: string?
@@ -683,6 +693,19 @@ declare extern type ExplosionsService with
 	function Create(self, position: Vector3, options: {Radius: number?, Damage: number?, InnerRadius: number?, Falloff: number?, DamageType: string?, Attacker: Player?, Impulse: number?, Ragdoll: boolean?, RagdollSeconds: number?, LineOfSight: boolean?, Effect: string?, Sound: boolean?}?): number
 end
 declare Explosions: ExplosionsService
+
+--- Outbound HTTP from server scripts (server only): call your own backend, a webhook, any public web service. Players' games never make these requests. Private and internal addresses are always refused.
+declare extern type HttpService with
+	--- Whether outbound HTTP works on this server: false when the server's operator turned it off, so a place can do without it quietly. (server only)
+	function IsAvailable(self): boolean
+	--- JSON text as a value: objects become tables with string keys, arrays become lists, null becomes nil. Raises an error when the text isn't valid JSON.
+	function JsonDecode(self, text: string): any
+	--- A value as JSON text. Accepts nil, booleans, finite numbers, strings, and tables (a list becomes an array, anything else an object), nested up to 32 deep. Raises an error for anything else. Luau has no JSON of its own; JS and Python have JSON and json.
+	function JsonEncode(self, value: any): string
+	--- Send an HTTP request and get a Signal that fires once with the result: call :Wait() on it straight away, or :Once(handler). options.url is required (http:// or https://, port 80, 443 or 1024 and up); method is GET (default), POST, PUT, PATCH or DELETE; headers is a table of strings; body is text (UTF-8) or bodyBase64 is binary (up to 2 MiB, not with GET); timeout is 1 to 60 seconds (default 30); followRedirects (default true) follows up to 5 redirects, each one re-checked; responseType is "text" (default) or "base64". The result is {ok, status?, headers?, body?, url?, error?, code?}: ok is true only for a 2xx answer, a 404 or 500 still has its status and body with code "http_status", and a request that failed after sending has ok = false and a code such as dns_failed, blocked_address, connect_failed, tls_failed, timeout, too_many_redirects, redirect_blocked or response_too_large. A request refused before sending raises an error that starts with its code (bad_url, blocked_address, blocked_port, bad_header, bad_request, body_too_large, too_many_requests, rate_limited, bandwidth_limited or disabled): catch it with pcall (Luau) or try (JS, Python). A server may run 16 requests at once with 128 more waiting, about 600 a minute, 16 MiB sent and 128 MiB received a minute. Mantle logs the host, port, status and sizes of each request, never its path, headers or bodies. Don't put long-lived secrets in a script: its source is not private yet. (server only)
+	function RequestAsync(self, options: {url: string, method: string?, headers: {[string]: string}?, body: string?, bodyBase64: string?, timeout: number?, followRedirects: boolean?, responseType: string?}): Signal<{ok: boolean, status: number?, headers: {[string]: string}?, body: string?, url: string?, error: string?, code: string?}>
+end
+declare Http: HttpService
 
 --- The local player's keys, mouse buttons and gamepad buttons, and their sticks, triggers and mouse wheel as axes (client only). Mantle's own controls (the menu, chat, voice, movement, the Backpack and Tool keys) can never be bound or read.
 declare extern type InputService with
@@ -850,6 +873,15 @@ declare extern type ScriptService with
 	Side: string
 end
 declare Script: ScriptService
+
+--- Read the API keys and webhook URLs you set for this place, so they never sit in your scripts. Server scripts on a hosted server only.
+declare extern type SecretsService with
+	--- The value you set for the secret called name (in the editor plugin's place settings), or nil when this place has none by that name or secrets are not available here (see Secrets:IsAvailable). Names are upper-case letters, digits and underscores, starting with a letter: DISCORD_WEBHOOK. The server loads them once, before any script starts, so a value is there from your script's first line; one you change in the plugin reaches servers that start after the change. Never send a value to a player (in a remote event, state, an attribute, chat or UI): anything a client gets, its player can read. Use it to call a service from the server, and keep keys you can rotate. When you test locally with -MantlePlace, values come from secrets.local.json beside the place file: {"DISCORD_WEBHOOK": "https://..."}. Keep that file out of version control. Example: local hook = Secrets:Get("DISCORD_WEBHOOK") if not hook then print("set DISCORD_WEBHOOK for this place") end (server only)
+	function Get(self, name: string): string?
+	--- Whether this server loaded the place's secrets, so Secrets:Get answers from them. False in standalone or listen play of a published place, on a community server, when the server could not reach Mantle, and in a place whose scriptApi is older than 1.47 (the editor records it from your scripts); Secrets:Get then reads nil for every name. True with no secrets set. Example: if not Secrets:IsAvailable() then print("no secrets here: posting to Discord is off") end (server only)
+	function IsAvailable(self): boolean
+end
+declare Secrets: SecretsService
 
 --- Facts about the server this session runs on (server only).
 declare extern type ServerService with
