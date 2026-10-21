@@ -156,13 +156,13 @@ namespace MantleEmoteCheckPrivate
 	 * Players' clients' pose at Time: the hidden UEFN driver plays Clip held at Time (the client's emote layer, the root left
 	 * out), and the body (Components[0]) copies it through Retargeter; its face (Components[1]) follows by leader pose.
 	 */
-	void PoseOnBody(FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, USkeletalMesh* Driver, UObject* Retargeter,
+	USkeletalMeshComponent* PoseOnBody(FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, USkeletalMesh* Driver, UObject* Retargeter,
 		const TSharedRef<const FMantleAnimClip>& Clip, const float Time)
 	{
 		USkeletalMeshComponent* BodyComponent = Components.IsValidIndex(0) ? Components[0] : nullptr;
 		if (!BodyComponent)
 		{
-			return;
+			return nullptr;
 		}
 		USkeletalMeshComponent* DriverComponent = NewObject<USkeletalMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
 		DriverComponent->SetVisibility(false);
@@ -210,6 +210,48 @@ namespace MantleEmoteCheckPrivate
 		{
 			World->SendAllEndOfFrameUpdates();
 		}
+		return DriverComponent;
+	}
+
+	/** The body's component-space pose at each of Times as players' clients pose it (PoseOnBody), in BodyMesh's bone order. */
+	TArray<TArray<FTransform>> BodyPosesAt(USkeletalMesh* BodyMesh, USkeletalMesh* Driver, UObject* Retargeter, const TSharedRef<const FMantleAnimClip>& Clip,
+		TConstArrayView<float> Times)
+	{
+		TArray<TArray<FTransform>> Out;
+		FPreviewScene Scene{ FPreviewScene::ConstructionValues() };
+		USkeletalMeshComponent* Body = NewObject<USkeletalMeshComponent>(GetTransientPackage(), NAME_None, RF_Transient);
+		Body->SetSkeletalMeshAsset(BodyMesh);
+		Scene.AddComponent(Body, FTransform::Identity);
+		for (const float Time : Times)
+		{
+			USkeletalMeshComponent* Posed = PoseOnBody(Scene, MakeArrayView(&Body, 1), Driver, Retargeter, Clip, Time);
+			Out.Add(TArray<FTransform>(Body->GetComponentSpaceTransforms()));
+			if (Posed)
+			{
+				Scene.RemoveComponent(Posed);
+				Posed->DestroyComponent();
+			}
+		}
+		Scene.RemoveComponent(Body);
+		Body->DestroyComponent();
+		return Out;
+	}
+
+	/** Measures, part means and a CSV of a FMantleBodyMatch. */
+	void SaveBody(const FMantleBodyMatch& Match, const FString& File)
+	{
+		TArray<FString> Rows = { TEXT("measure,mean") };
+		for (const TPair<FString, double>& Measure : Match.Measures)
+		{
+			Rows.Add(FString::Printf(TEXT("%s,%.2f"), *Measure.Key, Measure.Value));
+		}
+		for (const FMantleBodyPart& Part : Match.Parts)
+		{
+			Rows.Add(FString::Printf(TEXT("part %s,%.2f"), *Part.Name, Part.Mean));
+		}
+		Rows.Add(FString::Printf(TEXT("feet slide cm per planted frame,%.2f"), Match.FootSlideCm));
+		Rows.Add(FString::Printf(TEXT("feet height cm over source,%.2f"), Match.FootHeightCm));
+		FFileHelper::SaveStringArrayToFile(Rows, *File, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	}
 
 	/** The original clip on its own mesh (Components[0]) at Time, as the animation editor plays it. */
@@ -526,6 +568,161 @@ FMantleHandMatch FMantleEmoteCheck::CompareHands(TConstArrayView<TArray<FTransfo
 	return Out;
 }
 
+FMantleBodyMatch FMantleEmoteCheck::CompareBodies(TConstArrayView<TArray<FTransform>> SourcePoses, const FReferenceSkeleton& Source,
+	TConstArrayView<TArray<FTransform>> ConvertedPoses, const FReferenceSkeleton& Converted)
+{
+	FMantleBodyMatch Out;
+	const int32 Frames = FMath::Min(SourcePoses.Num(), ConvertedPoses.Num());
+	Out.Frames = Frames;
+	// "@chest": the clavicles' parent (spine_03 on the UE4 Mannequin, spine_05 on the others).
+	auto Bone = [](const FReferenceSkeleton& Skeleton, const FString& Name)
+	{
+		if (Name == TEXT("@chest"))
+		{
+			const int32 Clavicle = Skeleton.FindRawBoneIndex(FName(TEXT("clavicle_l")));
+			return Clavicle == INDEX_NONE ? INDEX_NONE : Skeleton.GetRawParentIndex(Clavicle);
+		}
+		return Skeleton.FindRawBoneIndex(FName(*Name));
+	};
+	enum class EKind : uint8 { Direction, Turn, Place };
+	struct FMeasure
+	{
+		FString Part;
+		FString Label;
+		EKind Kind;
+		int32 SourceBones[2];
+		int32 ConvertedBones[2];
+		double Sum = 0.0;
+	};
+	TArray<FMeasure> Measures;
+	auto Add = [&](const TCHAR* Part, const EKind Kind, const FString& From, const FString& To)
+	{
+		FMeasure Measure{ Part, Kind == EKind::Direction ? From + TEXT(">") + To : From + (Kind == EKind::Turn ? TEXT("~") : TEXT("@")), Kind,
+			{ Bone(Source, From), Kind == EKind::Direction ? Bone(Source, To) : 0 }, { Bone(Converted, From), Kind == EKind::Direction ? Bone(Converted, To) : 0 } };
+		if (Measure.SourceBones[0] != INDEX_NONE && Measure.SourceBones[1] != INDEX_NONE && Measure.ConvertedBones[0] != INDEX_NONE
+			&& Measure.ConvertedBones[1] != INDEX_NONE)
+		{
+			Measures.Add(Measure);
+		}
+	};
+	Add(TEXT("spine"), EKind::Direction, TEXT("pelvis"), TEXT("@chest"));
+	Add(TEXT("spine"), EKind::Direction, TEXT("@chest"), TEXT("neck_01"));
+	Add(TEXT("neck"), EKind::Direction, TEXT("neck_01"), TEXT("head"));
+	Add(TEXT("head turn"), EKind::Turn, TEXT("head"), FString());
+	for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
+	{
+		auto Name = [Side](const TCHAR* Stem) { return FString::Printf(TEXT("%s_%s"), Stem, Side); };
+		Add(TEXT("arms"), EKind::Direction, Name(TEXT("clavicle")), Name(TEXT("upperarm")));
+		Add(TEXT("arms"), EKind::Direction, Name(TEXT("upperarm")), Name(TEXT("lowerarm")));
+		Add(TEXT("arms"), EKind::Direction, Name(TEXT("lowerarm")), Name(TEXT("hand")));
+		Add(TEXT("hands"), EKind::Direction, Name(TEXT("hand")), Name(TEXT("middle_01")));
+		Add(TEXT("hands"), EKind::Direction, Name(TEXT("index_01")), Name(TEXT("pinky_01")));
+		Add(TEXT("legs"), EKind::Direction, Name(TEXT("thigh")), Name(TEXT("calf")));
+		Add(TEXT("legs"), EKind::Direction, Name(TEXT("calf")), Name(TEXT("foot")));
+		Add(TEXT("feet"), EKind::Direction, Name(TEXT("foot")), Name(TEXT("ball")));
+		Add(TEXT("hand places"), EKind::Place, Name(TEXT("hand")), FString());
+		Add(TEXT("foot places"), EKind::Place, Name(TEXT("foot")), FString());
+	}
+	Add(TEXT("head place"), EKind::Place, TEXT("head"), FString());
+
+	const int32 SourcePelvis = Bone(Source, TEXT("pelvis"));
+	const int32 ConvertedPelvis = Bone(Converted, TEXT("pelvis"));
+	double Scale = 1.0;
+	if (SourcePelvis != INDEX_NONE && ConvertedPelvis != INDEX_NONE)
+	{
+		const double SourceHeight = FAnimationRuntime::GetComponentSpaceTransformRefPose(Source, SourcePelvis).GetLocation().Z;
+		const double ConvertedHeight = FAnimationRuntime::GetComponentSpaceTransformRefPose(Converted, ConvertedPelvis).GetLocation().Z;
+		Scale = SourceHeight > 1.0 ? ConvertedHeight / SourceHeight : 1.0;
+	}
+	auto Turn = [](const TArray<FTransform>& Pose, const FReferenceSkeleton& Skeleton, const int32 Index)
+	{
+		return Pose[Index].GetRotation() * FAnimationRuntime::GetComponentSpaceTransformRefPose(Skeleton, Index).GetRotation().Inverse();
+	};
+	for (int32 Frame = 0; Frame < Frames; ++Frame)
+	{
+		const TArray<FTransform>& S = SourcePoses[Frame];
+		const TArray<FTransform>& C = ConvertedPoses[Frame];
+		for (FMeasure& Measure : Measures)
+		{
+			const int32* SB = Measure.SourceBones;
+			const int32* CB = Measure.ConvertedBones;
+			if (Measure.Kind == EKind::Direction)
+			{
+				const FVector A = (S[SB[1]].GetLocation() - S[SB[0]].GetLocation()).GetSafeNormal();
+				const FVector B = (C[CB[1]].GetLocation() - C[CB[0]].GetLocation()).GetSafeNormal();
+				Measure.Sum += FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(A | B, -1.0, 1.0)));
+			}
+			else if (Measure.Kind == EKind::Turn)
+			{
+				Measure.Sum += FMath::RadiansToDegrees(Turn(S, Source, SB[0]).AngularDistance(Turn(C, Converted, CB[0])));
+			}
+			else if (SourcePelvis != INDEX_NONE && ConvertedPelvis != INDEX_NONE)
+			{
+				Measure.Sum += FVector::Dist((S[SB[0]].GetLocation() - S[SourcePelvis].GetLocation()) * Scale, C[CB[0]].GetLocation() - C[ConvertedPelvis].GetLocation());
+			}
+		}
+	}
+	// Planted feet: the source's foot or ball moves under half a centimetre since the frame before.
+	double Slide = 0.0;
+	double Height = 0.0;
+	for (const TCHAR* Name : { TEXT("foot_l"), TEXT("foot_r"), TEXT("ball_l"), TEXT("ball_r") })
+	{
+		const int32 SB = Bone(Source, Name);
+		const int32 CB = Bone(Converted, Name);
+		if (SB == INDEX_NONE || CB == INDEX_NONE)
+		{
+			continue;
+		}
+		for (int32 Frame = 1; Frame < Frames; ++Frame)
+		{
+			if (FVector::Dist(SourcePoses[Frame][SB].GetLocation(), SourcePoses[Frame - 1][SB].GetLocation()) < 0.5)
+			{
+				++Out.PlantedFrames;
+				Slide += FVector::Dist(ConvertedPoses[Frame][CB].GetLocation(), ConvertedPoses[Frame - 1][CB].GetLocation());
+				Height += ConvertedPoses[Frame][CB].GetLocation().Z - SourcePoses[Frame][SB].GetLocation().Z * Scale;
+			}
+		}
+	}
+	Out.FootSlideCm = Out.PlantedFrames > 0 ? Slide / Out.PlantedFrames : 0.0;
+	Out.FootHeightCm = Out.PlantedFrames > 0 ? Height / Out.PlantedFrames : 0.0;
+
+	for (const FMeasure& Measure : Measures)
+	{
+		const double Mean = Measure.Sum / FMath::Max(1, Frames);
+		Out.Measures.Emplace(Measure.Label, Mean);
+		FMantleBodyPart* Part = Out.Parts.FindByPredicate([&Measure](const FMantleBodyPart& Each) { return Each.Name == Measure.Part; });
+		if (!Part)
+		{
+			Part = &Out.Parts.AddDefaulted_GetRef();
+			Part->Name = Measure.Part;
+		}
+		Part->Mean += Mean;
+		++Part->Measures;
+		if (Mean > Part->Worst)
+		{
+			Part->Worst = Mean;
+			Part->WorstMeasure = Measure.Label;
+		}
+	}
+	for (FMantleBodyPart& Part : Out.Parts)
+	{
+		Part.Mean /= FMath::Max(1, Part.Measures);
+	}
+	return Out;
+}
+
+FString FMantleBodyMatch::Describe() const
+{
+	TArray<FString> Out;
+	for (const FMantleBodyPart& Part : Parts)
+	{
+		const bool bPlace = Part.Name.Contains(TEXT("place"));
+		Out.Add(FString::Printf(TEXT("%s %.1f %s (worst %s %.1f)"), *Part.Name, Part.Mean, bPlace ? TEXT("cm") : TEXT("deg"), *Part.WorstMeasure, Part.Worst));
+	}
+	return FString::Printf(TEXT("%s; planted feet slide %.2f cm a frame and sit %+.1f cm against the source's over %d foot-frames (%d frames)"),
+		*FString::Join(Out, TEXT(", ")), FootSlideCm, FootHeightCm, PlantedFrames, Frames);
+}
+
 TArray<FColor> FMantleEmoteCheck::Tile(const TArray<TArray<FColor>>& Tiles, const int32 TileSize, const int32 Columns, int32& OutWidth, int32& OutHeight)
 {
 	const int32 Across = FMath::Max(1, FMath::Min(Columns, Tiles.Num()));
@@ -626,19 +823,28 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 	Say(FString::Printf(TEXT("Motion: the root travels %.1f cm and turns %.1f degrees (players' clients hold the root still); the pelvis drifts %.1f cm across the floor"),
 		Motion.RootTravelCm, Motion.RootTurnDegrees, Motion.PelvisDriftCm));
 
-	// The hands against the source's, frame by frame (mantle #840: fingers that keep the rest hands' difference curl less).
-	if (USkeletalMesh* HandsSource = FMantleEmoteRetarget::ChooseSourceMesh(Sequence, nullptr))
+	// The hands and the whole body against the source's, frame by frame (mantle #840: fingers that keep the rest hands'
+	// difference curl less). First step: the clip players' clients get, on the UEFN mannequin.
+	USkeletalMesh* const HandsSource = FMantleEmoteRetarget::ChooseSourceMesh(Sequence, nullptr);
+	TArray<TArray<FTransform>> SourcePoses;
+	TArray<float> FrameTimes;
+	for (int32 Frame = 0; Frame < Clip.FrameCount; ++Frame)
+	{
+		FrameTimes.Add(Frame / Clip.FrameRate);
+	}
+	if (HandsSource)
 	{
 		const FSequenceSampler Sampler(Sequence, HandsSource->GetRefSkeleton());
 		const FReferenceSkeleton& DriverBones = Driver->GetRefSkeleton();
-		TArray<TArray<FTransform>> SourcePoses;
 		TArray<TArray<FTransform>> ConvertedPoses;
-		for (int32 Frame = 0; Frame < Clip.FrameCount; ++Frame)
+		for (const float Time : FrameTimes)
 		{
-			const float Time = Frame / Clip.FrameRate;
 			SourcePoses.Add(Sampler.ComponentPoseAt(FMath::Min(static_cast<double>(Time), static_cast<double>(Sequence->GetPlayLength()))));
 			ConvertedPoses.Add(ClipComponentPose(Clip, DriverBones, Time));
 		}
+		const FMantleBodyMatch BodyMatch = CompareBodies(SourcePoses, HandsSource->GetRefSkeleton(), ConvertedPoses, DriverBones);
+		Say(FString::Printf(TEXT("Body on the UEFN mannequin: %s"), *BodyMatch.Describe()));
+		SaveBody(BodyMatch, FPaths::Combine(Directory, Label + TEXT("_body_uefn.csv")));
 		const FMantleHandMatch Hands = CompareHands(SourcePoses, HandsSource->GetRefSkeleton(), ConvertedPoses, DriverBones);
 		Say(FString::Printf(TEXT("Hands: finger bend %+.1f degrees on average against the source (negative: straighter), %.1f degrees mean error over %d joints and %d frames, worst joint %s %.1f degrees; wrists %.1f cm from the source's place relative to the chest, %+.1f cm farther from the head (negative: closer)"),
 			Hands.BendBiasDegrees, Hands.BendErrorDegrees, Hands.Joints, Hands.Frames, *Hands.BendWorstJoint.ToString(), Hands.BendWorstDegrees,
@@ -684,7 +890,38 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 	Subject.Frame = StandingFrame(BodyMesh);
 	Subject.bFloor = true;
 	const TArray<float> Times = Moments(Clip.GetDuration(), SheetMoments);
-	UObject* const Retargeter = Inputs.Retargeter;
+	// TRIAL (#108 follow-up E6, removed before merge): MANTLE_EMOTE_BODY_MATCH=hands,legs,spine,arms poses the body through a
+	// copy of the client's retargeter with those bones rest-matched to the UEFN mannequin; MANTLE_EMOTE_BODY_FINGERS=OneToOne.
+	UObject* BodyMatched = nullptr;
+	const FString BodySets = FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_BODY_MATCH"));
+	if (!BodySets.IsEmpty())
+	{
+		FString MatchNote;
+		FString MatchError;
+		BodyMatched = FMantleEmoteRetarget::MakeRestHandsCopy(Inputs.Retargeter, Driver->GetRefSkeleton(), BodyMesh->GetRefSkeleton(), MatchNote, MatchError,
+			FMantleEmoteRetarget::BodyBones(BodySets), FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_BODY_FINGERS")));
+		Say(FString::Printf(TEXT("TRIAL body retarget %s: %s"), *BodySets, BodyMatched ? *MatchNote : *MatchError));
+	}
+	ON_SCOPE_EXIT
+	{
+		FMantleEmoteRetarget::ReleaseRestHandsCopy(BodyMatched);
+	};
+	UObject* const Retargeter = BodyMatched ? BodyMatched : Inputs.Retargeter;
+
+	// Second step: what players see, the body posed from the UEFN mannequin through the client's retargeter, every frame.
+	if (HandsSource && SourcePoses.Num() > 0)
+	{
+		const TArray<TArray<FTransform>> Shown = BodyPosesAt(BodyMesh, Driver, Retargeter, Played, FrameTimes);
+		const FReferenceSkeleton& ShownBones = BodyMesh->GetRefSkeleton();
+		const FMantleHandMatch Hands = CompareHands(SourcePoses, HandsSource->GetRefSkeleton(), Shown, ShownBones);
+		Say(FString::Printf(TEXT("Hands as shown on %s (both retargets, every frame): finger bend %+.1f degrees on average against the source, %.1f degrees mean error over %d joints, worst joint %s %.1f degrees; wrists %.1f cm from the source's place relative to the chest, %+.1f cm farther from the head"),
+			*BodyMesh->GetName(), Hands.BendBiasDegrees, Hands.BendErrorDegrees, Hands.Joints, *Hands.BendWorstJoint.ToString(), Hands.BendWorstDegrees,
+			Hands.WristErrorCm, Hands.WristCloserCm));
+		const FMantleBodyMatch BodyMatch = CompareBodies(SourcePoses, HandsSource->GetRefSkeleton(), Shown, ShownBones);
+		Say(FString::Printf(TEXT("Body as shown on %s: %s"), *BodyMesh->GetName(), *BodyMatch.Describe()));
+		SaveBody(BodyMatch, FPaths::Combine(Directory, Label + TEXT("_body_shown.csv")));
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	}
 	const FString SheetFile = FPaths::Combine(Directory, Label + TEXT("_sheet.png"));
 	FString Problems;
 	const bool bWritten = DrawSheet(Subject, Times, [Driver, Retargeter, Played](FMantleThumbnailSubject& Shot, const float Time)
@@ -715,77 +952,63 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 		Say(FString::Printf(TEXT("Source: %s, the original clip on %s (root motion and all), same moments%s"), bSourceWritten ? *SourceFile : TEXT("NOT WRITTEN"),
 			*SourceMesh->GetPathName(), *SourceProblems));
 
-		// Hand close-ups, the source's and the converted side by side: right hand, then left, at three moments.
-		const TArray<float> HandTimes = { Clip.GetDuration() * 0.25f, Clip.GetDuration() * 0.5f, Clip.GetDuration() * 0.75f };
-		TArray<TArray<FColor>> Tiles;
-		FString HandProblems;
-		// The posed meshes' bones at each close-up, in capture order: what players see, both retargets in.
-		TArray<TArray<FTransform>> ShownSource;
-		TArray<TArray<FTransform>> ShownConverted;
-		auto Keep = [](TConstArrayView<USkeletalMeshComponent*> Components, TArray<TArray<FTransform>>& Into)
+		// Close-ups, the source's and the converted side by side at three moments: hands, feet and head.
+		const TArray<float> CloseTimes = { Clip.GetDuration() * 0.25f, Clip.GetDuration() * 0.5f, Clip.GetDuration() * 0.75f };
+		const int32 CloseSize = FMath::Max(256, TileSize * 3 / 4);
+		auto CloseUps = [&](TConstArrayView<const TCHAR*> Bones, const TCHAR* Suffix, const TCHAR* What)
 		{
-			Into.Add(Components.IsValidIndex(0) && Components[0] ? TArray<FTransform>(Components[0]->GetComponentSpaceTransforms()) : TArray<FTransform>());
-		};
-		const int32 HandSize = FMath::Max(256, TileSize * 3 / 4);
-		for (const float Time : HandTimes)
-		{
-			for (const TCHAR* Hand : { TEXT("hand_r"), TEXT("hand_l") })
+			TArray<TArray<FColor>> Tiles;
+			FString CloseProblems;
+			for (const float Time : CloseTimes)
 			{
-				for (const bool bConverted : { false, true })
+				for (const TCHAR* Each : Bones)
 				{
-					FMantleThumbnailSubject Shot = bConverted ? Subject : Source;
-					const FName HandBone(Hand);
-					if (bConverted)
+					for (const bool bConverted : { false, true })
 					{
-						Shot.Pose = [Driver, Retargeter, Played, Time, HandBone, &Keep, &ShownConverted](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
+						FMantleThumbnailSubject Shot = bConverted ? Subject : Source;
+						const FName Focus(Each);
+						if (bConverted)
 						{
-							PoseOnBody(Scene, Components, Driver, Retargeter, Played, Time);
-							Frame = HandFrame(Components, HandBone);
-							Keep(Components, ShownConverted);
-						};
-					}
-					else
-					{
-						Shot.Pose = [Sequence, Time, HandBone, &Keep, &ShownSource](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
+							Shot.Pose = [Driver, Retargeter, Played, Time, Focus](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
+							{
+								PoseOnBody(Scene, Components, Driver, Retargeter, Played, Time);
+								Frame = HandFrame(Components, Focus);
+							};
+						}
+						else
 						{
-							PoseSource(Scene, Components, Sequence, Time);
-							Frame = HandFrame(Components, HandBone);
-							Keep(Components, ShownSource);
-						};
+							Shot.Pose = [Sequence, Time, Focus](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox& Frame)
+							{
+								PoseSource(Scene, Components, Sequence, Time);
+								Frame = HandFrame(Components, Focus);
+							};
+						}
+						TArray<FColor> Pixels;
+						FString Error;
+						if (!FMantleCosmeticThumbnail::Capture(Shot, CloseSize, Pixels, Error))
+						{
+							CloseProblems += FString::Printf(TEXT("; %s at %.2f s could not be drawn (%s)"), Each, Time, *Error);
+						}
+						Tiles.Add(MoveTemp(Pixels));
+						CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 					}
-					TArray<FColor> Pixels;
-					FString Error;
-					if (!FMantleCosmeticThumbnail::Capture(Shot, HandSize, Pixels, Error))
-					{
-						HandProblems += FString::Printf(TEXT("; %s at %.2f s could not be drawn (%s)"), Hand, Time, *Error);
-					}
-					Tiles.Add(MoveTemp(Pixels));
-					CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 				}
 			}
-		}
-		int32 Width = 0;
-		int32 Height = 0;
-		const TArray<FColor> HandSheet = Tile(Tiles, HandSize, 4, Width, Height);
-		const FString HandsFile = FPaths::Combine(Directory, Label + TEXT("_hands.png"));
-		const bool bHandsWritten = FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Width, Height, HandSheet), *HandsFile);
-		Say(FString::Printf(TEXT("Hand close-ups: %s, each row one moment (%s), columns: source right, converted right, source left, converted left%s"),
-			bHandsWritten ? *HandsFile : TEXT("NOT WRITTEN"), *DescribeTimes(HandTimes), *HandProblems));
-		ShownSource.SetNum(FMath::Min(ShownSource.Num(), ShownConverted.Num()));
-		ShownConverted.SetNum(ShownSource.Num());
-		bool bComplete = ShownSource.Num() > 0;
-		for (int32 Index = 0; Index < ShownSource.Num(); ++Index)
-		{
-			bComplete = bComplete && ShownSource[Index].Num() == SourceMesh->GetRefSkeleton().GetRawBoneNum()
-				&& ShownConverted[Index].Num() == BodyMesh->GetRefSkeleton().GetRawBoneNum();
-		}
-		if (bComplete)
-		{
-			const FMantleHandMatch Shown = CompareHands(ShownSource, SourceMesh->GetRefSkeleton(), ShownConverted, BodyMesh->GetRefSkeleton());
-			Say(FString::Printf(TEXT("Hands as shown (the close-ups' bodies, the client's retarget onto %s included): finger bend %+.1f degrees on average against the source, %.1f degrees mean error over %d joints, worst joint %s %.1f degrees; wrists %.1f cm from the source's place relative to the chest, %+.1f cm farther from the head"),
-				*BodyMesh->GetName(), Shown.BendBiasDegrees, Shown.BendErrorDegrees, Shown.Joints, *Shown.BendWorstJoint.ToString(), Shown.BendWorstDegrees,
-				Shown.WristErrorCm, Shown.WristCloserCm));
-		}
+			int32 Width = 0;
+			int32 Height = 0;
+			const TArray<FColor> Sheet = Tile(Tiles, CloseSize, Bones.Num() * 2, Width, Height);
+			const FString File = FPaths::Combine(Directory, Label + Suffix);
+			const bool bCloseWritten = FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Width, Height, Sheet), *File);
+			Say(FString::Printf(TEXT("%s close-ups: %s, each row one moment (%s), columns: %s%s"), What, bCloseWritten ? *File : TEXT("NOT WRITTEN"),
+				*DescribeTimes(CloseTimes), Bones.Num() > 1 ? TEXT("source right, converted right, source left, converted left") : TEXT("source, converted"),
+				*CloseProblems));
+		};
+		const TCHAR* const HandFoci[] = { TEXT("hand_r"), TEXT("hand_l") };
+		const TCHAR* const FootFoci[] = { TEXT("foot_r"), TEXT("foot_l") };
+		const TCHAR* const HeadFoci[] = { TEXT("head") };
+		CloseUps(HandFoci, TEXT("_hands.png"), TEXT("Hand"));
+		CloseUps(FootFoci, TEXT("_feet.png"), TEXT("Foot"));
+		CloseUps(HeadFoci, TEXT("_head.png"), TEXT("Head"));
 	}
 	return true;
 }
