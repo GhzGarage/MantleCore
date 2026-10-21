@@ -27,8 +27,24 @@ namespace MantleHairPieceFitPrivate
 	struct FPieceFitScore
 	{
 		double Outside = 0.0;
-		double Gap25 = 0.0;
+		double DeepInside = 0.0;
+		double Seated = 0.0;
+		double Coverage = 0.0;
+		/** Seated times coverage, rounded to 3 decimals so near-equal candidates fall to the tie-break. */
+		double Rank = 0.0;
+		double RootMedian = 0.0;
 	};
+
+	/** True when A is the better candidate (see FMantleHairPieceFit's step 3). */
+	bool PieceFitBetter(const FPieceFitScore& A, const FPieceFitScore& B)
+	{
+		const bool bMetA = A.DeepInside <= FMantleHairPieceFit::MaxDeepInsideFraction;
+		const bool bMetB = B.DeepInside <= FMantleHairPieceFit::MaxDeepInsideFraction;
+		if (bMetA != bMetB) return bMetA;
+		if (!bMetA) return A.DeepInside < B.DeepInside;
+		if (A.Rank != B.Rank) return A.Rank > B.Rank;
+		return A.RootMedian < B.RootMedian;
+	}
 }
 
 // ---------------------------------------------------------------- head samples
@@ -102,6 +118,22 @@ bool FMantleHairHeadSamples::Build(TConstArrayView<FVector3f> Positions, TConstA
 		}
 	}
 
+	// The scalp, cut into cubes: hair roots belong here (see ScalpCell).
+	ScalpCells.Init(INDEX_NONE, Points.Num());
+	TMap<FIntVector, int32> Cells;
+	for (int32 I = 0; I < Points.Num(); ++I)
+	{
+		const FVector& P = Points[I];
+		const FVector& N = Normals[I];
+		const double Below = Top - P.Z;
+		const bool bScalp = (Below < ScalpTopCm || (N.Y < -0.3 && Below < ScalpBackCm)) && !(N.Y > 0.3 && Below > FaceStartCm);
+		if (!bScalp) continue;
+		const FIntVector Key(FMath::FloorToInt(P.X / ScalpCellCm), FMath::FloorToInt(P.Y / ScalpCellCm), FMath::FloorToInt(P.Z / ScalpCellCm));
+		const int32* Found = Cells.Find(Key);
+		ScalpCells[I] = Found ? *Found : Cells.Add(Key, Cells.Num());
+	}
+	ScalpCellCount = Cells.Num();
+
 	Order.SetNumUninitialized(Points.Num());
 	for (int32 I = 0; I < Order.Num(); ++I) Order[I] = I;
 	BuildRange(0, Order.Num(), 0);
@@ -152,31 +184,36 @@ void FMantleHairHeadSamples::Nearest(const FVector& P, int32& OutId, double& Out
 FMantleHairPieceFit::FSearch FMantleHairPieceFit::FSearch::Default()
 {
 	FSearch Out;
-	// numpy.arange(0.80, 1.45, 0.025), arange(-6, 6.1, 1), arange(-12, 10.1, 1).
-	for (int32 I = 0; I < 26; ++I) Out.Scales.Add(0.80 + 0.025 * I);
-	for (int32 I = -6; I <= 6; ++I) Out.OffsetsY.Add(I);
-	for (int32 I = -12; I <= 10; ++I) Out.TopOffsets.Add(I);
+	// Coarse: scale 0.8 to 3.0 by 0.1, Y -10 to 10 cm by 2, top -16 to 12 cm by 2; fine: a quarter of each step.
+	for (int32 I = 0; I <= 22; ++I) Out.Scales.Add(0.8 + 0.1 * I);
+	for (int32 I = -5; I <= 5; ++I) Out.OffsetsY.Add(2.0 * I);
+	for (int32 I = -8; I <= 6; ++I) Out.TopOffsets.Add(2.0 * I);
+	Out.FineScaleStep = 0.025;
+	Out.FineOffsetStep = 0.5;
 	return Out;
 }
 
 FString FMantleHairPieceFit::FResult::Describe() const
 {
-	return FString::Printf(TEXT("Hair fitted to the head: sized to %.0f%% of its imported size, moved %.1f cm %s and %.1f cm %s; %.0f%% of the hair sits outside the skin"),
+	return FString::Printf(TEXT("Hair fitted to the head: sized to %.0f%% of its imported size, moved %.1f cm %s and %.1f cm %s; %.0f%% of the cards have their roots on the scalp, covering %.0f%% of it"),
 		TotalScale() * 100.0, FMath::Abs(OffsetY), OffsetY >= 0.0 ? TEXT("forward") : TEXT("back"),
-		FMath::Abs(OffsetZ), OffsetZ >= 0.0 ? TEXT("up") : TEXT("down"), OutsideFraction * 100.0);
+		FMath::Abs(OffsetZ), OffsetZ >= 0.0 ? TEXT("up") : TEXT("down"), SeatedFraction * 100.0, ScalpCoverage * 100.0);
 }
 
-bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayView<FVector3f> Points, FResult& Out, FString& Error)
+bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayView<FVector3f> Points, TConstArrayView<FVector3f> CardEnds, FResult& Out, FString& Error)
 {
-	return Fit(Head, Points, FSearch::Default(), Out, Error);
+	return Fit(Head, Points, CardEnds, FSearch::Default(), Out, Error);
 }
 
-bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayView<FVector3f> Points, const FSearch& Search, FResult& Out, FString& Error)
+bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayView<FVector3f> Points, TConstArrayView<FVector3f> CardEnds,
+	const FSearch& Search, FResult& Out, FString& Error)
 {
 	using namespace MantleHairPieceFitPrivate;
 	Out = FResult();
 	if (!Head.IsValid()) { Error = TEXT("there is no head to fit the hair to"); return false; }
+	if (Head.NumScalpCells() == 0) { Error = TEXT("the head has no scalp to seat the hair on"); return false; }
 	if (Points.IsEmpty()) { Error = TEXT("the hair has no vertices to fit"); return false; }
+	if (CardEnds.Num() < 2 || CardEnds.Num() % 2 != 0) { Error = TEXT("the hair has no cards to seat on the head"); return false; }
 	if (Search.Scales.IsEmpty() || Search.OffsetsY.IsEmpty() || Search.TopOffsets.IsEmpty()) { Error = TEXT("the hair fit has no candidates to try"); return false; }
 
 	double MinX = TNumericLimits<double>::Max(), MaxX = -TNumericLimits<double>::Max(), MaxZ = -TNumericLimits<double>::Max();
@@ -191,83 +228,118 @@ bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayVie
 	const double Unit = ReferenceWidthCm / Width;
 	const double CardsTop = MaxZ * Unit;
 
-	// An even stride over the piece scores each candidate, so the result is repeatable.
-	const int32 NumPoints = Points.Num();
-	const int32 Scored = FMath::Min(NumPoints, MaxFitPoints);
-	TArray<FVector> Sample;
-	Sample.SetNumUninitialized(Scored);
-	for (int32 I = 0; I < Scored; ++I)
+	// An even stride over the piece and its cards scores each candidate, so the result is repeatable.
+	const auto Stride = [Unit](TConstArrayView<FVector3f> From, int32 Count, int32 Group, TArray<FVector>& To)
 	{
-		const int32 At = static_cast<int32>(static_cast<int64>(I) * NumPoints / Scored);
-		const FVector3f& P = Points[At];
-		Sample[I] = FVector(P.X, P.Y, P.Z) * Unit;
-	}
-
-	const int32 NumScales = Search.Scales.Num(), NumY = Search.OffsetsY.Num(), NumTop = Search.TopOffsets.Num();
+		const int32 Groups = From.Num() / Group;
+		const int32 Take = FMath::Min(Groups, Count);
+		To.SetNumUninitialized(Take * Group);
+		for (int32 I = 0; I < Take; ++I)
+		{
+			const int32 At = static_cast<int32>(static_cast<int64>(I) * Groups / Take);
+			for (int32 G = 0; G < Group; ++G)
+			{
+				const FVector3f& P = From[At * Group + G];
+				To[I * Group + G] = FVector(P.X, P.Y, P.Z) * Unit;
+			}
+		}
+	};
+	TArray<FVector> Sample, Ends;
+	Stride(Points, MaxFitPoints, 1, Sample);
+	Stride(CardEnds, MaxFitCards, 2, Ends);
+	const int32 Scored = Sample.Num();
+	const int32 Cards = Ends.Num() / 2;
 	const double HeadTop = Head.TopCm();
 
 	const auto Evaluate = [&](double Scale, double OffsetY, double OffsetZ)
 	{
 		FPieceFitScore Score;
-		TArray<double> Gaps;
-		Gaps.SetNumUninitialized(Scored);
-		int32 Outside = 0;
+		const FVector Offset(0.0, OffsetY, OffsetZ);
+		int32 Outside = 0, Deep = 0;
 		for (int32 I = 0; I < Scored; ++I)
 		{
-			const FVector Q = Sample[I] * Scale + FVector(0.0, OffsetY, OffsetZ);
+			const FVector Q = Sample[I] * Scale + Offset;
 			int32 Id = INDEX_NONE;
 			double D2 = 0.0;
 			Head.Nearest(Q, Id, D2);
-			Gaps[I] = FMath::Sqrt(D2);
 			if (((Q - Head.Point(Id)) | Head.Normal(Id)) > 0.0) ++Outside;
+			else if (D2 > DeepInsideCm * DeepInsideCm && Q.Z > HeadTop - HeadDepthCm) ++Deep;
 		}
-		Gaps.Sort();
+		// Each card's root is its end nearer the head; a seated root marks its scalp cell covered.
+		TBitArray<> Covered(false, Head.NumScalpCells());
+		TArray<double> RootDistances;
+		RootDistances.SetNumUninitialized(Cards);
+		int32 Seated = 0, CellsCovered = 0;
+		for (int32 C = 0; C < Cards; ++C)
+		{
+			int32 IdA = INDEX_NONE, IdB = INDEX_NONE;
+			double DA = 0.0, DB = 0.0;
+			Head.Nearest(Ends[2 * C] * Scale + Offset, IdA, DA);
+			Head.Nearest(Ends[2 * C + 1] * Scale + Offset, IdB, DB);
+			const bool bA = DA <= DB;
+			const double Distance = FMath::Sqrt(bA ? DA : DB);
+			RootDistances[C] = Distance;
+			const int32 Cell = Head.ScalpCell(bA ? IdA : IdB);
+			if (Distance > SeatCm || Cell == INDEX_NONE) continue;
+			++Seated;
+			if (!Covered[Cell]) { Covered[Cell] = true; ++CellsCovered; }
+		}
+		RootDistances.Sort();
 		Score.Outside = static_cast<double>(Outside) / Scored;
-		Score.Gap25 = PieceFitPercentile(Gaps, 0.25);
+		Score.DeepInside = static_cast<double>(Deep) / Scored;
+		Score.Seated = static_cast<double>(Seated) / Cards;
+		Score.Coverage = static_cast<double>(CellsCovered) / Head.NumScalpCells();
+		Score.Rank = PieceFitRound(Score.Seated * Score.Coverage, 1000.0);
+		Score.RootMedian = PieceFitPercentile(RootDistances, 0.5);
 		return Score;
 	};
 	const auto OffsetZFor = [&](double Scale, double TopOffset) { return HeadTop - Scale * CardsTop + TopOffset; };
 
-	const int32 Total = NumScales * NumY * NumTop;
-	TArray<FPieceFitScore> Scores;
-	Scores.SetNum(Total);
-	ParallelFor(Total, [&](int32 Index)
+	struct FCandidate { double Scale; double OffsetY; double TopOffset; };
+	// Scores every candidate in parallel; the first best in list order wins ties, so the result does not depend on the threads.
+	const auto Best = [&](const TArray<FCandidate>& Candidates, FPieceFitScore& OutScore)
 	{
-		const int32 T = Index % NumTop;
-		const int32 Y = (Index / NumTop) % NumY;
-		const int32 S = Index / (NumTop * NumY);
-		const double Scale = Search.Scales[S];
-		Scores[Index] = Evaluate(Scale, Search.OffsetsY[Y], OffsetZFor(Scale, Search.TopOffsets[T]));
-	});
+		TArray<FPieceFitScore> Scores;
+		Scores.SetNum(Candidates.Num());
+		ParallelFor(Candidates.Num(), [&](int32 Index)
+		{
+			const FCandidate& C = Candidates[Index];
+			Scores[Index] = Evaluate(C.Scale, C.OffsetY, OffsetZFor(C.Scale, C.TopOffset));
+		});
+		int32 Winner = 0;
+		for (int32 Index = 1; Index < Scores.Num(); ++Index) if (PieceFitBetter(Scores[Index], Scores[Winner])) Winner = Index;
+		Out.CandidatesScored += Candidates.Num();
+		OutScore = Scores[Winner];
+		return Candidates[Winner];
+	};
 
-	// Candidates outside the skin by at least the bar rank by their 25th percentile gap; the rest by their outside share. Index order is
-	// scale, then Y, then top offset, all ascending, so a strict less-than breaks ties toward the smallest scale, then Y, then Z.
-	int32 Best = 0;
-	for (int32 Index = 1; Index < Total; ++Index)
+	TArray<FCandidate> Grid;
+	for (const double S : Search.Scales) for (const double Y : Search.OffsetsY) for (const double T : Search.TopOffsets) Grid.Add({S, Y, T});
+	FPieceFitScore Score;
+	FCandidate Chosen = Best(Grid, Score);
+	if (Search.FineScaleStep > 0.0 && Search.FineOffsetStep > 0.0)
 	{
-		const FPieceFitScore& A = Scores[Index];
-		const FPieceFitScore& B = Scores[Best];
-		const bool bMetA = A.Outside >= MinOutsideFraction;
-		const bool bMetB = B.Outside >= MinOutsideFraction;
-		bool bBetter;
-		if (bMetA != bMetB) bBetter = bMetA;
-		else if (bMetA) bBetter = A.Gap25 < B.Gap25;
-		else bBetter = A.Outside > B.Outside;
-		if (bBetter) Best = Index;
+		// Four fine steps either way of the best coarse candidate (one coarse step of the default grid).
+		Grid.Reset();
+		for (int32 S = -4; S <= 4; ++S) for (int32 Y = -4; Y <= 4; ++Y) for (int32 T = -4; T <= 4; ++T)
+		{
+			const double Scale = Chosen.Scale + S * Search.FineScaleStep;
+			if (Scale > 0.0) Grid.Add({Scale, Chosen.OffsetY + Y * Search.FineOffsetStep, Chosen.TopOffset + T * Search.FineOffsetStep});
+		}
+		Chosen = Best(Grid, Score);
 	}
 
-	const int32 BestTop = Best % NumTop;
-	const int32 BestY = (Best / NumTop) % NumY;
-	const int32 BestScale = Best / (NumTop * NumY);
-	const double Scale = Search.Scales[BestScale];
 	Out.UnitScale = Unit;
-	Out.Scale = PieceFitRound(Scale, 10000.0);
-	Out.OffsetY = Search.OffsetsY[BestY];
-	Out.OffsetZ = PieceFitRound(OffsetZFor(Scale, Search.TopOffsets[BestTop]), 100.0);
-	Out.TopOffset = Search.TopOffsets[BestTop];
-	Out.OutsideFraction = Scores[Best].Outside;
-	Out.bMeetsOutsideBar = Scores[Best].Outside >= MinOutsideFraction;
-	Out.CandidatesScored = Total;
+	Out.Scale = PieceFitRound(Chosen.Scale, 10000.0);
+	Out.OffsetY = Chosen.OffsetY;
+	Out.OffsetZ = PieceFitRound(OffsetZFor(Chosen.Scale, Chosen.TopOffset), 100.0);
+	Out.TopOffset = Chosen.TopOffset;
+	Out.OutsideFraction = Score.Outside;
+	Out.DeepInsideFraction = Score.DeepInside;
+	Out.SeatedFraction = Score.Seated;
+	Out.ScalpCoverage = Score.Coverage;
+	Out.RootMedianCm = Score.RootMedian;
+	Out.bKeepsOutOfHead = Score.DeepInside <= MaxDeepInsideFraction;
 	return true;
 }
 

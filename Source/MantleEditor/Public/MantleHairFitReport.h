@@ -34,8 +34,8 @@ struct MANTLEEDITOR_API FMantleHairFitReport
 
 	struct FInput
 	{
-		/** The whole-piece fit found a size and position that keeps the hair outside the head. */
-		bool bMeetsOutsideBar = true;
+		/** The whole-piece fit found a size and position that keeps the hair out of the head (FMantleHairPieceFit::MaxDeepInsideFraction). */
+		bool bKeepsOutOfHead = true;
 		/** The scalp fit asked the creator to check (it had to move a lot of hair a long way). */
 		bool bScalpCheckFit = false;
 		/** Cards only (no cap): the share of card roots within 5 mm of the skin after the fit, percent; negative = not measured. */

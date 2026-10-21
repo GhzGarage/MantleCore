@@ -15,6 +15,8 @@ struct MANTLEEDITOR_API FMantleHairCardsFit
 {
 	/** A cap's median distance to the skin, after the piece fit, must be at most this to count as a cap, cm. */
 	static constexpr double CapMaxMedianDistanceCm = 3.0;
+	/** ... and, after the piece fit, span at least this share of the scalp's width (X) and depth (Y). */
+	static constexpr float CapMinScalpSpan = 0.5f;
 
 	struct FInput
 	{
@@ -45,4 +47,7 @@ struct MANTLEEDITOR_API FMantleHairCardsFit
 
 	/** The median distance, cm, of the vertices the triangles use from the head's skin; the cap guard's measure. */
 	static double MedianDistanceToSkin(const FMantleScalpHeadSurface& Head, TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Triangles);
+
+	/** True when the triangles' bounds span at least CapMinScalpSpan of the scalp's (the head within ScalpTopCm of its top) width and depth: the cap's shape guard. */
+	static bool CoversScalp(TConstArrayView<FVector3f> HeadPositions, TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Triangles);
 };

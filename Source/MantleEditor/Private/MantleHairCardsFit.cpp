@@ -17,6 +17,18 @@ double FMantleHairCardsFit::MedianDistanceToSkin(const FMantleScalpHeadSurface& 
 	return Distances[Distances.Num() / 2];
 }
 
+bool FMantleHairCardsFit::CoversScalp(TConstArrayView<FVector3f> HeadPositions, TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Triangles)
+{
+	float Top = -TNumericLimits<float>::Max();
+	for (const FVector3f& P : HeadPositions) Top = FMath::Max(Top, P.Z);
+	FBox3f Scalp(ForceInit), Cap(ForceInit);
+	for (const FVector3f& P : HeadPositions) if (P.Z > Top - FMantleHairHeadSamples::ScalpTopCm) Scalp += P;
+	for (const uint32 V : Triangles) if (Positions.IsValidIndex(static_cast<int32>(V))) Cap += Positions[V];
+	if (!Scalp.IsValid || !Cap.IsValid) return false;
+	const FVector3f ScalpSize = Scalp.GetSize(), CapSize = Cap.GetSize();
+	return CapSize.X >= CapMinScalpSpan * ScalpSize.X && CapSize.Y >= CapMinScalpSpan * ScalpSize.Y;
+}
+
 FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 {
 	FResult Out;
@@ -60,17 +72,19 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 		return Out;
 	}
 
+	// The piece is placed where its card roots meet the scalp, so it needs each card's two ends.
+	const TArray<FVector3f> CardEnds = FMantleScalpFit::FindCardEnds(Input.HairPositions, HairTriangles);
 	FMantleHairPieceFit::FResult Piece;
-	if (!FMantleHairPieceFit::Fit(Samples, SizingPoints, Piece, Error))
+	if (!FMantleHairPieceFit::Fit(Samples, SizingPoints, CardEnds, Piece, Error))
 	{
 		Out.Warnings.Add(FString::Printf(TEXT("the hair could not be fitted to the head (%s), so it uploads as it is."), *Error));
 		return Out;
 	}
 	FMantleHairPieceFit::ApplyTo(Piece, Out.Positions);
 	Out.Notes.Add(Piece.Describe());
-	if (!Piece.bMeetsOutsideBar)
+	if (!Piece.bKeepsOutOfHead)
 	{
-		Out.Notes.Add(TEXT("We couldn't find a size and position that keeps this hair outside the head, so check that it sits on the head."));
+		Out.Notes.Add(TEXT("We couldn't find a size and position that keeps this hair out of the head, so check that it sits on the head."));
 	}
 	Out.bFitted = true;
 
@@ -90,9 +104,13 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 	{
 		// A cap hugs the scalp. One big piece that hangs far from the skin is a sheet of long hair, not a cap.
 		const double CapMedian = MedianDistanceToSkin(Surface, Out.Positions, Split.CapIndices);
-		if (CapMedian > CapMaxMedianDistanceCm)
+		// A cap also spreads over the top of the head. Pigtails, braids and tails are big pieces too, but narrow.
+		const bool bCoversScalp = CoversScalp(Input.HeadPositions, Out.Positions, Split.CapIndices);
+		if (CapMedian > CapMaxMedianDistanceCm || !bCoversScalp)
 		{
-			Out.Notes.Add(FString::Printf(TEXT("Hair cap: the big piece hangs %.1f cm from the head, so it is treated as hair, not a cap."), CapMedian));
+			Out.Notes.Add(CapMedian > CapMaxMedianDistanceCm
+				? FString::Printf(TEXT("Hair cap: the big piece hangs %.1f cm from the head, so it is treated as hair, not a cap."), CapMedian)
+				: FString(TEXT("Hair cap: the big pieces do not spread over the top of the head (tails or braids), so they are treated as hair, not a cap.")));
 			Split = FMantleHairCapSplit::FResult();
 			Split.CardIndices = HairTriangles;
 		}
@@ -110,7 +128,7 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 	if (!FMantleScalpFit::Run(Surface, CardMesh, Split.bFound ? &CapMesh : nullptr, Scalp, Error))
 	{
 		Out.Warnings.Add(FString::Printf(TEXT("the hair could not be settled on the scalp (%s), so it keeps the size and position it was given."), *Error));
-		Report.bMeetsOutsideBar = Piece.bMeetsOutsideBar;
+		Report.bKeepsOutOfHead = Piece.bKeepsOutOfHead;
 		Report.bHadCap = Split.bFound;
 		Out.Report = FMantleHairFitReport::Describe(Report);
 		return Out;
@@ -130,7 +148,7 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 		M.CardCount, M.RootsWithin5mmBefore, M.RootsWithin5mmAfter, M.CardLifted, M.CardLiftMaxCm));
 	if (Scalp.bCheckFit) Out.Notes.Add(Scalp.CheckFitNote);
 
-	Report.bMeetsOutsideBar = Piece.bMeetsOutsideBar;
+	Report.bKeepsOutOfHead = Piece.bKeepsOutOfHead;
 	Report.bScalpCheckFit = Scalp.bCheckFit;
 	Report.RootsWithin5mmAfter = M.RootsWithin5mmAfter;
 	// Only the vertices the cards use: the metrics count every position, cap and built-in head included.

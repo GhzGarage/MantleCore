@@ -16,7 +16,7 @@ FMantleHairFitReport::FResult FMantleHairFitReport::Describe(const FInput& Input
 	const bool bManyInside = Input.CardVertices > 0
 		&& 100.0 * Input.CardInsideAfter / Input.CardVertices > LowInsidePercent;
 	const bool bRootsFloat = !Input.bHadCap && Input.RootsWithin5mmAfter >= 0.0 && Input.RootsWithin5mmAfter < LowRootPercent;
-	Out.bLowConfidence = !Input.bMeetsOutsideBar || Input.bScalpCheckFit || bManyInside || bRootsFloat;
+	Out.bLowConfidence = !Input.bKeepsOutOfHead || Input.bScalpCheckFit || bManyInside || bRootsFloat;
 	if (Out.bLowConfidence)
 	{
 		Out.Messages.Add(TEXT("We are not sure this hair sits right on the head. Look closely at the picture; if it is off, press Adjust and the hair uploads where you made it."));

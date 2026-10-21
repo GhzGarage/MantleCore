@@ -187,6 +187,13 @@ struct MANTLEEDITOR_API FMantleScalpFit
 	static TArray<int32> FindCardRoots(const TArray<FVector>& Positions, TConstArrayView<uint32> Indices, const TArray<double>& Distances);
 
 	/**
+	 * Both ends of every card (cards as FindCardRoots finds them), two positions per card: the vertices at the two ends of its
+	 * long axis. Which end is the root depends on where the card sits, so the whole-piece fit (FMantleHairPieceFit) takes the
+	 * end nearer the head for each candidate. Empty when a triangle names a missing vertex.
+	 */
+	static TArray<FVector3f> FindCardEnds(TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Indices);
+
+	/**
 	 * Normalised Gaussian over the head vertices flagged in Mask: Out[i] = sum(w * Value * mask) / sum(w * mask) with
 	 * w = exp(-0.5 (d/Sigma)^2) within 3 sigma, and the vertex's own weight doubled (the prototype added an identity
 	 * matrix to the distance matrix, which already counted the vertex itself). 0 where no masked vertex is near. A

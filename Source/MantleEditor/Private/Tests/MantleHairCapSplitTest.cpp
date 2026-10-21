@@ -41,6 +41,40 @@ namespace MantleHairCapSplitTestPrivate
 		CapTestSheet(10, 20.f, 0.f, P, I);
 	}
 
+	/** The upper half of a sphere of radius R cm at the origin, open at its rim: a cap over a head of a little less than R. */
+	void CapTestDome(float R, TArray<FVector3f>& P, TArray<uint32>& I)
+	{
+		const int32 Rings = 8, Segments = 24;
+		const uint32 Base = P.Num();
+		P.Add(FVector3f(0.f, 0.f, R));
+		for (int32 Ring = 1; Ring <= Rings; ++Ring)
+		{
+			const float Phi = 0.5f * UE_PI * Ring / Rings;
+			for (int32 Seg = 0; Seg < Segments; ++Seg)
+			{
+				const float Theta = 2.f * UE_PI * Seg / Segments;
+				P.Add(FVector3f(R * FMath::Sin(Phi) * FMath::Cos(Theta), R * FMath::Sin(Phi) * FMath::Sin(Theta), R * FMath::Cos(Phi)));
+			}
+		}
+		const auto At = [Base, Segments](int32 Ring, int32 Seg) { return Ring == 0 ? Base : Base + 1 + (Ring - 1) * Segments + Seg % Segments; };
+		for (int32 Seg = 0; Seg < Segments; ++Seg) I.Append({At(0, 0), At(1, Seg), At(1, Seg + 1)});
+		for (int32 Ring = 1; Ring < Rings; ++Ring) for (int32 Seg = 0; Seg < Segments; ++Seg)
+			I.Append({At(Ring, Seg), At(Ring + 1, Seg), At(Ring + 1, Seg + 1), At(Ring, Seg), At(Ring + 1, Seg + 1), At(Ring, Seg + 1)});
+	}
+
+	/** Count cards 0.8 cm wide hanging 6 cm straight down from points round a circle of radius R at height 0, two triangles each. */
+	void CapTestHangingCards(int32 Count, float R, TArray<FVector3f>& P, TArray<uint32>& I)
+	{
+		for (int32 C = 0; C < Count; ++C)
+		{
+			const float Theta = 2.f * UE_PI * C / Count;
+			const FVector3f Out(FMath::Cos(Theta), FMath::Sin(Theta), 0.f), Side(-0.4f * FMath::Sin(Theta), 0.4f * FMath::Cos(Theta), 0.f);
+			const uint32 B = P.Num();
+			P.Add(Out * R - Side); P.Add(Out * R + Side); P.Add(Out * R + Side - FVector3f(0.f, 0.f, 6.f)); P.Add(Out * R - Side - FVector3f(0.f, 0.f, 6.f));
+			I.Append({B, B + 1, B + 2, B, B + 2, B + 3});
+		}
+	}
+
 	/** A UV sphere, outward windings, radius R cm, at the origin. */
 	void CapTestSphere(float R, int32 Rings, int32 Segments, TArray<FVector3f>& P, TArray<uint32>& I)
 	{
@@ -174,7 +208,7 @@ bool FMantleHairFitReportTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("adjust label"), FString(FMantleHairFitReport::AdjustLabel()), FString(TEXT("Adjust")));
 
 	// Each low-confidence condition on its own.
-	{ FMantleHairFitReport::FInput In = Good; In.bMeetsOutsideBar = false; TestTrue(TEXT("no outside fit"), FMantleHairFitReport::Describe(In).bLowConfidence); }
+	{ FMantleHairFitReport::FInput In = Good; In.bKeepsOutOfHead = false; TestTrue(TEXT("no outside fit"), FMantleHairFitReport::Describe(In).bLowConfidence); }
 	{ FMantleHairFitReport::FInput In = Good; In.bScalpCheckFit = true; TestTrue(TEXT("long lifts"), FMantleHairFitReport::Describe(In).bLowConfidence); }
 	{ FMantleHairFitReport::FInput In = Good; In.CardInsideAfter = 50; TestTrue(TEXT("5% still inside"), FMantleHairFitReport::Describe(In).bLowConfidence); }
 	{ FMantleHairFitReport::FInput In = Good; In.CardInsideAfter = 10; TestFalse(TEXT("1% inside is fine"), FMantleHairFitReport::Describe(In).bLowConfidence); }
@@ -182,7 +216,7 @@ bool FMantleHairFitReportTest::RunTest(const FString& Parameters)
 	{ FMantleHairFitReport::FInput In = Good; In.RootsWithin5mmAfter = 20.0; In.bHadCap = true; TestFalse(TEXT("roots do not count with a cap"), FMantleHairFitReport::Describe(In).bLowConfidence); }
 	{ FMantleHairFitReport::FInput In = Good; In.RootsWithin5mmAfter = -1.0; TestFalse(TEXT("roots unmeasured"), FMantleHairFitReport::Describe(In).bLowConfidence); }
 	{
-		FMantleHairFitReport::FInput In = Good; In.bMeetsOutsideBar = false;
+		FMantleHairFitReport::FInput In = Good; In.bKeepsOutOfHead = false;
 		const FMantleHairFitReport::FResult Low = FMantleHairFitReport::Describe(In);
 		TestEqual(TEXT("low confidence says so once"), Low.Messages.Num(), 1);
 		TestTrue(TEXT("and points to Adjust"), Low.Messages[0].Contains(TEXT("Adjust")));
@@ -214,11 +248,12 @@ bool FMantleHairCardsFitRunTest::RunTest(const FString& Parameters)
 	TArray<FVector3f> HeadP; TArray<uint32> HeadI;
 	CapTestSphere(9.f, 16, 24, HeadP, HeadI);
 
-	// Hair: 30 cards (section 0) and a cap sheet (section 1); the same again with a huge built-in head (section 2).
+	// Hair: 30 cards hanging from the rim of a cap (section 0) and the cap, a dome over the head (section 1); the same
+	// again with a huge built-in head (section 2).
 	TArray<FVector3f> P; TArray<uint32> I; TArray<int32> Sections;
-	CapTestCards(30, P, I);
+	CapTestHangingCards(30, 9.3f, P, I);
 	for (int32 T = 0; T < I.Num() / 3; ++T) Sections.Add(0);
-	CapTestSheet(10, 20.f, 0.f, P, I);
+	CapTestDome(9.3f, P, I);
 	while (Sections.Num() < I.Num() / 3) Sections.Add(1);
 	const TArray<FString> Names = {TEXT("Cards"), TEXT("Hair_Cap"), TEXT("Head_Mat")};
 
@@ -268,6 +303,38 @@ bool FMantleHairCardsFitCapGuardTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("a close sheet hugs the scalp: a cap"), NearMedian <= FMantleHairCardsFit::CapMaxMedianDistanceCm);
 	TestTrue(TEXT("a far sheet is hair, not a cap"), FarMedian > FMantleHairCardsFit::CapMaxMedianDistanceCm);
 	TestEqual(TEXT("no triangles, no distance"), FMantleHairCardsFit::MedianDistanceToSkin(Head, Near, TConstArrayView<uint32>()), 0.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHairCardsFitCapShapeTest,
+	"Mantle.Editor.HairCardsFit.PigtailsCloseToTheHeadAreHairNotACap",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHairCardsFitCapShapeTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleHairCapSplitTestPrivate;
+	TArray<FVector3f> HeadP; TArray<uint32> HeadI;
+	CapTestSphere(9.f, 16, 24, HeadP, HeadI);
+
+	// A dome over the head is a cap.
+	TArray<FVector3f> Dome; TArray<uint32> DomeI;
+	CapTestDome(9.3f, Dome, DomeI);
+	TestTrue(TEXT("a dome over the head is a cap"), FMantleHairCardsFit::CoversScalp(HeadP, Dome, DomeI));
+
+	// Two pigtails (anime6): big pieces, each 4 cm across and 16 cm long, hanging at either side of the head. Together they
+	// are as wide as the head but only 4 cm deep, so they are hair, not a cap, however close to the skin they hang.
+	TArray<FVector3f> Tails; TArray<uint32> TailsI;
+	for (const float X : {-9.f, 5.f})
+	{
+		TArray<FVector3f> Sheet; TArray<uint32> SheetI;
+		CapTestSheet(8, 4.f, 0.f, Sheet, SheetI);
+		const uint32 Base = Tails.Num();
+		for (const FVector3f& V : Sheet) Tails.Add(FVector3f(X + V.X, V.Y - 2.f, 4.f * V.Y - 10.f)); // tilt it up: 4 cm wide, 4 cm deep, 16 cm tall
+		for (const uint32 Index : SheetI) TailsI.Add(Base + Index);
+	}
+	TestFalse(TEXT("two pigtails are not a cap"), FMantleHairCardsFit::CoversScalp(HeadP, Tails, TailsI));
+	TestFalse(TEXT("no triangles are not a cap"), FMantleHairCardsFit::CoversScalp(HeadP, Dome, TConstArrayView<uint32>()));
 	return true;
 }
 

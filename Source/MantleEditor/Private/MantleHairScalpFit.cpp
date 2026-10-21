@@ -392,54 +392,80 @@ FMantleScalpHeadSurface::FHit FMantleScalpHeadSurface::Query(const FVector& P) c
 
 // ---------------------------------------------------------------- fit
 
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleHairScalpFitPrivate
+{
+	/** One card: its vertices, each one's position along the card's long axis, and that axis's range. */
+	struct FCardAxis
+	{
+		TArray<int32> Ids;
+		TArray<double> Along;
+		double TMin = 0.0;
+		double TMax = 0.0;
+	};
+
+	/** The cards of a triangle list (connected pieces, vertices at one position are one), each with its long axis. Cards under four vertices are skipped. */
+	TArray<FCardAxis> FindCardAxes(const TArray<FVector>& Positions, TConstArrayView<uint32> Indices)
+	{
+		TArray<FCardAxis> Out;
+		if (Indices.Num() % 3 != 0) return Out;
+		const FWelded Welded = Weld(Positions);
+		TArray<int32> Parent;
+		Parent.SetNumUninitialized(Welded.Pos.Num());
+		for (int32 I = 0; I < Parent.Num(); ++I) Parent[I] = I;
+		TArray<uint8> Used = UsedMask(Positions.Num(), Indices);
+		for (int32 T = 0; T + 2 < Indices.Num(); T += 3)
+		{
+			const int32 A = FindRoot(Parent, Welded.Inv[Indices[T]]);
+			const int32 B = FindRoot(Parent, Welded.Inv[Indices[T + 1]]);
+			const int32 C = FindRoot(Parent, Welded.Inv[Indices[T + 2]]);
+			Parent[B] = A;
+			Parent[FindRoot(Parent, C)] = FindRoot(Parent, A);
+		}
+		TMap<int32, TArray<int32>> Cards;
+		for (int32 V = 0; V < Positions.Num(); ++V)
+		{
+			if (Used[V]) Cards.FindOrAdd(FindRoot(Parent, Welded.Inv[V])).Add(V);
+		}
+		TArray<int32> Labels;
+		Cards.GetKeys(Labels);
+		Labels.Sort();
+		for (const int32 Label : Labels)
+		{
+			FCardAxis Card;
+			Card.Ids = Cards[Label];
+			if (Card.Ids.Num() < 4) continue;
+			FVector Centre = FVector::ZeroVector;
+			for (const int32 V : Card.Ids) Centre += Positions[V];
+			Centre /= Card.Ids.Num();
+			TArray<FVector> Centred;
+			Centred.Reserve(Card.Ids.Num());
+			for (const int32 V : Card.Ids) Centred.Add(Positions[V] - Centre);
+			const FVector Axis = DominantAxis(Centred);
+			Card.TMin = TNumericLimits<double>::Max();
+			Card.TMax = TNumericLimits<double>::Lowest();
+			Card.Along.Reserve(Card.Ids.Num());
+			for (const FVector& P : Centred) { const double T = P | Axis; Card.Along.Add(T); Card.TMin = FMath::Min(Card.TMin, T); Card.TMax = FMath::Max(Card.TMax, T); }
+			Out.Add(MoveTemp(Card));
+		}
+		return Out;
+	}
+}
+
 TArray<int32> FMantleScalpFit::FindCardRoots(const TArray<FVector>& Positions, TConstArrayView<uint32> Indices, const TArray<double>& Distances)
 {
 	using namespace MantleHairScalpFitPrivate;
 	TArray<int32> Roots;
-	if (Indices.Num() % 3 != 0) return Roots;
-	const FWelded Welded = Weld(Positions);
-	TArray<int32> Parent;
-	Parent.SetNumUninitialized(Welded.Pos.Num());
-	for (int32 I = 0; I < Parent.Num(); ++I) Parent[I] = I;
-	TArray<uint8> Used = UsedMask(Positions.Num(), Indices);
-	for (int32 T = 0; T + 2 < Indices.Num(); T += 3)
+	for (const FCardAxis& Card : FindCardAxes(Positions, Indices))
 	{
-		const int32 A = FindRoot(Parent, Welded.Inv[Indices[T]]);
-		const int32 B = FindRoot(Parent, Welded.Inv[Indices[T + 1]]);
-		const int32 C = FindRoot(Parent, Welded.Inv[Indices[T + 2]]);
-		Parent[B] = A;
-		Parent[FindRoot(Parent, C)] = FindRoot(Parent, A);
-	}
-	TMap<int32, TArray<int32>> Cards;
-	for (int32 V = 0; V < Positions.Num(); ++V)
-	{
-		if (Used[V]) Cards.FindOrAdd(FindRoot(Parent, Welded.Inv[V])).Add(V);
-	}
-	TArray<int32> Labels;
-	Cards.GetKeys(Labels);
-	Labels.Sort();
-	for (const int32 Label : Labels)
-	{
-		const TArray<int32>& Ids = Cards[Label];
-		if (Ids.Num() < 4) continue;
-		FVector Centre = FVector::ZeroVector;
-		for (const int32 V : Ids) Centre += Positions[V];
-		Centre /= Ids.Num();
-		TArray<FVector> Centred;
-		Centred.Reserve(Ids.Num());
-		for (const int32 V : Ids) Centred.Add(Positions[V] - Centre);
-		const FVector Axis = DominantAxis(Centred);
-		double TMin = TNumericLimits<double>::Max(), TMax = TNumericLimits<double>::Lowest();
-		TArray<double> Along;
-		Along.Reserve(Ids.Num());
-		for (const FVector& P : Centred) { const double T = P | Axis; Along.Add(T); TMin = FMath::Min(TMin, T); TMax = FMath::Max(TMax, T); }
-		const double Length = TMax - TMin;
+		const TArray<int32>& Ids = Card.Ids;
+		const double Length = Card.TMax - Card.TMin;
 		double SumA = 0.0, SumB = 0.0;
 		int32 NumA = 0, NumB = 0;
 		for (int32 I = 0; I < Ids.Num(); ++I)
 		{
-			if (Along[I] <= TMin + CardEndFraction * Length) { SumA += FMath::Abs(Distances[Ids[I]]); ++NumA; }
-			if (Along[I] >= TMax - CardEndFraction * Length) { SumB += FMath::Abs(Distances[Ids[I]]); ++NumB; }
+			if (Card.Along[I] <= Card.TMin + CardEndFraction * Length) { SumA += FMath::Abs(Distances[Ids[I]]); ++NumA; }
+			if (Card.Along[I] >= Card.TMax - CardEndFraction * Length) { SumB += FMath::Abs(Distances[Ids[I]]); ++NumB; }
 		}
 		// The root end is the end nearer the head (a tie goes to the high-t end).
 		const bool bUseLow = NumA > 0 && NumB > 0 && SumA / NumA < SumB / NumB;
@@ -447,7 +473,7 @@ TArray<int32> FMantleScalpFit::FindCardRoots(const TArray<FVector>& Positions, T
 		double PivotDist = TNumericLimits<double>::Max();
 		for (int32 I = 0; I < Ids.Num(); ++I)
 		{
-			const bool bInEnd = bUseLow ? Along[I] <= TMin + CardEndFraction * Length : Along[I] >= TMax - CardEndFraction * Length;
+			const bool bInEnd = bUseLow ? Card.Along[I] <= Card.TMin + CardEndFraction * Length : Card.Along[I] >= Card.TMax - CardEndFraction * Length;
 			if (!bInEnd) continue;
 			const double D = FMath::Abs(Distances[Ids[I]]);
 			if (D < PivotDist) { PivotDist = D; Pivot = Ids[I]; }
@@ -455,6 +481,26 @@ TArray<int32> FMantleScalpFit::FindCardRoots(const TArray<FVector>& Positions, T
 		if (Pivot != INDEX_NONE) Roots.Add(Pivot);
 	}
 	return Roots;
+}
+
+TArray<FVector3f> FMantleScalpFit::FindCardEnds(TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Indices)
+{
+	using namespace MantleHairScalpFitPrivate;
+	TArray<FVector3f> Ends;
+	for (const uint32 I : Indices) if (I >= static_cast<uint32>(Positions.Num())) return Ends;
+	const TArray<FVector> Double = ToDouble(Positions);
+	for (const FCardAxis& Card : FindCardAxes(Double, Indices))
+	{
+		int32 Low = 0, High = 0;
+		for (int32 I = 1; I < Card.Ids.Num(); ++I)
+		{
+			if (Card.Along[I] < Card.Along[Low]) Low = I;
+			if (Card.Along[I] > Card.Along[High]) High = I;
+		}
+		Ends.Add(Positions[Card.Ids[Low]]);
+		Ends.Add(Positions[Card.Ids[High]]);
+	}
+	return Ends;
 }
 
 void FMantleScalpFit::SmoothField(const FMantleScalpHeadSurface& Head, const TArray<double>& Value, const TArray<uint8>& Mask,
