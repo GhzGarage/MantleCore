@@ -74,8 +74,9 @@ private:
  *     times the share of the scalp's cells that have a seated root, so the hair can neither shrink onto a patch of the
  *     head nor grow until only a few roots touch. Candidates that push more than MaxDeepInsideFraction of the hair
  *     more than DeepInsideCm inside the head (above HeadDepthCm below its top: hair over the shoulders does not count)
- *     are ruled out; ties go to the smaller median root distance. If every candidate is ruled out, the one with the
- *     least hair inside wins and bKeepsOutOfHead is false.
+ *     are ruled out; among the rest, those within RankTolerance of the best score go to the smallest median root
+ *     distance (the scalp is counted in ScalpCellCm cubes, so the score alone is coarse). If every candidate is ruled
+ *     out, the one with the least hair inside wins and bKeepsOutOfHead is false.
  *
  * Up to MaxFitPoints points and MaxFitCards cards score each candidate. The transform is
  * P' = P * (UnitScale * Scale) + (0, OffsetY, OffsetZ).
@@ -93,6 +94,8 @@ public:
 	static constexpr double HeadDepthCm = 18.0;
 	/** ... and a candidate may put at most this share of the scored points there. */
 	static constexpr double MaxDeepInsideFraction = 0.03;
+	/** Candidates scoring within this share of the best are equal; the closest roots win among them. */
+	static constexpr double RankTolerance = 0.03;
 	/** The most points and cards that score a candidate (an even stride over the piece). */
 	static constexpr int32 MaxFitPoints = 2000;
 	static constexpr int32 MaxFitCards = 1500;

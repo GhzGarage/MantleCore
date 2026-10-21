@@ -30,20 +30,38 @@ namespace MantleHairPieceFitPrivate
 		double DeepInside = 0.0;
 		double Seated = 0.0;
 		double Coverage = 0.0;
-		/** Seated times coverage, rounded to 3 decimals so near-equal candidates fall to the tie-break. */
+		/** Seated times coverage. */
 		double Rank = 0.0;
 		double RootMedian = 0.0;
+
+		bool KeepsOut() const { return DeepInside <= FMantleHairPieceFit::MaxDeepInsideFraction; }
 	};
 
-	/** True when A is the better candidate (see FMantleHairPieceFit's step 3). */
-	bool PieceFitBetter(const FPieceFitScore& A, const FPieceFitScore& B)
+	/**
+	 * The winner (see FMantleHairPieceFit's step 3): among the candidates that keep out of the head, those within
+	 * RankTolerance of the best rank, then the smallest root median (the scalp is counted in cubes, so a shift of up to a
+	 * cube can touch one more without seating the roots any better); with none, the least hair inside. The first in list
+	 * order wins exact ties, so the result does not depend on the threads that scored them.
+	 */
+	int32 PieceFitWinner(const TArray<FPieceFitScore>& Scores)
 	{
-		const bool bMetA = A.DeepInside <= FMantleHairPieceFit::MaxDeepInsideFraction;
-		const bool bMetB = B.DeepInside <= FMantleHairPieceFit::MaxDeepInsideFraction;
-		if (bMetA != bMetB) return bMetA;
-		if (!bMetA) return A.DeepInside < B.DeepInside;
-		if (A.Rank != B.Rank) return A.Rank > B.Rank;
-		return A.RootMedian < B.RootMedian;
+		double BestRank = -1.0;
+		for (const FPieceFitScore& S : Scores) if (S.KeepsOut()) BestRank = FMath::Max(BestRank, S.Rank);
+		int32 Winner = INDEX_NONE;
+		for (int32 Index = 0; Index < Scores.Num(); ++Index)
+		{
+			const FPieceFitScore& S = Scores[Index];
+			if (BestRank >= 0.0)
+			{
+				if (!S.KeepsOut() || S.Rank < BestRank * (1.0 - FMantleHairPieceFit::RankTolerance)) continue;
+				if (Winner == INDEX_NONE || S.RootMedian < Scores[Winner].RootMedian) Winner = Index;
+			}
+			else if (Winner == INDEX_NONE || S.DeepInside < Scores[Winner].DeepInside)
+			{
+				Winner = Index;
+			}
+		}
+		return Winner;
 	}
 }
 
@@ -289,14 +307,14 @@ bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayVie
 		Score.DeepInside = static_cast<double>(Deep) / Scored;
 		Score.Seated = static_cast<double>(Seated) / Cards;
 		Score.Coverage = static_cast<double>(CellsCovered) / Head.NumScalpCells();
-		Score.Rank = PieceFitRound(Score.Seated * Score.Coverage, 1000.0);
+		Score.Rank = Score.Seated * Score.Coverage;
 		Score.RootMedian = PieceFitPercentile(RootDistances, 0.5);
 		return Score;
 	};
 	const auto OffsetZFor = [&](double Scale, double TopOffset) { return HeadTop - Scale * CardsTop + TopOffset; };
 
 	struct FCandidate { double Scale; double OffsetY; double TopOffset; };
-	// Scores every candidate in parallel; the first best in list order wins ties, so the result does not depend on the threads.
+	// Scores every candidate in parallel, then picks the winner.
 	const auto Best = [&](const TArray<FCandidate>& Candidates, FPieceFitScore& OutScore)
 	{
 		TArray<FPieceFitScore> Scores;
@@ -306,8 +324,7 @@ bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayVie
 			const FCandidate& C = Candidates[Index];
 			Scores[Index] = Evaluate(C.Scale, C.OffsetY, OffsetZFor(C.Scale, C.TopOffset));
 		});
-		int32 Winner = 0;
-		for (int32 Index = 1; Index < Scores.Num(); ++Index) if (PieceFitBetter(Scores[Index], Scores[Winner])) Winner = Index;
+		const int32 Winner = PieceFitWinner(Scores);
 		Out.CandidatesScored += Candidates.Num();
 		OutScore = Scores[Winner];
 		return Candidates[Winner];
@@ -339,7 +356,7 @@ bool FMantleHairPieceFit::Fit(const FMantleHairHeadSamples& Head, TConstArrayVie
 	Out.SeatedFraction = Score.Seated;
 	Out.ScalpCoverage = Score.Coverage;
 	Out.RootMedianCm = Score.RootMedian;
-	Out.bKeepsOutOfHead = Score.DeepInside <= MaxDeepInsideFraction;
+	Out.bKeepsOutOfHead = Score.KeepsOut();
 	return true;
 }
 
