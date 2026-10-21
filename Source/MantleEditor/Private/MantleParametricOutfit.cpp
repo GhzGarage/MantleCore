@@ -54,7 +54,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogMantleParametricOutfit, Log, All);
 namespace MantleParametricOutfitPrivate
 {
 	/** How far the closest fifth of a garment's vertices may be from its authoring body's skin (cm). */
-	constexpr float WrapMaxCloseCm = 3.0f;
+	constexpr float WrapMaxCloseCm = 0.0f; // measuring
 
 	void Finish(USkinnedAsset* Asset)
 	{
@@ -902,7 +902,9 @@ bool FMantleParametricOutfit::PrepareWrapped(const FMantleCosmeticDraft& Draft, 
 		}
 		Nearest.Sort();
 		const float Close = Nearest.IsEmpty() ? TNumericLimits<float>::Max() : Nearest[Nearest.Num() / 5];
-		UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_WRAP_FIT garment=%s body=%s closest-fifth=%.2fcm"), *Draft.Source->GetName(), *Draft.AuthoringBody->GetName(), Close);
+		auto Percentile = [&Nearest](const int32 Percent) { return Nearest.IsEmpty() ? -1.0f : Nearest[FMath::Min(Nearest.Num() - 1, Nearest.Num() * Percent / 100)]; };
+		UE_LOG(LogMantleParametricOutfit, Display, TEXT("MANTLE_WRAP_FIT garment=%s body=%s p2=%.2f p5=%.2f p10=%.2f p20=%.2f p50=%.2f cm"), *Draft.Source->GetName(),
+			*Draft.AuthoringBody->GetName(), Percentile(2), Percentile(5), Percentile(10), Percentile(20), Percentile(50));
 		if (Close > MantleParametricOutfitPrivate::WrapMaxCloseCm)
 		{
 			OutWhy = FString::Printf(TEXT("it does not sit on the authoring body %s found for it (its closest fifth is %.1f cm from the skin)"), *Draft.AuthoringBody->GetName(), Close);
