@@ -51,9 +51,9 @@ namespace MantleWaterBodyExportTestPrivate
 		return Class ? World->SpawnActor(Class, &Location) : nullptr;
 	}
 
-	const FMantleWaterBody* FindBody(const FMantleWaterBodies& Water, const EMantleWaterBodyType Type)
+	const FMantleWaterBodyData* FindBody(const FMantleWaterBodies& Water, const EMantleWaterBodyType Type)
 	{
-		return Water.Bodies.FindByPredicate([Type](const FMantleWaterBody& Body) { return Body.Type == Type; });
+		return Water.Bodies.FindByPredicate([Type](const FMantleWaterBodyData& Body) { return Body.Type == Type; });
 	}
 }
 
@@ -108,7 +108,7 @@ bool FMantleWaterBodyReadSpawnedBodiesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("one water zone"), Water.Zones.Num(), 1);
 	TestTrue(TEXT("the check line counts them"), Water.SummaryLine().Contains(TEXT("ocean=1 lake=1 river=1 custom=1 zones=1 plugin=1")));
 
-	if (const FMantleWaterBody* Body = FindBody(Water, EMantleWaterBodyType::Lake))
+	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyType::Lake))
 	{
 		TestTrue(TEXT("the lake is where it was put"), Body->Transform.GetLocation().Equals(FVector(0.0, 0.0, 100.0), 1.0));
 		TestTrue(TEXT("a lake's spline is closed"), Body->bClosedLoop);
@@ -116,7 +116,7 @@ bool FMantleWaterBodyReadSpawnedBodiesTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("a lake carves the landscape by default"), Body->bAffectsLandscape);
 		TestFalse(TEXT("and has a collision setting"), Body->Collision.Enabled.IsEmpty());
 	}
-	if (const FMantleWaterBody* Body = FindBody(Water, EMantleWaterBodyType::River))
+	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyType::River))
 	{
 		TestFalse(TEXT("a river's spline is open"), Body->bClosedLoop);
 		TestTrue(TEXT("with at least two points"), Body->Points.Num() >= 2);
@@ -127,12 +127,12 @@ bool FMantleWaterBodyReadSpawnedBodiesTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("and a depth"), Body->Points[0].Depth > 0.f);
 		}
 	}
-	if (const FMantleWaterBody* Body = FindBody(Water, EMantleWaterBodyType::Custom))
+	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyType::Custom))
 	{
 		TestTrue(TEXT("a custom body names its mesh"), Body->MeshPath.Contains(TEXT("MantleWaterTestPool")));
 		TestFalse(TEXT("and never carves the landscape"), Body->bAffectsLandscape);
 	}
-	if (const FMantleWaterBody* Body = FindBody(Water, EMantleWaterBodyType::Ocean))
+	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyType::Ocean))
 	{
 		TestTrue(TEXT("an ocean has an extent"), Body->OceanExtents.X > 0.0 && Body->OceanExtents.Y > 0.0);
 	}
@@ -182,7 +182,7 @@ bool FMantleWaterBodyJsonTest::RunTest(const FString& Parameters)
 	FMantleWaterBodies Water;
 	Water.bWaterPluginLoaded = true;
 
-	FMantleWaterBody& River = Water.Bodies.AddDefaulted_GetRef();
+	FMantleWaterBodyData& River = Water.Bodies.AddDefaulted_GetRef();
 	River.Type = EMantleWaterBodyType::River;
 	River.Name = TEXT("Brook");
 	River.bHasMetadata = true;

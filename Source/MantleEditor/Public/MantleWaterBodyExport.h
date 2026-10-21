@@ -108,7 +108,7 @@ struct MANTLEEDITOR_API FMantleWaterCollision
 };
 
 /** Everything the exporter will need from one Water Body actor. */
-struct MANTLEEDITOR_API FMantleWaterBody
+struct MANTLEEDITOR_API FMantleWaterBodyData
 {
 	EMantleWaterBodyType Type = EMantleWaterBodyType::Lake;
 	FString Name;
@@ -172,7 +172,7 @@ struct MANTLEEDITOR_API FMantleWaterBodies
 	/** The Water plugin's module is loaded in this editor. False means there is nothing to read, and not that the level has none. */
 	bool bWaterPluginLoaded = false;
 
-	TArray<FMantleWaterBody> Bodies;
+	TArray<FMantleWaterBodyData> Bodies;
 	TArray<FMantleWaterZone> Zones;
 
 	int32 Count(EMantleWaterBodyType Type) const;

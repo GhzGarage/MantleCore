@@ -341,7 +341,7 @@ namespace MantleWaterBodyExportPrivate
 		}
 	}
 
-	void ReadSpline(const FReflect& Actor, const bool bRiver, FMantleWaterBody& Out)
+	void ReadSpline(const FReflect& Actor, const bool bRiver, FMantleWaterBodyData& Out)
 	{
 		const USplineComponent* Spline = Cast<USplineComponent>(Actor.Object(TEXT("SplineComp")));
 		if (!Spline)
@@ -377,7 +377,7 @@ namespace MantleWaterBodyExportPrivate
 		}
 	}
 
-	bool ReadBody(const AActor* Actor, const FWaterClasses& Classes, FMantleWaterBody& Out)
+	bool ReadBody(const AActor* Actor, const FWaterClasses& Classes, FMantleWaterBodyData& Out)
 	{
 		const UActorComponent* Component = Actor->FindComponentByClass(Classes.BodyComponent);
 		if (!Component)
@@ -563,7 +563,7 @@ namespace MantleWaterBodyExportPrivate
 		return Json;
 	}
 
-	TSharedRef<FJsonObject> BodyJson(const FMantleWaterBody& Body)
+	TSharedRef<FJsonObject> BodyJson(const FMantleWaterBodyData& Body)
 	{
 		TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
 		Json->SetStringField(TEXT("bodyType"), TypeName(Body.Type));
@@ -651,7 +651,7 @@ namespace MantleWaterBodyExportPrivate
 int32 FMantleWaterBodies::Count(const EMantleWaterBodyType Type) const
 {
 	int32 Total = 0;
-	for (const FMantleWaterBody& Body : Bodies)
+	for (const FMantleWaterBodyData& Body : Bodies)
 	{
 		Total += Body.Type == Type ? 1 : 0;
 	}
@@ -684,7 +684,7 @@ FMantleWaterBodies FMantleWaterBodyExport::Read(UWorld* World)
 
 	for (TActorIterator<AActor> It(World, Classes.BodyActor); It; ++It)
 	{
-		FMantleWaterBody Body;
+		FMantleWaterBodyData Body;
 		if (!It->IsTemplate() && ReadBody(*It, Classes, Body))
 		{
 			Result.Bodies.Add(MoveTemp(Body));
@@ -702,7 +702,7 @@ FMantleWaterBodies FMantleWaterBodyExport::Read(UWorld* World)
 	}
 
 	// By path, so the order does not depend on the order actors were spawned in.
-	Result.Bodies.Sort([](const FMantleWaterBody& A, const FMantleWaterBody& B) { return A.Path < B.Path; });
+	Result.Bodies.Sort([](const FMantleWaterBodyData& A, const FMantleWaterBodyData& B) { return A.Path < B.Path; });
 	Result.Zones.Sort([](const FMantleWaterZone& A, const FMantleWaterZone& B) { return A.Path < B.Path; });
 	return Result;
 }
@@ -713,7 +713,7 @@ TSharedRef<FJsonObject> FMantleWaterBodyExport::ToJson(const FMantleWaterBodies&
 
 	TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
 	TArray<TSharedPtr<FJsonValue>> Bodies;
-	for (const FMantleWaterBody& Body : Water.Bodies)
+	for (const FMantleWaterBodyData& Body : Water.Bodies)
 	{
 		Bodies.Add(MakeShared<FJsonValueObject>(BodyJson(Body)));
 	}
