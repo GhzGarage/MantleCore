@@ -105,8 +105,9 @@ bool FMantleWaterBodyReadSpawnedBodiesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("one river"), Water.Count(EMantleWaterBodyType::River), 1);
 	TestEqual(TEXT("one ocean"), Water.Count(EMantleWaterBodyType::Ocean), 1);
 	TestEqual(TEXT("one custom body"), Water.Count(EMantleWaterBodyType::Custom), 1);
-	TestEqual(TEXT("one water zone"), Water.Zones.Num(), 1);
-	TestTrue(TEXT("the check line counts them"), Water.SummaryLine().Contains(TEXT("ocean=1 lake=1 river=1 custom=1 zones=1 plugin=1")));
+	// The Water plugin makes a zone of its own for a body that has none, so the level can have more than the one spawned here.
+	TestTrue(TEXT("the water zone is read"), Water.Zones.Num() >= 1);
+	TestTrue(TEXT("the check line counts them"), Water.SummaryLine().Contains(TEXT("ocean=1 lake=1 river=1 custom=1")) && Water.SummaryLine().Contains(TEXT("plugin=1")));
 
 	if (const FMantleWaterBodyData* Body = FindBody(Water, EMantleWaterBodyType::Lake))
 	{
@@ -136,10 +137,7 @@ bool FMantleWaterBodyReadSpawnedBodiesTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(TEXT("an ocean has an extent"), Body->OceanExtents.X > 0.0 && Body->OceanExtents.Y > 0.0);
 	}
-	if (Water.Zones.Num() == 1)
-	{
-		TestTrue(TEXT("the zone has an extent"), Water.Zones[0].Extent.X > 0.0 && Water.Zones[0].Extent.Y > 0.0);
-	}
+	TestTrue(TEXT("a zone has an extent"), Water.Zones.ContainsByPredicate([](const FMantleWaterZone& Zone) { return Zone.Extent.X > 0.0 && Zone.Extent.Y > 0.0; }));
 
 	// The writer-to-come's input is plain JSON.
 	const FString Json = FMantleWaterBodyExport::ToJsonString(Water);

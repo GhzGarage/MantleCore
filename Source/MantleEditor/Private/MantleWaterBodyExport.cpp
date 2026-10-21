@@ -755,7 +755,40 @@ int32 FMantleWaterBodyExport::CountBodiesCarving(const AActor* Landscape)
 		{
 			continue;
 		}
-		Count += Ground.IntersectXY(Primitive->Bounds.GetBox()) ? 1 : 0;
+		// A lake's or river's reach is its spline (a river widened by its widest point); the component's own bounds can be larger
+		// than that before the body has been built, so they are used only for a body with no spline (an ocean).
+		FBox Reach(ForceInit);
+		if (!Primitive->IsA(Classes.Ocean))
+		{
+			const FReflect BodyActor(*It);
+			if (const USplineComponent* Spline = Cast<USplineComponent>(BodyActor.Object(TEXT("SplineComp"))))
+			{
+				float Widest = 0.f;
+				if (Primitive->IsA(Classes.River))
+				{
+					if (const FInterpCurveFloat* Width = FReflect(Spline->GetSplinePointsMetadata()).Curve(TEXT("RiverWidth")))
+					{
+						for (const FInterpCurvePoint<float>& Point : Width->Points)
+						{
+							Widest = FMath::Max(Widest, Point.OutVal);
+						}
+					}
+				}
+				for (int32 Index = 0; Index < Spline->GetNumberOfSplinePoints(); ++Index)
+				{
+					Reach += Spline->GetLocationAtSplinePoint(Index, ESplineCoordinateSpace::World);
+				}
+				if (Reach.IsValid)
+				{
+					Reach = Reach.ExpandBy(FVector(Widest, Widest, 0.0));
+				}
+			}
+		}
+		if (!Reach.IsValid)
+		{
+			Reach = Primitive->Bounds.GetBox();
+		}
+		Count += Ground.IntersectXY(Reach) ? 1 : 0;
 	}
 	return Count;
 }
