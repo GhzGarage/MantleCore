@@ -2225,8 +2225,8 @@ bool FMantlePlaceExporter::DescribeSkippedActor(const AActor* Actor, FSkippedAct
 
 bool FMantlePlaceExporter::ClassifyActor(const AActor* Actor, EMantleEntityType& OutType)
 {
-	// GhzGarage/mantle#997: a Water plugin body is a WaterBody entity where the target reads them (else it is left out with a warning).
-	if (FMantleTargetFeatures::Current().Reads(MantleClientFeatures::WaterBodies) && FMantleWaterBodyExport::IsWaterBodyActor(Actor)) { OutType = EMantleEntityType::WaterBody; return true; }
+	// GhzGarage/mantle#997: a Water plugin body is a WaterBody entity.
+	if (FMantleWaterBodyExport::IsWaterBodyActor(Actor)) { OutType = EMantleEntityType::WaterBody; return true; }
 	// #628: a mesh actor made of several components (a Blueprint's mesh, doors, lights, particles) is a Group of parts.
 	if (MantlePlaceExporterPrefab::NeedsGroup(Actor)) { OutType = EMantleEntityType::Group;            return true; }
 	// #818: a placed particle actor (an Emitter, a Niagara Actor) is a Group of Effect parts, as a Blueprint's particle components are.
@@ -3214,26 +3214,11 @@ void FMantlePlaceExporter::CollectPrefabParts(
 			}
 		}
 
-		// GhzGarage/mantle#997: a Water plugin body (and the mesh component the plugin makes for it) is left out until the place format has
-		// a WaterBody entity and the target reads `waterBodies`; one warning for each body says so.
-		if (Scene && !Scene->IsEditorOnly() && !Scene->HasAnyFlags(RF_Transient))
+		// GhzGarage/mantle#997: the mesh component the Water plugin makes for a body (a lake's surface, a custom body's mesh) is the body's
+		// own; the body publishes as a WaterBody entity, so it is not a mesh of its own.
+		if (Scene && !Scene->IsEditorOnly() && !Scene->HasAnyFlags(RF_Transient) && FMantleWaterBody::IsBodyMeshComponent(Cast<UStaticMeshComponent>(Scene)))
 		{
-			if (FMantleWaterBody::IsWaterBody(Scene))
-			{
-				if (OutUnsupported)
-				{
-					OutUnsupported->Add(FMantleUnpublishedPart{
-						FString::Printf(TEXT("has a %s water body ('%s') that Mantle leaves out for now: Water plugin bodies publish once the waterBodies reader ships; the rest of the actor publishes."),
-							*FMantleWaterBody::Kind(Scene), *Scene->GetName()),
-						TEXT("Nothing to change: the water is skipped. For water today, build it from a static mesh with a water material."),
-						/*bBlocksPublish*/ false, MantleCoverageCategory::Water });
-				}
-				continue;
-			}
-			if (FMantleWaterBody::IsBodyMeshComponent(Cast<UStaticMeshComponent>(Scene)))
-			{
-				continue;
-			}
+			continue;
 		}
 
 		// #63: a sky dome mesh of a sky Blueprint (BP_Sky_Sphere, a Fab map's own) is left out: Mantle supplies its own sky.

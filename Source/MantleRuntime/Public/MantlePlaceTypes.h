@@ -434,6 +434,16 @@ struct FMantleEnvironmentSettings
 	}
 };
 
+/** The place's Water Zone (#997), the place file's settings.water: the area the Water plugin simulates and draws water in. */
+struct FMantleWaterZone
+{
+	/** The zone's full size, cm, each axis FMantlePlaceLimits::MinWaterExtent to MaxWaterExtent. */
+	FVector2D ZoneExtent = FVector2D(FMantlePlaceLimits::DefaultWaterZoneExtent, FMantlePlaceLimits::DefaultWaterZoneExtent);
+	FVector ZoneLocation = FVector::ZeroVector;
+	/** -180 to 180 degrees. */
+	double ZoneYawDeg = 0.0;
+};
+
 struct FMantleSettings
 {
 	int32 MaxPlayers = 16;
@@ -1314,16 +1324,6 @@ struct FMantleWaterBodyProps
 	TOptional<FVector> CollisionExtent;
 	TOptional<FVector2D> OceanExtent;
 	TOptional<bool> CenterOnZone;
-};
-
-/** The place's Water Zone (#997), the place file's settings.water: the area the Water plugin simulates and draws water in. */
-struct FMantleWaterZone
-{
-	/** The zone's full size, cm, each axis FMantlePlaceLimits::MinWaterExtent to MaxWaterExtent. */
-	FVector2D ZoneExtent = FVector2D(FMantlePlaceLimits::DefaultWaterZoneExtent, FMantlePlaceLimits::DefaultWaterZoneExtent);
-	FVector ZoneLocation = FVector::ZeroVector;
-	/** -180 to 180 degrees. */
-	double ZoneYawDeg = 0.0;
 };
 
 using FMantleEntityProps = TVariant<

@@ -539,11 +539,11 @@ bool FMantleWaterBodyPlaceFileTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FMantleWaterBodyExportGateTest,
-	"Mantle.Editor.Water.ExportsABodyOnlyWhereTheTargetReadsIt",
+	FMantleWaterBodyExportsEntityTest,
+	"Mantle.Editor.Water.ExportsABodyAsAWaterBodyEntity",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FMantleWaterBodyExportGateTest::RunTest(const FString& Parameters)
+bool FMantleWaterBodyExportsEntityTest::RunTest(const FString& Parameters)
 {
 	using namespace MantleWaterBodyExportTestPrivate;
 
@@ -562,35 +562,19 @@ bool FMantleWaterBodyExportGateTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	EMantleEntityType Type = EMantleEntityType::Group;
+	TestTrue(TEXT("a lake classifies"), FMantlePlaceExporter::ClassifyActor(Lake, Type));
+	TestEqual(TEXT("as a WaterBody"), Type, EMantleEntityType::WaterBody);
 
-	auto CountBodies = [](const FMantleExportResult& Result)
+	// The plugin's own default lake spline is enough.
+	const FMantleExportResult Result = FMantlePlaceExporter::Export(Fixture.World, FMantleExportOptions());
+	int32 Bodies = 0;
+	for (const FMantleEntity& Entity : Result.Place.Entities)
 	{
-		int32 Count = 0;
-		for (const FMantleEntity& Entity : Result.Place.Entities)
-		{
-			Count += Entity.Type == EMantleEntityType::WaterBody ? 1 : 0;
-		}
-		return Count;
-	};
-
-	// A target that reads waterBodies gets a WaterBody entity (the plugin's own default lake spline is enough).
-	{
-		const FMantleTargetFeaturesScope Scope(FMantleTargetFeatures::All());
-		EMantleEntityType Type = EMantleEntityType::Group;
-		TestTrue(TEXT("a lake classifies"), FMantlePlaceExporter::ClassifyActor(Lake, Type));
-		TestEqual(TEXT("as a WaterBody"), Type, EMantleEntityType::WaterBody);
-		const FMantleExportResult Result = FMantlePlaceExporter::Export(Fixture.World, FMantleExportOptions());
-		TestEqual(TEXT("the place has one water body"), CountBodies(Result), 1);
-		TestTrue(TEXT("and the zone"), Result.Place.Settings.Water.IsSet());
+		Bodies += Entity.Type == EMantleEntityType::WaterBody ? 1 : 0;
 	}
-
-	// One that does not keeps today's skip, with its warning.
-	{
-		const FMantleTargetFeaturesScope Scope(FMantleTargetFeatures::None());
-		const FMantleExportResult Result = FMantlePlaceExporter::Export(Fixture.World, FMantleExportOptions());
-		TestEqual(TEXT("the place has no water body"), CountBodies(Result), 0);
-		TestFalse(TEXT("and no zone"), Result.Place.Settings.Water.IsSet());
-	}
+	TestEqual(TEXT("the place has one water body"), Bodies, 1);
+	TestTrue(TEXT("and the zone"), Result.Place.Settings.Water.IsSet());
 	return true;
 }
 
