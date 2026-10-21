@@ -80,6 +80,15 @@ struct FMantleEmoteRetarget
 		const FReferenceSkeleton& Target, const TMap<FName, FQuat>& TargetOffsets, TConstArrayView<FName> Bones, double* OutLargestDegrees = nullptr);
 
 	/**
+	 * A copy of Retargeter (an IK retargeter) in the transient package whose target retarget pose gives the hands and
+	 * fingers (HandBones(false)) the source's rest shape (MatchRestRotations), so FK finger chains carry the source's curl.
+	 * Source and Target: the meshes' reference skeletons the retarget runs between. Rooted until ReleaseRestHandsCopy; the
+	 * shipped asset is never touched. Null with OutError when IK Rig's controller cannot edit it. Game thread.
+	 */
+	static UObject* MakeRestHandsCopy(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError);
+	static void ReleaseRestHandsCopy(UObject* Copy);
+
+	/**
 	 * A mesh on Skeleton to retarget from (its proportions): the skeleton's preview mesh, else a skeletal mesh in the
 	 * project on that skeleton, a "Body" first, then by package path. Null when there is none.
 	 */

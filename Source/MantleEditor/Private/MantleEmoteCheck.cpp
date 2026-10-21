@@ -684,7 +684,21 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 	Subject.Frame = StandingFrame(BodyMesh);
 	Subject.bFloor = true;
 	const TArray<float> Times = Moments(Clip.GetDuration(), SheetMoments);
-	UObject* const Retargeter = Inputs.Retargeter;
+	// TEMPORARY (trials, removed before merge): MANTLE_EMOTE_BODY_MATCH=1 poses the body through a copy of the client's
+	// retargeter whose body pose has the UEFN mannequin's rest hands, to see what the same fix would do on players' clients.
+	UObject* BodyMatched = nullptr;
+	if (FPlatformMisc::GetEnvironmentVariable(TEXT("MANTLE_EMOTE_BODY_MATCH")) == TEXT("1"))
+	{
+		FString MatchNote;
+		FString MatchError;
+		BodyMatched = FMantleEmoteRetarget::MakeRestHandsCopy(Inputs.Retargeter, Driver->GetRefSkeleton(), BodyMesh->GetRefSkeleton(), MatchNote, MatchError);
+		Say(FString::Printf(TEXT("TRIAL body rest hands: %s"), BodyMatched ? *MatchNote : *MatchError));
+	}
+	ON_SCOPE_EXIT
+	{
+		FMantleEmoteRetarget::ReleaseRestHandsCopy(BodyMatched);
+	};
+	UObject* const Retargeter = BodyMatched ? BodyMatched : Inputs.Retargeter;
 	const FString SheetFile = FPaths::Combine(Directory, Label + TEXT("_sheet.png"));
 	FString Problems;
 	const bool bWritten = DrawSheet(Subject, Times, [Driver, Retargeter, Played](FMantleThumbnailSubject& Shot, const float Time)
