@@ -60,6 +60,9 @@ struct MANTLEEDITOR_API FMantleWaterBake
 	 */
 	bool bSingleLayer = false;
 
+	/** A Single Layer Water material animated its waves (world position offset): they are dropped, the water keeps its flat surface and its normal maps. */
+	bool bWavesDropped = false;
+
 	/** The Single Layer Water output node's scattering and absorption (1/cm), when its graph evaluated; they stand in for the derived coefficients. */
 	bool bVolume = false;
 	FMantleWaterCoefficients Volume;

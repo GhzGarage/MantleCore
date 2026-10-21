@@ -1136,4 +1136,44 @@ bool FMantleWaterSingleLayerTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleWaterSingleLayerWavesTest,
+	"Mantle.Editor.Water.SingleLayerWaterWithWaves",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleWaterSingleLayerWavesTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleWaterMaterialTestPrivate;
+
+	// The Water plugin's material animates its waves with world position offset and keeps its coefficients in a graph this cannot read.
+	UMaterial* Material = NewObject<UMaterial>(GetTransientPackage());
+	Material->SetShadingModel(MSM_SingleLayerWater);
+	UMaterialExpressionTime* Time = AddExpression<UMaterialExpressionTime>(Material);
+	UMaterialExpressionMultiply* Wave = AddExpression<UMaterialExpressionMultiply>(Material);
+	Wave->A.Connect(0, Time);
+	Wave->B.Connect(0, AddColour(Material, FLinearColor(0.0f, 0.0f, 50.0f)));
+	Material->GetEditorOnlyData()->WorldPositionOffset.Connect(0, Wave);
+	Material->GetEditorOnlyData()->BaseColor.Connect(0, AddColour(Material, FLinearColor(0.0f, 0.2f, 0.25f)));
+
+	const FMantleMaterialAnalysis Analysis = FMantlePlaceAssets::AnalyzeMaterial(Material);
+	const FMantleWaterBake& Water = Analysis.Fidelity2.Water;
+	if (!TestTrue(TEXT("water with waves is still found as water"), Water.bFound && Water.bSingleLayer))
+	{
+		return false;
+	}
+	TestTrue(TEXT("its waves are said to be dropped"), Water.bWavesDropped);
+	TestFalse(TEXT("and it is not wind"), Analysis.Fidelity2.bWind);
+	TestFalse(TEXT("with no output node, the coefficients derive from the colour"), Water.bVolume);
+
+	FMantleGlbDocument Flattened = BakedWater();
+	Flattened.Json->GetArrayField(TEXT("materials"))[0]->AsObject()->SetStringField(TEXT("alphaMode"), TEXT("OPAQUE"));
+	FMantleMaterialExtras Extras;
+	Extras.Fidelity = Analysis.Fidelity2;
+	FMantlePlaceAssetSet Set;
+	const FMantlePlaceMaterialDocument Doc = FMantlePlaceAssetConverter::MaterialFromGltf(Flattened, 0, TEXT("WaterMID_1"), FMantlePlaceAssetLimits(), false, Set, Extras);
+	TestTrue(TEXT("it writes the water key"), Doc.WritesWater());
+	TestTrue(TEXT("with coefficients above zero"), Doc.WaterAbsorption[0] + Doc.WaterAbsorption[1] + Doc.WaterAbsorption[2] > 0.0);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

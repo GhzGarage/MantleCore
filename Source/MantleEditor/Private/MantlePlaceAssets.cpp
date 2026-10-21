@@ -2661,7 +2661,8 @@ FMantleMaterialAnalysis FMantlePlaceAssets::AnalyzeMaterial(const UMaterialInter
 		// #628: a depth-faded translucent material (water): the bake sees the fade's near end and writes opacity 0, so its
 		// opacity (and deep colour, when the graph gives one) is carried as constants read at the far end.
 		// GhzGarage/mantle#818: a Single Layer Water material (a Water plugin body's) is water already.
-		const bool bSingleLayerWater = bCarries && bLit && !Walk.bTranslucent && !Fidelity.bWind && Models.HasOnlyShadingModel(MSM_SingleLayerWater);
+		// Its waves are world position offset, which reads as wind: the water key has no waves, so the offset is dropped and said (bWavesDropped).
+		const bool bSingleLayerWater = bCarries && bLit && !Walk.bTranslucent && Models.HasShadingModel(MSM_SingleLayerWater);
 		if ((bCarries && bLit && Walk.bTranslucent && !Fidelity.bWind && FMantleWaterMaterial::Recognise(Material, Roots.Opacity, Roots.BaseColor, Roots.Normal, Fidelity.Water))
 			|| (bSingleLayerWater && FMantleWaterMaterial::RecogniseSingleLayer(Material, Roots.BaseColor, Roots.Normal, Fidelity.Water)))
 		{
@@ -2669,6 +2670,12 @@ FMantleMaterialAnalysis FMantlePlaceAssets::AnalyzeMaterial(const UMaterialInter
 			{
 				// Published as Mantle's water, which is Single Layer Water: no longer a loss of special shading.
 				Out.Losses &= ~EMantleMaterialLoss::SpecialShading;
+				if (Connected(MP_WorldPositionOffset) || Fidelity.bWind)
+				{
+					Fidelity.bWind = false;
+					Fidelity.Water.bWavesDropped = true;
+					Carry({ MP_WorldPositionOffset });
+				}
 			}
 			Carry({ MP_Opacity });
 			if (Fidelity.Water.bColour)
