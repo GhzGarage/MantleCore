@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 //
-// Maintainer command: Mantle.Dev.CheckEmote <AnimSequence> <Directory> [Label] [female|male|<SkeletalMesh>] [size]
+// Maintainer commands: Mantle.Dev.CheckEmote <AnimSequence> <Directory> [Label] [female|male|<SkeletalMesh>] [size], and
+// Mantle.Dev.MatchRetargetHands <Retargeter> <SourceMesh> <TargetMesh> [save]
 // See FMantleEmoteCheck (MantleEmoteCheck.h).
 #include "MantleEmoteCheck.h"
 
@@ -33,6 +34,7 @@
 #include "PreviewScene.h"
 #include "ReferenceSkeleton.h"
 #include "UObject/Package.h"
+#include "UObject/SavePackage.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMantleCheckEmote, Log, All);
 
@@ -1021,6 +1023,63 @@ namespace MantleEmoteCheckPrivate
 			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_CHECK_EMOTE failed %s: %s"), *Path, *Error);
 		}
 	}
+
+	/** "builtin": the plugin's UEFN mannequin; female, male or a skeletal mesh path as Mantle.Dev.CheckEmote's body. */
+	USkeletalMesh* ResolveMesh(const FString& Choice, const FMantleAvatarContract& Contract, FString& OutError)
+	{
+		if (Choice.Equals(TEXT("builtin"), ESearchCase::IgnoreCase))
+		{
+			return FMantleBuiltInMannequin::UEFNMannequin(Contract, &OutError);
+		}
+		USkeletalMesh* Body = nullptr;
+		USkeletalMesh* Face = nullptr;
+		FString Describe;
+		return ResolveBody(Choice, Body, Face, Describe, OutError) ? Body : nullptr;
+	}
+
+	void RunMatchCommand(const TArray<FString>& Args)
+	{
+		if (Args.Num() < 3)
+		{
+			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_MATCH_RETARGET usage: Mantle.Dev.MatchRetargetHands <Retargeter> <builtin|female|male|<SourceMesh>> <builtin|female|male|<TargetMesh>> [save]"));
+			return;
+		}
+		FString Path = Args[0];
+		if (!FPackageName::GetShortName(Path).Contains(TEXT(".")))
+		{
+			Path += TEXT(".") + FPackageName::GetShortName(Path);
+		}
+		FString Error;
+		const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&Error);
+		UObject* Retargeter = LoadObject<UObject>(nullptr, *Path);
+		USkeletalMesh* Source = Contract ? ResolveMesh(Args[1], *Contract, Error) : nullptr;
+		USkeletalMesh* Target = Contract && Source ? ResolveMesh(Args[2], *Contract, Error) : nullptr;
+		FString Note;
+		if (!Retargeter || !Source || !Target || !FMantleEmoteRetarget::MatchRestHandsInPlace(Retargeter, Source->GetRefSkeleton(), Target->GetRefSkeleton(), Note, Error))
+		{
+			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_MATCH_RETARGET failed %s: %s"), *Path, Retargeter ? *Error : TEXT("no such retargeter"));
+			return;
+		}
+		UE_LOG(LogMantleCheckEmote, Display, TEXT("MANTLE_MATCH_RETARGET %s (source %s, target %s): %s"), *Path, *Source->GetPathName(), *Target->GetPathName(), *Note);
+		if (Args.Num() > 3 && Args[3].Equals(TEXT("save"), ESearchCase::IgnoreCase))
+		{
+			UPackage* Package = Retargeter->GetPackage();
+			const FString File = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+			SaveArgs.SaveFlags = SAVE_NoError;
+			const bool bSaved = UPackage::SavePackage(Package, Retargeter, *File, SaveArgs);
+			UE_LOG(LogMantleCheckEmote, Display, TEXT("MANTLE_MATCH_RETARGET %s %s"), bSaved ? TEXT("saved") : TEXT("NOT SAVED"), *File);
+		}
+	}
+
+	FAutoConsoleCommand GMantleDevMatchRetargetHandsCommand(
+		TEXT("Mantle.Dev.MatchRetargetHands"),
+		TEXT("Mantle.Dev.MatchRetargetHands <Retargeter> <builtin|female|male|<SourceMesh>> <builtin|female|male|<TargetMesh>> [save] -- gives the ")
+		TEXT("retargeter's target retarget pose the source's rest hands and fingers and its finger chains joint for joint, as every emote export ")
+		TEXT("does on its copy (FMantleEmoteRetarget::MatchRestHandsInPlace). In memory, so a Mantle.Dev.CheckEmote after it shows the result; ")
+		TEXT("with save, the asset is saved."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&RunMatchCommand));
 
 	FAutoConsoleCommand GMantleDevCheckEmoteCommand(
 		TEXT("Mantle.Dev.CheckEmote"),

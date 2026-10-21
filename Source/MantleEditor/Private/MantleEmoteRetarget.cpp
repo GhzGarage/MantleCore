@@ -208,9 +208,10 @@ namespace MantleEmoteRetargetPrivate
 	}
 
 	/**
-	 * A copy of one of the plugin's retargeters, in the transient package and out of the undo history, whose target
-	 * retarget pose is edited through IK Rig's UIKRetargeterController by reflection (MantleEditor links no IK Rig module).
-	 * The shipped asset is never touched; the copy goes with this. Game thread.
+	 * One of the plugin's retargeters whose target retarget pose and FK chains are edited through IK Rig's
+	 * UIKRetargeterController by reflection (MantleEditor links no IK Rig module). Make: a copy in the transient package and
+	 * out of the undo history, which goes with this (the shipped asset untouched). Open: the asset itself, edited in place
+	 * (Mantle.Dev.MatchRetargetHands). Game thread.
 	 */
 	class FRetargeterCopy
 	{
@@ -234,11 +235,32 @@ namespace MantleEmoteRetargetPrivate
 				OutError = FString::Printf(TEXT("%s could not be copied"), *Original->GetName());
 				return false;
 			}
+			bOwned = true;
 			// Kept through any garbage collection the batch retarget runs; not transactional, so the controller's edits leave
 			// nothing in the creator's undo history.
 			Copy->AddToRoot();
 			Copy->ClearFlags(RF_Transactional);
 			ForEachObjectWithOuter(Copy, [](UObject* Inner) { Inner->ClearFlags(RF_Transactional); });
+			return Attach(Class, Get, OutError);
+		}
+
+		/** Edits Asset itself; its package is marked dirty by the controller and saved by the caller. */
+		bool Open(UObject* Asset, FString& OutError)
+		{
+			UClass* Class = FindObject<UClass>(nullptr, TEXT("/Script/IKRigEditor.IKRetargeterController"));
+			UFunction* Get = Class ? Class->FindFunctionByName(TEXT("GetController")) : nullptr;
+			if (!Asset || !Get)
+			{
+				OutError = TEXT("IK Rig's retargeter controller is not loaded");
+				return false;
+			}
+			Copy = Asset;
+			bOwned = false;
+			return Attach(Class, Get, OutError);
+		}
+
+		bool Attach(UClass* Class, UFunction* Get, FString& OutError)
+		{
 			Call(Class->GetDefaultObject(), Get, [this](UFunction* Function, uint8* Params)
 			{
 				CastField<FObjectPropertyBase>(Function->FindPropertyByName(TEXT("InRetargeterAsset")))->SetObjectPropertyValue_InContainer(Params, Copy);
@@ -372,6 +394,10 @@ namespace MantleEmoteRetargetPrivate
 
 		~FRetargeterCopy()
 		{
+			if (!bOwned)
+			{
+				return;
+			}
 			if (Copy)
 			{
 				Copy->RemoveFromRoot();
@@ -386,6 +412,7 @@ namespace MantleEmoteRetargetPrivate
 	private:
 		UObject* Copy = nullptr;
 		UObject* Controller = nullptr;
+		bool bOwned = true;
 
 		UFunction* Find(const TCHAR* Name) const
 		{
@@ -773,6 +800,61 @@ USkeletalMesh* FMantleEmoteRetarget::FindSourceMesh(USkeleton* Skeleton)
 	return nullptr;
 }
 
+namespace MantleEmoteRetargetPrivate
+{
+	/** The rest-hands match on an opened or made FRetargeterCopy (FMantleEmoteRetarget::MakeRestHandsCopy); what it changed. */
+	FString MatchHands(const FRetargeterCopy& Copy, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target)
+	{
+		FString OutNote;
+		double Largest = 0.0;
+		const TMap<FName, FQuat> Offsets = FMantleEmoteRetarget::MatchRestRotations(Source, Copy.OffsetsOf(Source, FRetargeterCopy::Source), Target,
+			Copy.OffsetsOf(Target, FRetargeterCopy::Target), FMantleEmoteRetarget::HandBones(), &Largest);
+		for (const TPair<FName, FQuat>& Offset : Offsets)
+		{
+			Copy.SetTargetOffset(Offset.Key, Offset.Value);
+		}
+		OutNote = FString::Printf(TEXT("%d hand and finger bones of the target retarget pose given the source's rest shape (largest change %.1f degrees)"),
+			Offsets.Num(), Largest);
+		// The finger chains joint for joint (the default, Interpolated, samples the source finger by length, so each joint of
+		// a finger with other proportions gets a mix of two joints' bend). A source without metacarpals (the UE4 Mannequin)
+		// gives the target's metacarpal chains nothing to follow: the shipped retargeters map them to the whole finger, and a
+		// one-bone chain takes the fingertip's bend, which folds the palm (40 degrees and more in the trials). They hold the
+		// matched rest pose instead.
+		const bool bSourceMetacarpals = Source.FindRawBoneIndex(FName(TEXT("index_metacarpal_l"))) != INDEX_NONE;
+		const FString Mode(TEXT("OneToOne"));
+		int32 Fingers = 0;
+		int32 Held = 0;
+		Copy.EditFKChains([](const FName Chain)
+		{
+			const FString Name = Chain.ToString();
+			return Name.Contains(TEXT("Thumb")) || Name.Contains(TEXT("Index")) || Name.Contains(TEXT("Middle")) || Name.Contains(TEXT("Ring")) || Name.Contains(TEXT("Pinky"));
+		}, [&](const UScriptStruct& Chain, uint8* Element)
+		{
+			const FNameProperty* ChainName = CastField<FNameProperty>(Chain.FindPropertyByName(TEXT("TargetChainName")));
+			const bool bMetacarpal = ChainName && ChainName->GetPropertyValue_InContainer(Element).ToString().Contains(TEXT("Metacarpal"));
+			if (bMetacarpal && !bSourceMetacarpals)
+			{
+				if (const FBoolProperty* EnableFK = CastField<FBoolProperty>(Chain.FindPropertyByName(TEXT("EnableFK"))))
+				{
+					EnableFK->SetPropertyValue_InContainer(Element, false);
+					++Held;
+				}
+				return;
+			}
+			const FEnumProperty* RotationMode = CastField<FEnumProperty>(Chain.FindPropertyByName(TEXT("RotationMode")));
+			const int64 Value = RotationMode ? RotationMode->GetEnum()->GetValueByNameString(Mode) : INDEX_NONE;
+			if (Value != INDEX_NONE)
+			{
+				RotationMode->GetUnderlyingProperty()->SetIntPropertyValue(RotationMode->ContainerPtrToValuePtr<void>(Element), Value);
+				++Fingers;
+			}
+		});
+		OutNote += FString::Printf(TEXT("; %d finger chains retargeted joint for joint%s"), Fingers,
+			Held > 0 ? *FString::Printf(TEXT(", %d metacarpal chains held at the rest pose (the source has no metacarpals)"), Held) : TEXT(""));
+		return OutNote;
+	}
+}
+
 UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote,
 	FString& OutError)
 {
@@ -782,52 +864,21 @@ UObject* FMantleEmoteRetarget::MakeRestHandsCopy(UObject* Retargeter, const FRef
 	{
 		return nullptr;
 	}
-	double Largest = 0.0;
-	const TMap<FName, FQuat> Offsets = MatchRestRotations(Source, Copy.OffsetsOf(Source, FRetargeterCopy::Source), Target,
-		Copy.OffsetsOf(Target, FRetargeterCopy::Target), HandBones(), &Largest);
-	for (const TPair<FName, FQuat>& Offset : Offsets)
-	{
-		Copy.SetTargetOffset(Offset.Key, Offset.Value);
-	}
-	OutNote = FString::Printf(TEXT("%d hand and finger bones of the target retarget pose given the source's rest shape (largest change %.1f degrees)"),
-		Offsets.Num(), Largest);
-	// The finger chains joint for joint (the default, Interpolated, samples the source finger by length, so each joint of
-	// a finger with other proportions gets a mix of two joints' bend). A source without metacarpals (the UE4 Mannequin)
-	// gives the target's metacarpal chains nothing to follow: the shipped retargeters map them to the whole finger, and a
-	// one-bone chain takes the fingertip's bend, which folds the palm (40 degrees and more in the trials). They hold the
-	// matched rest pose instead.
-	const bool bSourceMetacarpals = Source.FindRawBoneIndex(FName(TEXT("index_metacarpal_l"))) != INDEX_NONE;
-	const FString Mode(TEXT("OneToOne"));
-	int32 Fingers = 0;
-	int32 Held = 0;
-	Copy.EditFKChains([](const FName Chain)
-	{
-		const FString Name = Chain.ToString();
-		return Name.Contains(TEXT("Thumb")) || Name.Contains(TEXT("Index")) || Name.Contains(TEXT("Middle")) || Name.Contains(TEXT("Ring")) || Name.Contains(TEXT("Pinky"));
-	}, [&](const UScriptStruct& Chain, uint8* Element)
-	{
-		const FNameProperty* ChainName = CastField<FNameProperty>(Chain.FindPropertyByName(TEXT("TargetChainName")));
-		const bool bMetacarpal = ChainName && ChainName->GetPropertyValue_InContainer(Element).ToString().Contains(TEXT("Metacarpal"));
-		if (bMetacarpal && !bSourceMetacarpals)
-		{
-			if (const FBoolProperty* EnableFK = CastField<FBoolProperty>(Chain.FindPropertyByName(TEXT("EnableFK"))))
-			{
-				EnableFK->SetPropertyValue_InContainer(Element, false);
-				++Held;
-			}
-			return;
-		}
-		const FEnumProperty* RotationMode = CastField<FEnumProperty>(Chain.FindPropertyByName(TEXT("RotationMode")));
-		const int64 Value = RotationMode ? RotationMode->GetEnum()->GetValueByNameString(Mode) : INDEX_NONE;
-		if (Value != INDEX_NONE)
-		{
-			RotationMode->GetUnderlyingProperty()->SetIntPropertyValue(RotationMode->ContainerPtrToValuePtr<void>(Element), Value);
-			++Fingers;
-		}
-	});
-	OutNote += FString::Printf(TEXT("; %d finger chains retargeted joint for joint%s"), Fingers,
-		Held > 0 ? *FString::Printf(TEXT(", %d metacarpal chains held at the rest pose (the source has no metacarpals)"), Held) : TEXT(""));
+	OutNote = MatchHands(Copy, Source, Target);
 	return Copy.Detach();
+}
+
+bool FMantleEmoteRetarget::MatchRestHandsInPlace(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote,
+	FString& OutError)
+{
+	using namespace MantleEmoteRetargetPrivate;
+	FRetargeterCopy Asset;
+	if (!Asset.Open(Retargeter, OutError))
+	{
+		return false;
+	}
+	OutNote = MatchHands(Asset, Source, Target);
+	return true;
 }
 
 void FMantleEmoteRetarget::ReleaseRestHandsCopy(UObject* Copy)
