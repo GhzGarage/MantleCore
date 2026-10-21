@@ -850,30 +850,7 @@ FText SMantleWeaponBuilder::SummaryText() const
 			C.bOverrideUseSeconds ? *FString::Printf(TEXT("%.1f seconds"), C.UseSeconds) : TEXT("the animation's own length"), C.CooldownSeconds,
 			C.bMoveWhileUsing ? TEXT("can walk while using") : TEXT("stands still while using")));
 		return FText::FromString(FString::Join(Lines, TEXT("
-")));
-	}
-	Lines.Add(FString::Printf(TEXT("Attack: %s; resource: %s"), *DeliveryLabel(SourceDelivery, IsFirearm(Working->Hold)).ToString(), *ResourceLabel(SourceResource).ToString()));
-	Lines.Add(FString::Printf(TEXT("Damage: %.0f; attack rate: %.1f per second"), T.Damage, T.ShotsPerSecond));
-	if (Resource == EMantleWeaponDocResource::Magazine || Resource == EMantleWeaponDocResource::Quiver)
-	{
-		Lines.Add(FString::Printf(TEXT("Ready: %d; extra: %d; loading time: %.1f seconds"), T.MagazineSize, T.SpareAmmo, T.ReloadSeconds));
-	}
-	if (Resource == EMantleWeaponDocResource::Charges)
-	{
-		Lines.Add(FString::Printf(TEXT("Charges: %d; one comes back every %.1f seconds"), Working->Charges.Count, Working->Charges.RefillSeconds));
-	}
-	if (Delivery == EMantleWeaponDocDelivery::Beam)
-	{
-		Lines.Add(FString::Printf(TEXT("Beam: %.0f damage per second; %.1f seconds maximum; %.0f cm wide"), Working->Beam.DamagePerSecond, Working->Beam.MaxSeconds, Working->Beam.Radius * 2.f));
-		if (Working->Beam.Range > 0.f)
-		{
-			Lines.Add(FString::Printf(TEXT("Beam reach: %.0f cm"), Working->Beam.Range));
-		}
-	}
-	const bool bSpellsBesideBeam = Working->Hold == EMantleWeaponHold::Staff && Delivery == EMantleWeaponDocDelivery::Beam && Working->bSpellsBesideBeam;
-	if (bSpellsBesideBeam)
-	{
-		Lines.Add(TEXT("Also throws spells: a tap casts, holding the button is the beam; aim to cast aimed, and aim and hold to charge"));
+");
 	}
 	if (Delivery == EMantleWeaponDocDelivery::Projectile || bSpellsBesideBeam)
 	{
