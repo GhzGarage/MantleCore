@@ -240,6 +240,115 @@ namespace MantleEmoteCheckPrivate
 		return Out;
 	}
 
+	/**
+	 * The wrists, every frame, the source's against the body's: the bend (the forearm's line, lower arm to hand, against the
+	 * hand's, hand to middle finger root) and the hand's twist about the forearm, each from its own reference pose; and on
+	 * the body, every bone under the lower arm that is not the hand (MetaHuman's lowerarm twist and wrist correctives), its
+	 * twist about the forearm from its reference pose. A forearm that does not share the hand's twist wrings the wrist.
+	 */
+	void SayWrists(TConstArrayView<TArray<FTransform>> SourcePoses, const FReferenceSkeleton& Source, TConstArrayView<TArray<FTransform>> Shown,
+		const FReferenceSkeleton& Body, const FString& File, TFunctionRef<void(const FString&)> Say)
+	{
+		auto RefPose = [](const FReferenceSkeleton& Skeleton)
+		{
+			TArray<FTransform> Out;
+			for (int32 Bone = 0; Bone < Skeleton.GetRawBoneNum(); ++Bone)
+			{
+				const int32 Parent = Skeleton.GetRawParentIndex(Bone);
+				Out.Add(Parent == INDEX_NONE ? Skeleton.GetRawRefBonePose()[Bone] : Skeleton.GetRawRefBonePose()[Bone] * Out[Parent]);
+			}
+			return Out;
+		};
+		const TArray<FTransform> SourceRef = RefPose(Source);
+		const TArray<FTransform> BodyRef = RefPose(Body);
+		// The bend at the wrist (degrees) and the twist (degrees) of Bone about the forearm, relative to the lower arm.
+		auto Bend = [](const TArray<FTransform>& Pose, const int32 Lower, const int32 Hand, const int32 Middle)
+		{
+			const FVector Forearm = (Pose[Hand].GetLocation() - Pose[Lower].GetLocation()).GetSafeNormal();
+			const FVector Palm = (Pose[Middle].GetLocation() - Pose[Hand].GetLocation()).GetSafeNormal();
+			return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Forearm | Palm, -1.0, 1.0)));
+		};
+		auto Twist = [](const TArray<FTransform>& Pose, const int32 Lower, const int32 Hand, const int32 Bone)
+		{
+			const FVector Axis = (Pose[Hand].GetLocation() - Pose[Lower].GetLocation()).GetSafeNormal();
+			const FQuat Relative = (Pose[Bone].GetRotation() * Pose[Lower].GetRotation().Inverse()).GetNormalized();
+			const double Along = FVector(Relative.X, Relative.Y, Relative.Z) | Axis;
+			return FMath::RadiansToDegrees(2.0 * FMath::Atan2(Along, static_cast<double>(Relative.W)));
+		};
+		auto Wrap = [](double Degrees) { return FMath::UnwindDegrees(Degrees); };
+		TArray<FString> Rows = { TEXT("frame,side,source_bend,body_bend,source_twist,body_twist,twist_bones") };
+		for (const TCHAR* Side : { TEXT("r"), TEXT("l") })
+		{
+			auto Find = [Side](const FReferenceSkeleton& Skeleton, const TCHAR* Stem) { return Skeleton.FindRawBoneIndex(FName(*FString::Printf(TEXT("%s_%s"), Stem, Side))); };
+			const int32 SL = Find(Source, TEXT("lowerarm")), SH = Find(Source, TEXT("hand")), SM = Find(Source, TEXT("middle_01"));
+			const int32 BL = Find(Body, TEXT("lowerarm")), BH = Find(Body, TEXT("hand")), BM = Find(Body, TEXT("middle_01"));
+			if (SL == INDEX_NONE || SH == INDEX_NONE || SM == INDEX_NONE || BL == INDEX_NONE || BH == INDEX_NONE || BM == INDEX_NONE)
+			{
+				continue;
+			}
+			// The body's other bones under the lower arm (twist and wrist correctives), not the hand's own branch.
+			TArray<int32> Extras;
+			for (int32 Bone = 0; Bone < Body.GetRawBoneNum(); ++Bone)
+			{
+				int32 Up = Body.GetRawParentIndex(Bone);
+				bool bUnderLower = false;
+				bool bUnderHand = Bone == BH;
+				for (int32 Walk = Bone; Walk != INDEX_NONE; Walk = Body.GetRawParentIndex(Walk))
+				{
+					bUnderHand = bUnderHand || Walk == BH;
+					bUnderLower = bUnderLower || (Walk == BL && Walk != Bone);
+				}
+				if (bUnderLower && !bUnderHand && Up != INDEX_NONE)
+				{
+					Extras.Add(Bone);
+				}
+			}
+			const int32 Frames = FMath::Min(SourcePoses.Num(), Shown.Num());
+			double SourceBend = 0.0, BodyBend = 0.0, BendGap = 0.0, BendGapWorst = 0.0, SourceTwist = 0.0, BodyTwist = 0.0, TwistGap = 0.0, TwistGapWorst = 0.0;
+			int32 WorstFrame = 0;
+			TArray<double> ExtraTwist;
+			ExtraTwist.Init(0.0, Extras.Num());
+			const double SourceBendRef = Bend(SourceRef, SL, SH, SM), BodyBendRef = Bend(BodyRef, BL, BH, BM);
+			const double SourceTwistRef = Twist(SourceRef, SL, SH, SH), BodyTwistRef = Twist(BodyRef, BL, BH, BH);
+			for (int32 Frame = 0; Frame < Frames; ++Frame)
+			{
+				const double SB = Bend(SourcePoses[Frame], SL, SH, SM), BB = Bend(Shown[Frame], BL, BH, BM);
+				const double ST = Wrap(Twist(SourcePoses[Frame], SL, SH, SH) - SourceTwistRef), BT = Wrap(Twist(Shown[Frame], BL, BH, BH) - BodyTwistRef);
+				SourceBend += SB;
+				BodyBend += BB;
+				const double Gap = FMath::Abs((BB - BodyBendRef) - (SB - SourceBendRef));
+				BendGap += Gap;
+				if (Gap > BendGapWorst)
+				{
+					BendGapWorst = Gap;
+					WorstFrame = Frame;
+				}
+				SourceTwist += FMath::Abs(ST);
+				BodyTwist += FMath::Abs(BT);
+				TwistGap += FMath::Abs(Wrap(BT - ST));
+				TwistGapWorst = FMath::Max(TwistGapWorst, FMath::Abs(Wrap(BT - ST)));
+				FString ExtraText;
+				for (int32 Index = 0; Index < Extras.Num(); ++Index)
+				{
+					const double ET = Wrap(Twist(Shown[Frame], BL, BH, Extras[Index]) - Twist(BodyRef, BL, BH, Extras[Index]));
+					ExtraTwist[Index] += FMath::Abs(ET);
+					ExtraText += FString::Printf(TEXT("%s%s=%.1f"), ExtraText.IsEmpty() ? TEXT("") : TEXT(" "), *Body.GetBoneName(Extras[Index]).ToString(), ET);
+				}
+				Rows.Add(FString::Printf(TEXT("%d,%s,%.2f,%.2f,%.2f,%.2f,%s"), Frame, Side, SB, BB, ST, BT, *ExtraText));
+			}
+			const double N = FMath::Max(1, Frames);
+			TArray<FString> ExtraSummary;
+			for (int32 Index = 0; Index < Extras.Num(); ++Index)
+			{
+				ExtraSummary.Add(FString::Printf(TEXT("%s %.1f"), *Body.GetBoneName(Extras[Index]).ToString(), ExtraTwist[Index] / N));
+			}
+			Say(FString::Printf(TEXT("Wrist %s as shown: bend %.1f degrees on average (source %.1f; rest %.1f, source rest %.1f), off the source's bend from rest by %.1f on average, %.1f at worst (frame %d); hand twist about the forearm %.1f (source %.1f), off by %.1f on average, %.1f at worst; forearm bones' twist (mean |deg| from rest): %s"),
+				Side, BodyBend / N, SourceBend / N, BodyBendRef, SourceBendRef, BendGap / N, BendGapWorst, WorstFrame, BodyTwist / N, SourceTwist / N, TwistGap / N, TwistGapWorst,
+				ExtraSummary.IsEmpty() ? TEXT("none") : *FString::Join(ExtraSummary, TEXT(", "))));
+		}
+		FFileHelper::SaveStringArrayToFile(Rows, *File, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	}
+
 	/** Measures, part means and a CSV of a FMantleBodyMatch. */
 	void SaveBody(const FMantleBodyMatch& Match, const FString& File)
 	{
@@ -860,13 +969,7 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 		FFileHelper::SaveStringArrayToFile(Rows, *FPaths::Combine(Directory, Label + TEXT("_hands.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	}
 
-	// The sheet: the clip on a standard body, posed as the client poses it.
-	FString WhyNot;
-	if (!FMantleCosmeticThumbnail::CanCapture(&WhyNot))
-	{
-		Say(FString::Printf(TEXT("Sheet: none, nothing can render (%s)"), *WhyNot));
-		return true;
-	}
+	// The body players see (measured below without rendering; the sheet after it needs a renderer).
 	USkeletalMesh* BodyMesh = nullptr;
 	USkeletalMesh* FaceMesh = nullptr;
 	FString BodyDescribe;
@@ -931,7 +1034,15 @@ bool FMantleEmoteCheck::Run(UAnimSequence* Sequence, const FString& Directory, c
 			}
 		}
 		FFileHelper::SaveStringArrayToFile(Grips, *FPaths::Combine(Directory, Label + TEXT("_grips_shown.csv")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		SayWrists(SourcePoses, HandsSource->GetRefSkeleton(), Shown, ShownBones, FPaths::Combine(Directory, Label + TEXT("_wrists_shown.csv")), Say);
 		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	}
+	// The sheet: the clip on a standard body, posed as the client poses it.
+	FString WhyNot;
+	if (!FMantleCosmeticThumbnail::CanCapture(&WhyNot))
+	{
+		Say(FString::Printf(TEXT("Sheet: none, nothing can render (%s)"), *WhyNot));
+		return true;
 	}
 	const FString SheetFile = FPaths::Combine(Directory, Label + TEXT("_sheet.png"));
 	FString Problems;
