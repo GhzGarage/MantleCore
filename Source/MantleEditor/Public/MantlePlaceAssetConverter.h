@@ -871,6 +871,14 @@ public:
 	static FString MeshCacheSalt(const FMantlePlaceAssetLimits& Limits, const UStaticMesh& Mesh, int32 FromLOD, const FString& ReducedTag);
 
 	/**
+	 * #628: makes a mesh's LOD screen sizes ones the cook accepts, on the export's copy only (never the asset). Values that
+	 * are already valid are kept: LOD0 is limited to 1 (a size above 1 means nothing more than "always"), and each later
+	 * LOD must be finite, above 0 and strictly below the one before. One that is not (a repeat, a rise, 0, NaN) takes half
+	 * of the one before it, and the LODs after it are checked against that. Returns true when anything changed.
+	 */
+	static bool RepairLODScreenSizes(TArray<float>& InOutSizes);
+
+	/**
 	 * Maps materials[Index] of a flattened GLB to the material document, preparing its textures
 	 * (added to OutSet) and reporting what did not carry over. MaterialName names the Unreal
 	 * material in messages. bSourceTexturesReported: the material's oversized source textures

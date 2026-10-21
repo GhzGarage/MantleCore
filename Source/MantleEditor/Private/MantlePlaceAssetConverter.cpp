@@ -2863,6 +2863,26 @@ void FMantlePlaceAssetConverter::ConvertDependencyStep(const FMantlePlaceDepende
 	}
 }
 
+bool FMantlePlaceAssetConverter::RepairLODScreenSizes(TArray<float>& InOutSizes)
+{
+	bool bChanged = false;
+	for (int32 Index = 0; Index < InOutSizes.Num(); ++Index)
+	{
+		float& Size = InOutSizes[Index];
+		const float Before = Size;
+		if (Index == 0)
+		{
+			Size = FMath::IsFinite(Size) && Size > 0.0f ? FMath::Min(Size, 1.0f) : 1.0f;
+		}
+		else if (!FMath::IsFinite(Size) || !(Size > 0.0f) || !(Size < InOutSizes[Index - 1]))
+		{
+			Size = InOutSizes[Index - 1] * 0.5f;
+		}
+		bChanged |= Size != Before;
+	}
+	return bChanged;
+}
+
 FString FMantlePlaceAssetConverter::MeshCacheSalt(const FMantlePlaceAssetLimits& Limits, const UStaticMesh& Mesh, int32 FromLOD, const FString& ReducedTag)
 {
 	// The LOD and collision caps change what is written, so they are part of the key.
@@ -3111,20 +3131,16 @@ bool FMantlePlaceAssetConverter::ConvertMesh(UStaticMesh* Mesh, FMantlePlaceAsse
 		{
 			Extras.ScreenSizes.Add(RenderData->ScreenSize[FirstLOD + LODIndex].Default);
 		}
-		bool bOrdered = true;
-		for (int32 LODIndex = 0; LODIndex < Extras.ScreenSizes.Num(); ++LODIndex)
+		const TArray<float> Original = Extras.ScreenSizes;
+		if (FMantlePlaceAssetConverter::RepairLODScreenSizes(Extras.ScreenSizes))
 		{
-			const float Size = Extras.ScreenSizes[LODIndex];
-			bOrdered = bOrdered && FMath::IsFinite(Size) && Size > 0.0f && Size <= FMantleStaticMeshReader::MaxScreenSize
-				&& (LODIndex == 0 || Size < Extras.ScreenSizes[LODIndex - 1]);
-		}
-		if (!bOrdered)
-		{
-			MeshIssues.Add(WarningIssue(FString::Printf(TEXT("Mesh '%s': its LOD screen sizes (%s) do not each fall below the one before, so only LOD0 was published."),
-				*Mesh->GetName(), *FString::JoinBy(Extras.ScreenSizes, TEXT(", "), [](const float Size) { return FString::SanitizeFloat(Size); })),
-				TEXT("It still publishes. Set the LOD screen sizes in the mesh editor so each LOD's is smaller than the one before.")));
-			LODs.SetNum(1);
-			Extras.ScreenSizes.Reset();
+			const auto Join = [](const TArray<float>& Sizes)
+			{
+				return FString::JoinBy(Sizes, TEXT(", "), [](const float Size) { return FString::SanitizeFloat(Size); });
+			};
+			MeshIssues.Add(WarningIssue(FString::Printf(TEXT("Mesh '%s': its LOD screen sizes (%s) were not each below the one before, so they were published as (%s)."),
+				*Mesh->GetName(), *Join(Original), *Join(Extras.ScreenSizes)),
+				TEXT("The mesh asset is unchanged. Set the LOD screen sizes in the mesh editor so each LOD's is smaller than the one before to publish your own.")));
 		}
 	}
 
