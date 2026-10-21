@@ -89,7 +89,7 @@ struct FMantleEmoteRetarget
 	static UObject* MakeRestHandsCopy(UObject* Retargeter, const FReferenceSkeleton& Source, const FReferenceSkeleton& Target, FString& OutNote, FString& OutError,
 		TConstArrayView<FName> Bones = {}, const FString& FingerRotationMode = FString());
 
-	/** TRIAL (#108 follow-up): the bones of comma-separated sets hands, spine (pelvis to head), arms (clavicle to lower arm), legs (thigh to ball). */
+	/** TRIAL (#108 follow-up): the bones of comma-separated sets hands, spine (pelvis to head), upper (spine_01 to head), arms (clavicle to lower arm), legs (thigh to ball), feet (foot and ball). */
 	static TArray<FName> BodyBones(const FString& Sets);
 	static void ReleaseRestHandsCopy(UObject* Copy);
 

@@ -466,6 +466,23 @@ TArray<FName> FMantleEmoteRetarget::BodyBones(const FString& Sets)
 			Out.Append(HandBones());
 			continue;
 		}
+		if (Set == TEXT("upper"))
+		{
+			for (const TCHAR* Bone : { TEXT("spine_01"), TEXT("spine_02"), TEXT("spine_03"), TEXT("spine_04"), TEXT("spine_05"), TEXT("neck_01"), TEXT("neck_02"),
+				TEXT("head") })
+			{
+				Out.Add(FName(Bone));
+			}
+			continue;
+		}
+		if (Set == TEXT("feet"))
+		{
+			for (const TCHAR* Bone : { TEXT("foot_l"), TEXT("ball_l"), TEXT("foot_r"), TEXT("ball_r") })
+			{
+				Out.Add(FName(Bone));
+			}
+			continue;
+		}
 		if (Set == TEXT("spine"))
 		{
 			for (const TCHAR* Bone : { TEXT("pelvis"), TEXT("spine_01"), TEXT("spine_02"), TEXT("spine_03"), TEXT("spine_04"), TEXT("spine_05"), TEXT("neck_01"),
