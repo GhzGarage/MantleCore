@@ -318,9 +318,9 @@ namespace MantleEmoteRetargetPrivate
 			return Controller ? Controller->GetClass()->FindFunctionByName(Name) : nullptr;
 		}
 
-		static void Call(UObject* Target, UFunction* Function, TFunctionRef<void(UFunction*, uint8*)> Set, TFunctionRef<void(UFunction*, uint8*)> Read)
+		static void Call(UObject* Object, UFunction* Function, TFunctionRef<void(UFunction*, uint8*)> Set, TFunctionRef<void(UFunction*, uint8*)> Read)
 		{
-			if (!Target || !Function)
+			if (!Object || !Function)
 			{
 				return;
 			}
@@ -331,7 +331,7 @@ namespace MantleEmoteRetargetPrivate
 				It->InitializeValue_InContainer(Params);
 			}
 			Set(Function, Params);
-			Target->ProcessEvent(Function, Params);
+			Object->ProcessEvent(Function, Params);
 			Read(Function, Params);
 			for (TFieldIterator<FProperty> It(Function); It && It->HasAnyPropertyFlags(CPF_Parm); ++It)
 			{
