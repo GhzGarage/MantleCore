@@ -5,6 +5,8 @@
 #include "MantleCosmeticPackage.h"
 #include "MantleCosmeticThumbnail.h"
 #include "MantleOverlayChecks.h"
+#include "MantleOverlayBake.h"
+#include "SMantleOverlayPlaceViewport.h"
 #include "MantleReferenceBodies.h"
 #include "MantleRuntimeTextureBuilder.h"
 
@@ -17,6 +19,7 @@
 #include "MantleRuntime.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 
 bool FMantleOverlayWorn::Make(const FMantleCosmeticPackage& Built, const FString& Slot, const FMantleAvatarContract& Contract, USkeletalMesh* PickedBody,
 	USkeletalMesh* PickedFace, FMantleOverlayWorn& Out, FString& OutRefusal)
@@ -221,6 +224,99 @@ namespace MantleOverlayWornDevCommands
 			FPlatformMisc::RequestExit(false);
 		}
 	}
+
+	/**
+	 * #54: a placed picture through the panel's own export (Build): the picture put on the reference body or face at the default chest/face spot moved by
+	 * (OffsetX, OffsetZ) cm, then the baked mask and the Automatic thumbnail (the avatar wearing it) as PNGs in Directory. Uploads nothing.
+	 */
+	void RunPlacedSample(const TArray<FString>& Args)
+	{
+		if (Args.Num() < 5)
+		{
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED usage: Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Exit]"));
+			return;
+		}
+		IFileManager::Get().MakeDirectory(*Args[0], true);
+		// Exit however this ends, so an unattended run never leaves an editor behind.
+		ON_SCOPE_EXIT
+		{
+			if (Args.ContainsByPredicate([](const FString& Arg) { return Arg.Equals(TEXT("Exit"), ESearchCase::IgnoreCase); }))
+			{
+				FPlatformMisc::RequestExit(false);
+			}
+		};
+		FString Error;
+		const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&Error);
+		if (!Contract)
+		{
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED failed: %s"), *Error);
+			return;
+		}
+		FMantleCosmeticDraft Draft;
+		Draft.Class = EMantleCosmeticClass::Overlay;
+		Draft.Slot = Args[2];
+		Draft.Name = TEXT("Placed sample");
+		Draft.bPublic = false;
+		Draft.bOverlayPlaced = true;
+		Draft.OverlayPictureFile = Args[1];
+		Draft.OverlayPlacement.WidthCm = Args.Num() > 5 && Args[5].IsNumeric() ? FCString::Atof(*Args[5]) : 14.f;
+		if (Args.Num() > 6 && Args[6].IsNumeric())
+		{
+			Draft.OverlayPlacement.DepthCm = FCString::Atof(*Args[6]);
+		}
+		Draft.Thumbnail.Mode = EMantleThumbnailMode::Automatic;
+		// The same default spot the panel starts on, moved by the offset.
+		USkeletalMesh* Mesh = FMantleOverlayChecks::IsFaceSlot(Draft.Slot) ? FMantleReferenceBodies::GetFace() : nullptr;
+		if (!Mesh && !FMantleOverlayChecks::IsFaceSlot(Draft.Slot))
+		{
+			const TArray<USkeletalMesh*> References = FMantleReferenceBodies::FindBodies(*Contract, nullptr);
+			Mesh = References.IsEmpty() ? nullptr : References[0];
+		}
+		TArray<FMantleOverlayBake::FTriangle> Triangles;
+		FTransform Spot;
+		if (!Mesh || !FMantleOverlayBake::ReadMesh(*Mesh, Triangles, Error)
+			|| !MantleOverlayPlaceMath::DefaultPlacement(Triangles, Mesh->GetBounds().GetBox(), FVector(FCString::Atof(*Args[3]), 0.0, FCString::Atof(*Args[4])), Spot))
+		{
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED no spot on the skin: %s"), *Error);
+			if (Mesh)
+			{
+				// Where the skin is along the row the offset asked for, so the next try can aim.
+				const FBox Box = Mesh->GetBounds().GetBox();
+				const double Z = Box.Min.Z + Box.GetSize().Z * 0.72 + FCString::Atof(*Args[4]);
+				for (double X = -60.0; X <= 60.0; X += 4.0)
+				{
+					FVector Point, Normal;
+					if (MantleOverlayPlaceMath::RayOnTriangles(Triangles, FVector(X, 500.0, Z), FVector(0.0, -1.0, 0.0), Point, Normal))
+					{
+						UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED row z=%.0f x=%.0f hit y=%.1f normal=(%.2f,%.2f,%.2f)"), Z, X, Point.Y, Normal.X, Normal.Y, Normal.Z);
+					}
+				}
+			}
+			return;
+		}
+		Draft.OverlayPlacement.Transform = Spot;
+		const FMantleCosmeticPackage Package = FMantleCosmeticExport::Build(Draft, *Contract);
+		for (const FMantleCosmeticIssue& Issue : Package.Issues)
+		{
+			UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED issue: %s"), *Issue.Message);
+		}
+		const auto Save = [&Args](const FMantleCosmeticPackage& From, const FString& Key, const TCHAR* Name)
+		{
+			const FMantleCosmeticUploadAsset* Asset = Key.IsEmpty() ? nullptr : From.FindAsset(Key);
+			const FString File = FPaths::Combine(Args[0], Name);
+			const bool bSaved = Asset && FFileHelper::SaveArrayToFile(Asset->Bytes, *File);
+			UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED %s %s"), *File, bSaved ? TEXT("saved") : TEXT("NOT saved"));
+		};
+		Save(Package, Package.MaskKey, TEXT("placed_mask.png"));
+		Save(Package, Package.OverlayNormalKey, TEXT("placed_normal.png"));
+		Save(Package, Package.ThumbnailKey, TEXT("placed_thumbnail.png"));
+		UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED done errors=%d"), Package.HasErrors() ? 1 : 0);
+	}
+
+	FAutoConsoleCommand OverlayPlacedCommand(
+		TEXT("Mantle.Dev.OverlayPlacedSample"),
+		TEXT("Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Exit]: a placed picture through the panel's export; the baked mask, normal map and Automatic thumbnail as PNGs. Uploads nothing."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&RunPlacedSample));
 
 	FAutoConsoleCommand OverlaySamplesCommand(
 		TEXT("Mantle.Dev.OverlayThumbnailSamples"),

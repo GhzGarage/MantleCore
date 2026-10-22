@@ -17,6 +17,7 @@
 #include "MantleEmoteCheck.h"
 #include "MantleModelThumbnail.h"
 #include "MantleOverlayWorn.h"
+#include "MantleReferenceBodies.h"
 #include "MantleEmoteRetarget.h"
 #include "MantleGarmentFitter.h"
 #include "MantleHairCards.h"
@@ -2255,6 +2256,62 @@ namespace MantleCosmeticExportPrivate
 	}
 
 	/**
+	 * #54: bakes the placed picture into the overlay's mask (BGRA, FMantleOverlayBake::Size square) and, on a scar slot, its normal map.
+	 * The mesh is the draft's placement mesh, else Mantle's reference body or face. False with the reason added to Issues.
+	 */
+	bool BakePlacedOverlay(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract, TArray<FColor>& OutMask, FIntPoint& OutSize, TArray<FColor>& OutNormal,
+		TArray<FMantleCosmeticIssue>& Issues)
+	{
+		TArray<FColor> PicturePixels;
+		FIntPoint PictureSize = FIntPoint::ZeroValue;
+		if (!ReadOverlayImage(Draft.OverlayPicture.Get(), Draft.OverlayPictureFile, TEXT("The picture"), PicturePixels, PictureSize, Issues))
+		{
+			return false;
+		}
+		const TArray<uint8> Strength = FMantleOverlayBake::PictureStrength(PicturePixels, PictureSize.X, PictureSize.Y);
+		if (Strength.IsEmpty())
+		{
+			Issues.Add(FMantleCosmeticChecks::Error(TEXT("the picture to place is empty.")));
+			return false;
+		}
+		USkeletalMesh* Mesh = Draft.OverlayPlaceMesh.Get();
+		if (!Mesh)
+		{
+			// Not picked: Mantle's reference body or face, as the Preview falls back.
+			if (FMantleOverlayChecks::IsFaceSlot(Draft.Slot))
+			{
+				Mesh = FMantleReferenceBodies::GetFace();
+			}
+			else
+			{
+				const TArray<USkeletalMesh*> References = FMantleReferenceBodies::FindBodies(Contract, nullptr);
+				Mesh = References.IsEmpty() ? nullptr : References[0];
+			}
+		}
+		if (!Mesh)
+		{
+			Issues.Add(FMantleCosmeticChecks::Error(TEXT("there is no converted MetaHuman body or face to place the picture on."),
+				TEXT("Open Place it and choose the body or face to place it on.")));
+			return false;
+		}
+		TArray<FMantleOverlayBake::FTriangle> Triangles;
+		FString Error;
+		if (!FMantleOverlayBake::ReadMesh(*Mesh, Triangles, Error))
+		{
+			Issues.Add(FMantleCosmeticChecks::Error(FString::Printf(TEXT("the picture could not be placed: %s"), *Error)));
+			return false;
+		}
+		TArray<uint8> Mask;
+		TArray<FColor> Normal;
+		const bool bScar = FMantleOverlayChecks::IsScarSlot(Draft.Slot);
+		FMantleOverlayBake::Bake(Triangles, Strength, PictureSize.X, PictureSize.Y, Draft.OverlayPlacement, Mask, bScar ? &Normal : nullptr);
+		OutMask = FMantleOverlayBake::MaskToPixels(Mask);
+		OutNormal = MoveTemp(Normal);
+		OutSize = FIntPoint(FMantleOverlayBake::Size, FMantleOverlayBake::Size);
+		return true;
+	}
+
+	/**
 	 * The package for a scar or tattoo overlay. The mask (and a scar's normal map) are read, checked, and added as
 	 * texture assets (the mask as role data, the normal map as role normal); the thumbnail is the mask drawn light on dark. Errors go to Package.Issues.
 	 */
@@ -2268,38 +2325,54 @@ namespace MantleCosmeticExportPrivate
 			return;
 		}
 		UTexture2D* MaskTexture = Cast<UTexture2D>(Draft.Source.Get());
-		if (Draft.Source.IsValid() && !MaskTexture)
-		{
-			Issues.Add(FMantleCosmeticChecks::Error(TEXT("an overlay's mask is a texture asset or a PNG file."),
-				TEXT("Pick a Texture 2D, or clear the asset and choose a PNG file.")));
-			return;
-		}
-		if (!MaskTexture && Draft.OverlayMaskFile.IsEmpty())
-		{
-			Issues.Add(FMantleCosmeticChecks::Error(TEXT("choose the overlay's mask: a texture asset or a PNG file.")));
-			return;
-		}
 		UTexture2D* NormalTexture = Draft.OverlayNormal.Get();
-		const bool bHasNormal = NormalTexture || !Draft.OverlayNormalFile.IsEmpty();
-		if (!FMantleOverlayChecks::CheckNormalAllowed(Draft.Slot, bHasNormal, Issues))
-		{
-			return;
-		}
-
+		bool bHasNormal = NormalTexture || !Draft.OverlayNormalFile.IsEmpty();
 		TArray<FColor> MaskPixels;
 		FIntPoint MaskSize = FIntPoint::ZeroValue;
-		if (!ReadOverlayImage(MaskTexture, Draft.OverlayMaskFile, TEXT("The mask"), MaskPixels, MaskSize, Issues))
-		{
-			return;
-		}
 		TArray<FColor> NormalPixels;
 		FIntPoint NormalSize = FIntPoint::ZeroValue;
-		const bool bMaskOk = FMantleOverlayChecks::CheckMask(TEXT("The mask"), MaskSize.X, MaskSize.Y, MaskPixels, Issues);
+		bool bMaskOk = false;
 		bool bNormalOk = true;
-		if (bHasNormal)
+		if (Draft.bOverlayPlaced)
 		{
-			bNormalOk = ReadOverlayImage(NormalTexture, Draft.OverlayNormalFile, TEXT("The normal map"), NormalPixels, NormalSize, Issues)
-				&& FMantleOverlayChecks::CheckNormal(TEXT("The normal map"), NormalSize.X, NormalSize.Y, NormalPixels, Issues);
+			// #54: baked from the placed picture, then checked like any other mask.
+			if (!BakePlacedOverlay(Draft, Contract, MaskPixels, MaskSize, NormalPixels, Issues))
+			{
+				return;
+			}
+			bHasNormal = FMantleOverlayChecks::IsScarSlot(Draft.Slot);
+			NormalSize = MaskSize;
+			bMaskOk = FMantleOverlayChecks::CheckMask(TEXT("The mask"), MaskSize.X, MaskSize.Y, MaskPixels, Issues);
+			bNormalOk = !bHasNormal || FMantleOverlayChecks::CheckNormal(TEXT("The normal map"), NormalSize.X, NormalSize.Y, NormalPixels, Issues);
+		}
+		else
+		{
+			if (Draft.Source.IsValid() && !MaskTexture)
+			{
+				Issues.Add(FMantleCosmeticChecks::Error(TEXT("an overlay's mask is a texture asset or a PNG file."),
+					TEXT("Pick a Texture 2D, or clear the asset and choose a PNG file.")));
+				return;
+			}
+			if (!MaskTexture && Draft.OverlayMaskFile.IsEmpty())
+			{
+				Issues.Add(FMantleCosmeticChecks::Error(TEXT("choose the overlay's mask: a texture asset or a PNG file.")));
+				return;
+			}
+			if (!FMantleOverlayChecks::CheckNormalAllowed(Draft.Slot, bHasNormal, Issues))
+			{
+				return;
+			}
+
+			if (!ReadOverlayImage(MaskTexture, Draft.OverlayMaskFile, TEXT("The mask"), MaskPixels, MaskSize, Issues))
+			{
+				return;
+			}
+			bMaskOk = FMantleOverlayChecks::CheckMask(TEXT("The mask"), MaskSize.X, MaskSize.Y, MaskPixels, Issues);
+			if (bHasNormal)
+			{
+				bNormalOk = ReadOverlayImage(NormalTexture, Draft.OverlayNormalFile, TEXT("The normal map"), NormalPixels, NormalSize, Issues)
+					&& FMantleOverlayChecks::CheckNormal(TEXT("The normal map"), NormalSize.X, NormalSize.Y, NormalPixels, Issues);
+			}
 		}
 		if (!bMaskOk || !bNormalOk)
 		{
@@ -5015,11 +5088,15 @@ FMantleCosmeticPackage FMantleCosmeticExport::Build(const FMantleCosmeticDraft& 
 	// A public item says where it came from (the source asset's path and its import file's name, not the
 	// folder it sat in on disk). A native outfit's variants were built from prepared copies of the draft, so this is set
 	// last, from the creator's own source.
-	Package.Provenance = Draft.bPublic ? FMantleProvenance::FromAsset(Draft.Source.Get()) : FMantleProvenance();
-	if (Draft.bPublic && Draft.Class == EMantleCosmeticClass::Overlay && !Draft.Source.IsValid() && !Draft.OverlayMaskFile.IsEmpty())
+	// #54: a placed overlay comes from its picture, not a mask.
+	const bool bPlaced = Draft.Class == EMantleCosmeticClass::Overlay && Draft.bOverlayPlaced;
+	const UObject* ProvenanceAsset = bPlaced ? static_cast<const UObject*>(Draft.OverlayPicture.Get()) : Draft.Source.Get();
+	const FString& ProvenanceFile = bPlaced ? Draft.OverlayPictureFile : Draft.OverlayMaskFile;
+	Package.Provenance = Draft.bPublic ? FMantleProvenance::FromAsset(ProvenanceAsset) : FMantleProvenance();
+	if (Draft.bPublic && Draft.Class == EMantleCosmeticClass::Overlay && !ProvenanceAsset && !ProvenanceFile.IsEmpty())
 	{
 		// A PNG file has no asset path; its file name tells a moderator where the image came from.
-		Package.Provenance.ImportFilename = FPaths::GetCleanFilename(Draft.OverlayMaskFile);
+		Package.Provenance.ImportFilename = FPaths::GetCleanFilename(ProvenanceFile);
 	}
 	return Package;
 }

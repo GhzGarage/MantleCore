@@ -5,6 +5,7 @@
 #include "MantleClothingColorDetect.h"
 #include "MantleCosmeticPackage.h"
 #include "MantleGlbWriter.h"
+#include "MantleOverlayBake.h"
 #include "MantleOutfitSections.h"
 #include "MantleThumbnailChoice.h"
 #include "UObject/WeakObjectPtrTemplates.h"
@@ -146,6 +147,19 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	FString OverlayMaskFile;
 	TWeakObjectPtr<UTexture2D> OverlayNormal;
 	FString OverlayNormalFile;
+
+	/**
+	 * #54, overlays: instead of a painted mask, a flat picture (OverlayPicture, a texture, else the PNG at OverlayPictureFile) placed on
+	 * OverlayPlaceMesh (the converted body or face, else Mantle's reference one) with OverlayPlacement. Set bOverlayPlaced and the export
+	 * bakes the mask (and a scar's normal map) from it (FMantleOverlayBake); the painted mask fields are then ignored.
+	 */
+	bool bOverlayPlaced = false;
+	TWeakObjectPtr<UTexture2D> OverlayPicture;
+	FString OverlayPictureFile;
+	TWeakObjectPtr<USkeletalMesh> OverlayPlaceMesh;
+	FMantleOverlayPlacement OverlayPlacement;
+	/** The picture's height over its width (the panel's outline); the bake reads the picture itself. */
+	float OverlayPlaceAspect = 1.f;
 
 	/** Hair from a groom: which cards entry (FMantleCosmeticExport::ReadGroomCards); INDEX_NONE picks the default. */
 	int32 CardsEntry = INDEX_NONE;

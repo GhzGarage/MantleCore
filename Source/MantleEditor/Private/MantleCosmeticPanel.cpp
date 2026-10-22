@@ -28,6 +28,8 @@
 #include "MantleParametricOutfit.h"
 #include "MantleOverlayChecks.h"
 #include "MantleOverlayWorn.h"
+#include "SMantleOverlayPlaceViewport.h"
+#include "MantleReferenceBodies.h"
 #include "MantleOverlayGuide.h"
 #include "MantleParametricOutfitAuthoring.h"
 #include "MantleReferenceBodies.h"
@@ -73,6 +75,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
@@ -1218,6 +1221,13 @@ void SMantleCosmeticPanel::SetClass(EMantleCosmeticClass Class)
 	Draft.OverlayMaskFile.Reset();
 	Draft.OverlayNormal.Reset();
 	Draft.OverlayNormalFile.Reset();
+	Draft.bOverlayPlaced = false;
+	Draft.OverlayPicture.Reset();
+	Draft.OverlayPictureFile.Reset();
+	Draft.OverlayPlaceMesh.Reset();
+	Draft.OverlayPlacement = FMantleOverlayPlacement();
+	OverlayPlaceStatus.Reset();
+	bOverlayPlaceStarted = false;
 	OverlayPreviewStatus.Reset();
 	bOverlayPreviewFailed = false;
 	Draft.OutfitSourceSize.Reset();
@@ -2245,7 +2255,8 @@ FReply SMantleCosmeticPanel::OnUpload()
 		return FReply::Handled();
 	}
 	const FString ResumeFile = FMantleCosmeticUploadSession::DefaultResumeFile(
-		Draft.Source.IsValid() ? Draft.Source->GetPathName() : Draft.OverlayMaskFile, Draft.Slot);
+		Draft.bOverlayPlaced ? (Draft.OverlayPicture.IsValid() ? Draft.OverlayPicture->GetPathName() : Draft.OverlayPictureFile)
+			: Draft.Source.IsValid() ? Draft.Source->GetPathName() : Draft.OverlayMaskFile, Draft.Slot);
 	Session = MakeShared<FMantleCosmeticUploadSession>(Package.GetValue(), MakeShared<FMantleApiUploadTransport>(), ResumeFile);
 	Session->Start();
 	RegisterActiveTimer(0.1f, FWidgetActiveTimerDelegate::CreateSP(this, &SMantleCosmeticPanel::TickUpload));
@@ -3096,19 +3107,28 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeOverlaySection()
 			];
 	};
 	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+		[
+			MakeOverlayPlaceSection()
+		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
 		[
 			SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			.Visibility_Lambda([this] { return Draft.bOverlayPlaced ? EVisibility::Collapsed : EVisibility::Visible; })
 			.Text(LOCTEXT("OverlayMaskHelp", "The mask is the Asset above (a Texture 2D), or a PNG file chosen here when the Asset is empty. It is read as stored: white where the scar or tattoo shows, black where it does not."))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
 		[
-			FileRow(LOCTEXT("OverlayMaskFile", "Mask PNG"), false)
+			SNew(SBox)
+			.Visibility_Lambda([this] { return Draft.bOverlayPlaced ? EVisibility::Collapsed : EVisibility::Visible; })
+			[
+				FileRow(LOCTEXT("OverlayMaskFile", "Mask PNG"), false)
+			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
 		[
 			SNew(SVerticalBox)
-			.Visibility(ScarOnly)
+			.Visibility_Lambda([this, ScarOnly] { return Draft.bOverlayPlaced ? EVisibility::Collapsed : ScarOnly.Get(); })
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				SNew(STextBlock).Text(LOCTEXT("OverlayNormalAsset", "Scar normal map (optional)"))
@@ -3143,7 +3163,7 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeOverlaySection()
 			.AllowClear(true)
 			.DisplayThumbnail(false)
 			.ObjectPath_Lambda([this] { return OverlayPreviewBody.IsValid() ? OverlayPreviewBody->GetPathName() : FString(); })
-			.OnObjectChanged_Lambda([this](const FAssetData& Asset) { OverlayPreviewBody = Cast<USkeletalMesh>(Asset.GetAsset()); })
+			.OnObjectChanged_Lambda([this](const FAssetData& Asset) { OverlayPreviewBody = Cast<USkeletalMesh>(Asset.GetAsset()); RefreshOverlayPlacement(); })
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
 		[
@@ -3156,7 +3176,7 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeOverlaySection()
 			.AllowClear(true)
 			.DisplayThumbnail(false)
 			.ObjectPath_Lambda([this] { return OverlayPreviewFace.IsValid() ? OverlayPreviewFace->GetPathName() : FString(); })
-			.OnObjectChanged_Lambda([this](const FAssetData& Asset) { OverlayPreviewFace = Cast<USkeletalMesh>(Asset.GetAsset()); })
+			.OnObjectChanged_Lambda([this](const FAssetData& Asset) { OverlayPreviewFace = Cast<USkeletalMesh>(Asset.GetAsset()); RefreshOverlayPlacement(); })
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
 		[
@@ -3185,6 +3205,261 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeOverlaySection()
 			.ColorAndOpacity_Lambda([this] { return bOverlayGuideFailed ? FSlateColor(FLinearColor::Red) : FSlateColor::UseSubduedForeground(); })
 			.Text_Lambda([this] { return FText::FromString(OverlayGuideStatus); })
 		];
+}
+
+TSharedRef<SWidget> SMantleCosmeticPanel::MakeOverlayPlaceSection()
+{
+	const TAttribute<EVisibility> PlacedOnly = TAttribute<EVisibility>::CreateLambda([this]
+	{
+		return Draft.bOverlayPlaced ? EVisibility::Visible : EVisibility::Collapsed;
+	});
+	const TAttribute<EVisibility> ScarPlacedOnly = TAttribute<EVisibility>::CreateLambda([this]
+	{
+		return Draft.bOverlayPlaced && FMantleOverlayChecks::IsScarSlot(Draft.Slot) ? EVisibility::Visible : EVisibility::Collapsed;
+	});
+	const auto Spin = [this](const FText& Label, const float Min, const float Max, const float Delta, float FMantleOverlayPlacement::* Field,
+		const TAttribute<EVisibility>& Visible) -> TSharedRef<SWidget>
+	{
+		return SNew(SHorizontalBox)
+			.Visibility(Visible)
+			+ SHorizontalBox::Slot().FillWidth(0.45f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Text(Label)
+			]
+			+ SHorizontalBox::Slot().FillWidth(0.55f).Padding(0, 1)
+			[
+				SNew(SSpinBox<float>)
+				.MinValue(Min).MaxValue(Max).Delta(Delta)
+				.Value_Lambda([this, Field] { return Draft.OverlayPlacement.*Field; })
+				.OnValueChanged_Lambda([this, Field](const float Value)
+				{
+					Draft.OverlayPlacement.*Field = Value;
+					if (OverlayPlaceViewport.IsValid())
+					{
+						OverlayPlaceViewport->SetPlacement(Draft.OverlayPlacement, Draft.OverlayPlaceAspect);
+					}
+				})
+				.OnValueCommitted_Lambda([this](const float, ETextCommit::Type)
+				{
+					Draft.bRightsDeclared = false;
+					Package.Reset();
+				})
+			];
+	};
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SCheckBox)
+			.IsChecked_Lambda([this] { return Draft.bOverlayPlaced ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([this](const ECheckBoxState State)
+			{
+				Draft.bOverlayPlaced = State == ECheckBoxState::Checked;
+				Draft.bRightsDeclared = false;
+				Package.Reset();
+				RefreshOverlayPlacement();
+			})
+			[
+				SNew(STextBlock).Text(LOCTEXT("OverlayPlaceToggle", "Place a picture on the body or face (instead of painting a mask)"))
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+		[
+			SNew(SVerticalBox)
+			.Visibility(PlacedOnly)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+			[
+				SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.Text(LOCTEXT("OverlayPlaceHelp", "Choose a flat picture, then click the skin where it goes. Drag the arrows to move it (W), turn it (E) or size it (R). White (or the opaque part) of the picture shows; black (or the clear part) does not. Preview shows the result; upload bakes it into the mask players receive."))
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock).Text(LOCTEXT("OverlayPictureAsset", "Picture"))
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SObjectPropertyEntryBox)
+				.AllowedClass(UTexture2D::StaticClass())
+				.AllowClear(true)
+				.DisplayThumbnail(false)
+				.ObjectPath_Lambda([this] { return Draft.OverlayPicture.IsValid() ? Draft.OverlayPicture->GetPathName() : FString(); })
+				.OnObjectChanged_Lambda([this](const FAssetData& Asset)
+				{
+					Draft.OverlayPicture = Cast<UTexture2D>(Asset.GetAsset());
+					Draft.bRightsDeclared = false;
+					Package.Reset();
+					RefreshOverlayPlacement();
+				})
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+				[
+					SNew(STextBlock).Text(LOCTEXT("OverlayPictureFile", "or a picture PNG"))
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 6, 0)
+				[
+					SNew(SEditableTextBox)
+					.HintText(LOCTEXT("OverlayFileHint", "Path to a .png file"))
+					.Text_Lambda([this] { return FText::FromString(Draft.OverlayPictureFile); })
+					.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
+					{
+						Draft.OverlayPictureFile = Text.ToString().TrimStartAndEnd().TrimQuotes();
+						Draft.bRightsDeclared = false;
+						Package.Reset();
+						RefreshOverlayPlacement();
+					})
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("OverlayBrowse", "Browse..."))
+					.OnClicked_Lambda([this] { BrowseOverlayPicture(); return FReply::Handled(); })
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+			[
+				SNew(SBox).HeightOverride(360.f)
+				[
+					SAssignNew(OverlayPlaceViewport, SMantleOverlayPlaceViewport)
+					.OnPlacementChanged_Lambda([this]
+					{
+						if (OverlayPlaceViewport.IsValid())
+						{
+							Draft.OverlayPlacement = OverlayPlaceViewport->GetPlacement();
+						}
+						Draft.bRightsDeclared = false;
+						Package.Reset();
+					})
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+			[
+				Spin(LOCTEXT("OverlayPlaceWidth", "Width on the skin (cm)"), 0.5f, 100.f, 0.5f, &FMantleOverlayPlacement::WidthCm, PlacedOnly)
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				Spin(LOCTEXT("OverlayPlaceDepth", "How far it reaches in and out (cm)"), 0.5f, 50.f, 0.5f, &FMantleOverlayPlacement::DepthCm, PlacedOnly)
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				Spin(LOCTEXT("OverlayPlaceFalloff", "Fade at the reach's edge"), 0.f, 1.f, 0.05f, &FMantleOverlayPlacement::Falloff, PlacedOnly)
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				Spin(LOCTEXT("OverlayPlaceRelief", "Scar relief"), 0.f, 6.f, 0.1f, &FMantleOverlayPlacement::Relief, ScarPlacedOnly)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("OverlayPlaceReset", "Put it on the chest / face"))
+					.OnClicked_Lambda([this] { if (OverlayPlaceViewport.IsValid()) { OverlayPlaceViewport->ResetPlacement(); } return FReply::Handled(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("OverlayPlaceFrame", "Frame"))
+					.OnClicked_Lambda([this] { if (OverlayPlaceViewport.IsValid()) { OverlayPlaceViewport->Frame(); } return FReply::Handled(); })
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+			[
+				SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor(FLinearColor::Red))
+				.Visibility_Lambda([this] { return OverlayPlaceStatus.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+				.Text_Lambda([this] { return FText::FromString(OverlayPlaceStatus); })
+			]
+		];
+}
+
+void SMantleCosmeticPanel::BrowseOverlayPicture()
+{
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (!DesktopPlatform)
+	{
+		return;
+	}
+	const void* ParentWindow = FSlateApplication::IsInitialized()
+		? FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr)
+		: nullptr;
+	TArray<FString> Files;
+	if (!DesktopPlatform->OpenFileDialog(ParentWindow, TEXT("Choose the picture to place"),
+		Draft.OverlayPictureFile.IsEmpty() ? FString() : FPaths::GetPath(Draft.OverlayPictureFile), FString(), TEXT("PNG image (*.png)|*.png"),
+		EFileDialogFlags::None, Files) || Files.IsEmpty())
+	{
+		return;
+	}
+	Draft.OverlayPictureFile = FPaths::ConvertRelativePathToFull(Files[0]);
+	if (Draft.Name.IsEmpty())
+	{
+		Draft.Name = FPaths::GetBaseFilename(Draft.OverlayPictureFile);
+	}
+	Draft.bRightsDeclared = false;
+	Package.Reset();
+	RefreshOverlayPlacement();
+}
+
+void SMantleCosmeticPanel::RefreshOverlayPlacement()
+{
+	OverlayPlaceStatus.Reset();
+	if (!Draft.bOverlayPlaced || !OverlayPlaceViewport.IsValid())
+	{
+		return;
+	}
+	// The skin to place on: the picked body or face, else Mantle's reference ones (as the export and the Preview choose).
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+	USkeletalMesh* Mesh = FMantleOverlayChecks::IsFaceSlot(Draft.Slot) ? OverlayPreviewFace.Get() : OverlayPreviewBody.Get();
+	if (!Mesh)
+	{
+		if (FMantleOverlayChecks::IsFaceSlot(Draft.Slot))
+		{
+			Mesh = FMantleReferenceBodies::GetFace();
+		}
+		else if (Contract)
+		{
+			const TArray<USkeletalMesh*> References = FMantleReferenceBodies::FindBodies(*Contract, nullptr);
+			Mesh = References.IsEmpty() ? nullptr : References[0];
+		}
+	}
+	Draft.OverlayPlaceMesh = Mesh;
+	FString Error;
+	const bool bHadMesh = OverlayPlaceViewport->SetMesh(Mesh, Error);
+	if (!bHadMesh)
+	{
+		OverlayPlaceStatus = Error;
+	}
+	// The picture's shape, for the outline.
+	Draft.OverlayPlaceAspect = 1.f;
+	if (UTexture2D* Picture = Draft.OverlayPicture.Get())
+	{
+		if (Picture->GetSizeX() > 0)
+		{
+			Draft.OverlayPlaceAspect = static_cast<float>(Picture->GetSizeY()) / static_cast<float>(Picture->GetSizeX());
+		}
+	}
+	else if (!Draft.OverlayPictureFile.IsEmpty())
+	{
+		TArray<FColor> Pixels;
+		FIntPoint Size = FIntPoint::ZeroValue;
+		FString ReadError;
+		if (FMantleOverlayChecks::ReadPngFile(Draft.OverlayPictureFile, Pixels, Size, ReadError) && Size.X > 0)
+		{
+			Draft.OverlayPlaceAspect = static_cast<float>(Size.Y) / static_cast<float>(Size.X);
+		}
+		else
+		{
+			OverlayPlaceStatus = ReadError;
+		}
+	}
+	OverlayPlaceViewport->SetPlacement(Draft.OverlayPlacement, Draft.OverlayPlaceAspect);
+	if (bHadMesh && !bOverlayPlaceStarted)
+	{
+		// First time on this skin: start on the chest (or the face), so there is something to see.
+		bOverlayPlaceStarted = true;
+		OverlayPlaceViewport->ResetPlacement();
+	}
 }
 
 void SMantleCosmeticPanel::SaveOverlayGuide()
