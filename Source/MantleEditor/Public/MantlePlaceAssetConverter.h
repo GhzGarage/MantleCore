@@ -452,6 +452,9 @@ struct MANTLEEDITOR_API FMantleConvertedWeapon
 	/** The file name the 3D model was imported from, cleaned; empty when it has none (a public library publish sends it as provenance). */
 	FString ImportFilename;
 
+	/** #124: the key of the texture upload that carries its library picture (a 512 x 512 PNG, no role); empty for none. The library item names it as its thumbnail. */
+	FString ThumbnailKey;
+
 	/** The settings file, as the weapon builder wrote it. */
 	FString DocumentText;
 

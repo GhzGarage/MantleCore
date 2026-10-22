@@ -2042,6 +2042,11 @@ void FMantlePlacePublishSession::TickLibrary()
 			Job.Paths.Add(SourcePath);
 			Job.AssetId = Uploaded->Id;
 			Job.Provenance = FMantleProvenance::Make(SourcePath, Weapon.ImportFilename);
+			// #124: the card's picture, the texture the weapon uploaded beside it.
+			if (const FMantlePlaceUploadedRef* WeaponPicture = Weapon.ThumbnailKey.IsEmpty() ? nullptr : Set.Uploaded.Find(Weapon.ThumbnailKey))
+			{
+				Job.ThumbnailId = WeaponPicture->Id;
+			}
 		}
 		// #838: each script package, once all its files are on Mantle; remembered by its folder like a vehicle by its asset.
 		PackageRefs.Reset();

@@ -1,7 +1,9 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantlePlaceThumbnail.h"
 #include "MantlePng.h"
+#include "MantleCosmeticThumbnail.h"
 #include "MantleEmoteCheck.h"
+#include "MantleModelThumbnail.h"
 #include "MantleThumbnailChoice.h"
 #include "MantleThumbnailStore.h"
 
@@ -325,6 +327,36 @@ bool FMantleThumbnailOutsideProjectTest::RunTest(const FString&)
 	TestTrue(TEXT("a picture outside the project still resolves"), OutsideResult.Succeeded());
 	TestTrue(TEXT("with a warning that it will not travel"), OutsideResult.Warning.Contains(TEXT("outside your project")));
 	IFileManager::Get().Delete(*Outside);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleThumbnailModelAngleTest, "Mantle.Editor.Thumbnail.ModelAngle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FMantleThumbnailModelAngleTest::RunTest(const FString&)
+{
+	// Automatic leaves the subject as it is; Choose the angle turns the camera and closes in on the framed box.
+	FMantleThumbnailSubject Subject;
+	Subject.Frame = FBox(FVector(-100, -50, 0), FVector(100, 50, 100));
+	Subject.View = FMantleModelThumbnail::DefaultView();
+	const FRotator Before = Subject.View;
+	FMantleThumbnailChoice Choice;
+	FMantleModelThumbnail::ApplyChoice(Subject, Choice);
+	TestTrue(TEXT("Automatic keeps the view"), Subject.View.Equals(Before));
+	TestTrue(TEXT("and the frame"), Subject.Frame.GetExtent().Equals(FVector(100, 50, 50)));
+
+	Choice.Mode = EMantleThumbnailMode::Angle;
+	Choice.Angle = FRotator(-20.0, 90.0, 0.0);
+	Choice.Zoom = 2.0f;
+	FMantleModelThumbnail::ApplyChoice(Subject, Choice);
+	TestTrue(TEXT("Angle takes the chosen pitch and yaw"), Subject.View.Equals(FRotator(-20.0, 90.0, 0.0)));
+	TestTrue(TEXT("zoom 2 halves the framed box"), Subject.Frame.GetExtent().Equals(FVector(50, 25, 25)));
+	TestTrue(TEXT("about the same centre"), Subject.Frame.GetCenter().Equals(FVector(0, 0, 50)));
+
+	// A model of nothing has nothing to draw; the resolver says so instead of failing.
+	const FMantleThumbnailResult Nothing = FMantleThumbnailResolver::Resolve(Choice, FMantleThumbnailTarget::Square(),
+		FMantleModelThumbnail::RenderFor([]() -> UObject* { return nullptr; }));
+	TestFalse(TEXT("no model, no picture"), Nothing.Succeeded());
+	TestFalse(TEXT("with a reason"), Nothing.Error.IsEmpty());
 	return true;
 }
 

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MantleThumbnailChoice.h"
 #include "MantleChassisSpec.h"
 #include "MantleVehicleAsset.h"
 #include "MantleVehicleBuilder.h"
@@ -191,6 +192,15 @@ private:
 	// Your own model.
 	/** The model picked: a static mesh or a skeletal mesh. */
 	TWeakObjectPtr<UObject> Mesh;
+
+	/** #124: how this vehicle's library picture is made, kept for the model (FMantleThumbnailStore). */
+	FMantleThumbnailChoice ThumbnailChoice;
+	TSharedPtr<class SMantleThumbnailSection> ThumbnailSection;
+	/** Reads the saved choice for the picked model and redraws the section. */
+	void LoadThumbnailChoice();
+	void ThumbnailChoiceChanged(const FMantleThumbnailChoice& Choice);
+	/** After a build: a Custom image or a chosen angle replaces the picture the build took by itself. Notes and saving go into Result. */
+	void ApplyThumbnailChoice(FMantleVehicleBuildResult& Result);
 	TWeakObjectPtr<UMantleVehicleSource> BuiltSource;
 	/** The model read for the picked type (ReadModel), the chassis's moving parts, which part of it is which, and which way it faces. */
 	FMantleVehicleModel ModelInfo;
