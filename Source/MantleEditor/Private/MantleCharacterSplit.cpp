@@ -84,6 +84,30 @@ namespace MantleCharacterSplitPrivate
 			Out.Why = FString::Printf(TEXT("its materials read as a %s"), FMantleOutfitSections::PieceName(Piece));
 			return Out;
 		}
+		// The face's own parts (eyes, teeth, a tongue, the mouth) go with the body.
+		if (FMantleAvatarStrip::NamesFaceDetail(Named.SlotName, Named.MaterialName))
+		{
+			Out.Role = EMantleSplitRole::Body;
+			Out.Slot = TEXT("avatar");
+			Out.Why = TEXT("it is the character's eyes, teeth or mouth");
+			return Out;
+		}
+		// Words the classifier doesn't know: underwear and the like.
+		const FString Words = Named.SlotName + TEXT(" ") + Named.MaterialName + TEXT(" ") + Mesh.MeshName;
+		if (SplitHasWord(Words, { TEXT("corset"), TEXT("bra"), TEXT("bustier"), TEXT("bodice"), TEXT("tank"), TEXT("blouse"), TEXT("sweater") }))
+		{
+			Out.Role = EMantleSplitRole::Garment;
+			Out.Slot = TEXT("top");
+			Out.Why = TEXT("its name says a top");
+			return Out;
+		}
+		if (SplitHasWord(Words, { TEXT("underwear"), TEXT("panties"), TEXT("panty"), TEXT("briefs"), TEXT("boxers"), TEXT("leggings"), TEXT("tights") }))
+		{
+			Out.Role = EMantleSplitRole::Garment;
+			Out.Slot = TEXT("bottom");
+			Out.Why = TEXT("its name says a bottom");
+			return Out;
+		}
 		// Unknown by its materials: the mesh's name, the words of an accessory, a prop, then the bones.
 		if (FMantleOutfitSections::IsProp(Named))
 		{
