@@ -4107,7 +4107,7 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 		{
 			Panel->Draft.AuthoringBody = Cast<USkeletalMesh>(LoadPath(BodyPath));
 			Panel->Draft.AuthoringFace = Cast<USkeletalMesh>(LoadPath(FacePath));
-			if (Panel->Draft.Slot.IsEmpty()) Panel->Draft.Slot = TEXT("hair");
+			if (Panel->Draft.Class == EMantleCosmeticClass::Hair) Panel->Draft.Slot = TEXT("hair");
 			Panel->Draft.bRenderThumbnail = false;
 			Panel->BuildPackage();
 		}
