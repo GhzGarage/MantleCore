@@ -1224,10 +1224,193 @@ namespace MantleEmoteCheckPrivate
 		TEXT("with wrists, only the wrists' constant twist and bend error is removed (MatchWristsInPlace); with save, the asset is saved."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunMatchCommand));
 
+	/**
+	 * #124: the emote's thumbnail in each choice, through the panel's own export (Build): Automatic (the posed body at the clip's most expressive
+	 * moment), Choose the angle (from behind and to the right) and a Custom image. One PNG each in Directory; saves and uploads nothing.
+	 */
+	void RunThumbnailSamples(const TArray<FString>& Args)
+	{
+		if (Args.Num() < 3)
+		{
+			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_THUMBNAIL_SAMPLES usage: Mantle.Dev.ThumbnailSamples <AnimSequence> <Directory> <Custom.png> [Exit]"));
+			return;
+		}
+		const FString Directory = Args[1];
+		IFileManager::Get().MakeDirectory(*Directory, true);
+		FString Path = Args[0];
+		if (!FPackageName::GetShortName(Path).Contains(TEXT(".")))
+		{
+			Path += TEXT(".") + FPackageName::GetShortName(Path);
+		}
+		UAnimSequence* Sequence = LoadObject<UAnimSequence>(nullptr, *Path);
+		FString Error;
+		const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&Error);
+		if (!Sequence || !Contract)
+		{
+			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_THUMBNAIL_SAMPLES failed: %s"), Sequence ? *Error : *FString::Printf(TEXT("%s did not load"), *Path));
+			return;
+		}
+		struct FSample { const TCHAR* Name; EMantleThumbnailMode Mode; };
+		for (const FSample& Sample : { FSample{ TEXT("automatic"), EMantleThumbnailMode::Automatic }, FSample{ TEXT("angle"), EMantleThumbnailMode::Angle },
+			FSample{ TEXT("custom"), EMantleThumbnailMode::Custom } })
+		{
+			FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Emote, Sequence, TEXT("emote"), TEXT("sample"), *Contract, EMantleFitSex::Auto);
+			Draft.Thumbnail.Mode = Sample.Mode;
+			Draft.Thumbnail.Angle = FRotator(-10.0, 150.0, 0.0);
+			Draft.Thumbnail.ImageFile.FilePath = Args[2];
+			const FMantleCosmeticPackage Package = FMantleCosmeticExport::Build(Draft, *Contract);
+			const FMantleCosmeticUploadAsset* Picture = Package.ThumbnailKey.IsEmpty() ? nullptr : Package.FindAsset(Package.ThumbnailKey);
+			const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("emote_thumbnail_%s.png"), Sample.Name));
+			const bool bSaved = Picture && FFileHelper::SaveArrayToFile(Picture->Bytes, *File);
+			FString Note;
+			for (const FString& N : Package.Notes)
+			{
+				if (N.StartsWith(TEXT("Thumbnail")))
+				{
+					Note = N;
+				}
+			}
+			UE_LOG(LogMantleCheckEmote, Display, TEXT("MANTLE_THUMBNAIL_SAMPLES %s %s errors=%d note=\"%s\""), *File, bSaved ? TEXT("saved") : TEXT("NOT saved"), Package.HasErrors() ? 1 : 0, *Note);
+		}
+		if (Args.Num() > 3 && Args[3].Equals(TEXT("Exit"), ESearchCase::IgnoreCase))
+		{
+			FPlatformMisc::RequestExit(false);
+		}
+	}
+
+	FAutoConsoleCommand GMantleDevThumbnailSamplesCommand(
+		TEXT("Mantle.Dev.ThumbnailSamples"),
+		TEXT("Mantle.Dev.ThumbnailSamples <AnimSequence> <Directory> <Custom.png> [Exit] -- the emote's thumbnail in each choice (Automatic, Choose the angle, ")
+		TEXT("Custom image) through the panel's export, one PNG each. Saves and uploads nothing."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&RunThumbnailSamples));
+
 	FAutoConsoleCommand GMantleDevCheckEmoteCommand(
 		TEXT("Mantle.Dev.CheckEmote"),
 		TEXT("Mantle.Dev.CheckEmote <AnimSequence> <Directory> [Label] [female|male|<SkeletalMesh>] [size] -- runs the emote export as the Cosmetics panel ")
 		TEXT("would upload it (retarget, sample, validate, encode), reads the clip back as the client does, and draws it on a standard body at several ")
 		TEXT("moments with the catalog thumbnail capture: <Label>_notes.txt and <Label>_sheet.png in Directory. Saves and uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunCommand));
+}
+
+int32 FMantleEmoteCheck::MostExpressiveMoment(TConstArrayView<TArray<FVector>> PositionsPerMoment)
+{
+	if (PositionsPerMoment.IsEmpty() || PositionsPerMoment[0].IsEmpty())
+	{
+		return 0;
+	}
+	const int32 Joints = PositionsPerMoment[0].Num();
+	TArray<FVector> Mean;
+	Mean.Init(FVector::ZeroVector, Joints);
+	for (const TArray<FVector>& Moment : PositionsPerMoment)
+	{
+		if (Moment.Num() != Joints)
+		{
+			return 0;
+		}
+		for (int32 Joint = 0; Joint < Joints; ++Joint)
+		{
+			Mean[Joint] += Moment[Joint];
+		}
+	}
+	for (FVector& Joint : Mean)
+	{
+		Joint /= PositionsPerMoment.Num();
+	}
+	int32 Best = 0;
+	double BestScore = -1.0;
+	for (int32 Index = 0; Index < PositionsPerMoment.Num(); ++Index)
+	{
+		double Score = 0.0;
+		for (int32 Joint = 0; Joint < Joints; ++Joint)
+		{
+			Score += FVector::Dist(PositionsPerMoment[Index][Joint], Mean[Joint]);
+		}
+		if (Score > BestScore + 1e-6)
+		{
+			Best = Index;
+			BestScore = Score;
+		}
+	}
+	return Best;
+}
+
+bool FMantleEmoteCheck::ThumbnailSubject(TConstArrayView<uint8> ClipBytes, FMantleThumbnailSubject& OutSubject, FString& OutHow, FString& OutError)
+{
+	using namespace MantleEmoteCheckPrivate;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&OutError);
+	if (!Contract)
+	{
+		return false;
+	}
+	const FMantleAnimClipReadResult Read = FMantleAnimClipReader::Read(ClipBytes);
+	if (!Read.bSuccess)
+	{
+		OutError = Read.Error;
+		return false;
+	}
+	USkeletalMesh* Driver = FMantleBuiltInMannequin::UEFNMannequin(*Contract, &OutError);
+	if (!Driver)
+	{
+		return false;
+	}
+	USkeletalMesh* BodyMesh = nullptr;
+	USkeletalMesh* FaceMesh = nullptr;
+	FString Describe;
+	FString SkeletonId;
+	FMantleAvatarPreviewPlan Plan;
+	if (!ResolveBody(FString(), BodyMesh, FaceMesh, Describe, OutError)
+		|| !FMantleCosmeticExport::AvatarSkeletonId(BodyMesh, *Contract, SkeletonId, OutError)
+		|| !FMantleAvatarPreviewPlan::ForSkeleton(SkeletonId, FaceMesh != nullptr, Plan, OutError))
+	{
+		return false;
+	}
+	const FMantleAvatarPreviewInputs Inputs = FMantleAvatarPreviewInputs::Gather(Plan, Driver, FString(), OutError);
+	FString NodeWhy;
+	if (!Inputs.Retargeter || !UMantlePreviewRetargetAnimInstance::IsRetargetNodeAvailable(&NodeWhy))
+	{
+		OutError = FString::Printf(TEXT("the body cannot be posed (%s%s)"), *FString::Join(Inputs.Missing, TEXT("; ")), *NodeWhy);
+		return false;
+	}
+	FaceMesh = Plan.bShowFace ? FaceMesh : nullptr;
+	const TSharedRef<const FMantleAnimClip> Played = WithoutRoot(Read.Clip, Driver->GetRefSkeleton().GetBoneName(0));
+	const TArray<float> Times = Moments(Read.Clip.GetDuration(), ThumbnailMoments);
+	UObject* const Retargeter = Inputs.Retargeter;
+	const TArray<TArray<FTransform>> Poses = BodyPosesAt(BodyMesh, Driver, Retargeter, Played, Times);
+	// Where the hands, head and feet are at each moment, in the body's component space.
+	const FReferenceSkeleton& Bones = BodyMesh->GetRefSkeleton();
+	TArray<int32> KeyBones;
+	for (const TCHAR* Name : { TEXT("hand_l"), TEXT("hand_r"), TEXT("head"), TEXT("foot_l"), TEXT("foot_r") })
+	{
+		const int32 Bone = Bones.FindRawBoneIndex(FName(Name));
+		if (Bone != INDEX_NONE)
+		{
+			KeyBones.Add(Bone);
+		}
+	}
+	TArray<TArray<FVector>> Positions;
+	for (const TArray<FTransform>& Pose : Poses)
+	{
+		TArray<FVector>& Moment = Positions.AddDefaulted_GetRef();
+		for (const int32 Bone : KeyBones)
+		{
+			Moment.Add(Pose.IsValidIndex(Bone) ? Pose[Bone].GetLocation() : FVector::ZeroVector);
+		}
+	}
+	const int32 Best = Times.IsValidIndex(MostExpressiveMoment(Positions)) ? MostExpressiveMoment(Positions) : 0;
+	const float Time = Times.IsValidIndex(Best) ? Times[Best] : 0.0f;
+
+	OutSubject = FMantleCosmeticThumbnail::AvatarSubject(BodyMesh, FaceMesh);
+	OutSubject.Frame = StandingFrame(BodyMesh);
+	OutSubject.bFloor = true;
+	// The pose lives as long as the subject: the retargeter and the mannequin are held until it is dropped.
+	const TStrongObjectPtr<UObject> KeepRetargeter(Retargeter);
+	const TStrongObjectPtr<USkeletalMesh> KeepDriver(Driver);
+	OutSubject.Pose = [KeepRetargeter, KeepDriver, Played, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox&)
+	{
+		PoseOnBody(Scene, Components, KeepDriver.Get(), KeepRetargeter.Get(), Played, Time);
+	};
+	OutSubject.Describe.ReplaceInline(TEXT(", headshot"), TEXT(", full body"));
+	OutSubject.Describe += FString::Printf(TEXT(", emote at %.2f s"), Time);
+	OutHow = FString::Printf(TEXT("%s, the emote at %.2f s of %.2f s"), *Describe, Time, Read.Clip.GetDuration());
+	return true;
 }

@@ -1,12 +1,16 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantlePlaceThumbnail.h"
 #include "MantlePng.h"
+#include "MantleEmoteCheck.h"
 #include "MantleThumbnailChoice.h"
+#include "MantleThumbnailStore.h"
 
 #include "Engine/World.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/Paths.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -214,6 +218,113 @@ bool FMantleThumbnailPlaceChoiceTest::RunTest(const FString&)
 	TestTrue(TEXT("no level is automatic"), FMantlePlaceThumbnail::ChoiceFor(nullptr).Mode == EMantleThumbnailMode::Automatic);
 	TestEqual(TEXT("a place's picture is 1280 wide"), FMantlePlaceThumbnail::Target().Width, 1280);
 	TestEqual(TEXT("and 720 tall"), FMantlePlaceThumbnail::Target().Height, 720);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleThumbnailStoreTest, "Mantle.Editor.Thumbnail.Store",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FMantleThumbnailStoreTest::RunTest(const FString&)
+{
+	const FString File = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), TEXT("MantleThumbnailStoreTest.ini"));
+	IFileManager::Get().Delete(*File);
+	FMantleThumbnailChoice Choice;
+	TestFalse(TEXT("nothing is saved at first"), FMantleThumbnailStore::Load(TEXT("/Game/A.A"), TEXT("1"), Choice, File));
+	TestTrue(TEXT("and the choice is Automatic"), Choice == FMantleThumbnailChoice());
+
+	FMantleThumbnailChoice Saved;
+	Saved.Mode = EMantleThumbnailMode::Angle;
+	Saved.Angle = FRotator(-15.0, 140.0, 0.0);
+	Saved.Zoom = 1.5f;
+	Saved.ImageFile.FilePath = TEXT("C:/pictures/a.png");
+	FMantleThumbnailStore::Save(TEXT("/Game/A.A"), TEXT("1"), Saved, File);
+	TestTrue(TEXT("a saved choice loads"), FMantleThumbnailStore::Load(TEXT("/Game/A.A"), TEXT("1"), Choice, File));
+	TestTrue(TEXT("exactly as saved"), Choice == Saved);
+	TestFalse(TEXT("another source has none"), FMantleThumbnailStore::Load(TEXT("/Game/B.B"), TEXT("1"), Choice, File));
+	TestFalse(TEXT("another class of the same source has none"), FMantleThumbnailStore::Load(TEXT("/Game/A.A"), TEXT("2"), Choice, File));
+
+	// Going back to Automatic removes the entry.
+	FMantleThumbnailStore::Save(TEXT("/Game/A.A"), TEXT("1"), FMantleThumbnailChoice(), File);
+	TestFalse(TEXT("Automatic is not kept"), FMantleThumbnailStore::Load(TEXT("/Game/A.A"), TEXT("1"), Choice, File));
+	IFileManager::Get().Delete(*File);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleThumbnailEmoteMomentTest, "Mantle.Editor.Thumbnail.EmoteMoment",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FMantleThumbnailEmoteMomentTest::RunTest(const FString&)
+{
+	// Two joints; the third moment has them thrown farthest from where they are on average.
+	const TArray<TArray<FVector>> Moments = {
+		{ FVector(0, 0, 100), FVector(0, 0, 150) },
+		{ FVector(0, 0, 101), FVector(0, 0, 149) },
+		{ FVector(40, 0, 180), FVector(-40, 0, 190) },
+		{ FVector(0, 0, 100), FVector(0, 0, 150) },
+	};
+	TestEqual(TEXT("the moment with the joints farthest from average"), FMantleEmoteCheck::MostExpressiveMoment(Moments), 2);
+	// A clip that does not move: the first moment.
+	const TArray<TArray<FVector>> Still = { { FVector(0, 0, 100) }, { FVector(0, 0, 100) }, { FVector(0, 0, 100) } };
+	TestEqual(TEXT("a still clip picks the first moment"), FMantleEmoteCheck::MostExpressiveMoment(Still), 0);
+	TestEqual(TEXT("nothing to compare is the first moment"), FMantleEmoteCheck::MostExpressiveMoment(TArray<TArray<FVector>>()), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleThumbnailStoreMigrationTest, "Mantle.Editor.Thumbnail.StoreMigration",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FMantleThumbnailStoreMigrationTest::RunTest(const FString&)
+{
+	// A choice the first version left in the per-machine file moves into the project's file the first time it is read, and is gone from the old one.
+	const FString Project = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), TEXT("MantleThumbnailProjectStore.ini"));
+	const FString Legacy = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), TEXT("MantleThumbnailLegacyStore.ini"));
+	IFileManager::Get().Delete(*Project);
+	IFileManager::Get().Delete(*Legacy);
+	FMantleThumbnailChoice Old;
+	Old.Mode = EMantleThumbnailMode::Angle;
+	Old.Angle = FRotator(-5.0, 30.0, 0.0);
+	FMantleThumbnailStore::Save(TEXT("/Game/M.M"), TEXT("1"), Old, Legacy);
+
+	FMantleThumbnailChoice Read;
+	TestTrue(TEXT("the choice is found through the old file"), FMantleThumbnailStore::Load(TEXT("/Game/M.M"), TEXT("1"), Read, Project, Legacy));
+	TestTrue(TEXT("exactly as it was"), Read == Old);
+	FMantleThumbnailChoice Again;
+	TestTrue(TEXT("now it is in the project's file"), FMantleThumbnailStore::Load(TEXT("/Game/M.M"), TEXT("1"), Again, Project));
+	TestTrue(TEXT("still the same"), Again == Old);
+	FMantleThumbnailChoice Gone;
+	TestFalse(TEXT("and no longer in the old file"), FMantleThumbnailStore::Load(TEXT("/Game/M.M"), TEXT("1"), Gone, Legacy));
+	IFileManager::Get().Delete(*Project);
+	IFileManager::Get().Delete(*Legacy);
+
+	// The default home is the project's Config folder, which goes with the project.
+	TestTrue(TEXT("the default store is under the project's Config"), FMantleThumbnailResolver::IsInsideProject(FMantleThumbnailStore::DefaultConfigFile())
+		&& FMantleThumbnailStore::DefaultConfigFile().Contains(TEXT("/Config/")));
+	TestTrue(TEXT("the old one is under Saved"), FMantleThumbnailStore::LegacyConfigFile().Contains(TEXT("/Saved/")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleThumbnailOutsideProjectTest, "Mantle.Editor.Thumbnail.OutsideProject",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FMantleThumbnailOutsideProjectTest::RunTest(const FString&)
+{
+	using namespace MantleThumbnailChoiceTestPrivate;
+	TestTrue(TEXT("a file in the project is inside it"), FMantleThumbnailResolver::IsInsideProject(FPaths::Combine(FPaths::ProjectDir(), TEXT("Content/a.png"))));
+	TestFalse(TEXT("a file elsewhere is not"), FMantleThumbnailResolver::IsInsideProject(TEXT("C:/Users/someone/Pictures/a.png")));
+	TestFalse(TEXT("nothing is not"), FMantleThumbnailResolver::IsInsideProject(FString()));
+
+	// A custom PNG outside the project works, with a warning that it will not travel; one inside has none.
+	TArray<FColor> Pixels;
+	Pixels.Init(FColor(10, 20, 30, 255), 512 * 512);
+	const FString Inside = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), TEXT("MantleThumbInside.png"));
+	FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(512, 512, Pixels), *Inside);
+	FMantleThumbnailChoice Choice;
+	Choice.Mode = EMantleThumbnailMode::Custom;
+	Choice.ImageFile.FilePath = Inside;
+	TestTrue(TEXT("a picture inside the project has no travel warning"), FMantleThumbnailResolver::Resolve(Choice, FMantleThumbnailTarget::Square(), FMantleThumbnailResolver::FRender()).Warning.IsEmpty());
+	const FString Outside = FPaths::Combine(FPlatformProcess::UserTempDir(), TEXT("MantleThumbOutside.png"));
+	FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(512, 512, Pixels), *Outside);
+	Choice.ImageFile.FilePath = Outside;
+	const FMantleThumbnailResult OutsideResult = FMantleThumbnailResolver::Resolve(Choice, FMantleThumbnailTarget::Square(), FMantleThumbnailResolver::FRender());
+	TestTrue(TEXT("a picture outside the project still resolves"), OutsideResult.Succeeded());
+	TestTrue(TEXT("with a warning that it will not travel"), OutsideResult.Warning.Contains(TEXT("outside your project")));
+	IFileManager::Get().Delete(*Outside);
 	return true;
 }
 

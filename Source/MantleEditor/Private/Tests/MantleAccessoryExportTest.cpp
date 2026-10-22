@@ -5,6 +5,7 @@
 #include "MantleCosmeticPackage.h"
 #include "MantleMeshReduce.h"
 #include "MantlePng.h"
+#include "MantleThumbnailChoice.h"
 
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
@@ -13,6 +14,8 @@
 #include "Materials/MaterialInterface.h"
 #include "MeshDescription.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "StaticMeshAttributes.h"
 #include "StaticMeshResources.h"
@@ -363,6 +366,44 @@ bool FMantleAccessoryNormalMapTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("the normal is resized to 1024"), UploadedWidth(Over, Over.Materials[0].NormalKey), 1024);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleAccessoryCustomThumbnailTest, "Mantle.Cosmetics.Accessory.CustomThumbnail",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// #124: a custom thumbnail image goes out as the item's 512 x 512 thumbnail, and one that cannot be used refuses the export with a reason.
+bool FMantleAccessoryCustomThumbnailTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleAccessoryExportTestPrivate;
+	FString ContractError;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+	if (!TestNotNull(TEXT("the avatar contract loads"), Contract))
+	{
+		AddError(ContractError);
+		return false;
+	}
+	TStrongObjectPtr<UMaterialInterface> Material(LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial")));
+	TStrongObjectPtr<UStaticMesh> Light(MakeDisc(30, 30, Material.Get()));
+
+	// A 600 x 300 picture: cut to the middle 300 x 300 and enlarged to 512 x 512.
+	TArray<FColor> Pixels;
+	Pixels.Init(FColor(40, 160, 220, 255), 600 * 300);
+	const FString File = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), TEXT("MantleCustomThumbnail.png"));
+	FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(600, 300, Pixels), *File);
+
+	FMantleCosmeticDraft Draft = NeckDraft(Light.Get());
+	Draft.Thumbnail.Mode = EMantleThumbnailMode::Custom;
+	Draft.Thumbnail.ImageFile.FilePath = File;
+	const FMantleCosmeticPackage Package = FMantleCosmeticExport::BuildCore(Draft, *Contract);
+	TestFalse(TEXT("a custom thumbnail exports without errors"), Package.HasErrors());
+	TestEqual(TEXT("the thumbnail is 512 wide"), UploadedWidth(Package, TEXT("thumbnail")), 512);
+	TestTrue(TEXT("the notes say it is the custom image"), HasNote(Package, TEXT("custom image")));
+
+	// A picture that is not there refuses the export and says why.
+	Draft.Thumbnail.ImageFile.FilePath = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), TEXT("MantleNoSuchThumbnail.png"));
+	const FMantleCosmeticPackage Refused = FMantleCosmeticExport::BuildCore(Draft, *Contract);
+	TestTrue(TEXT("a missing custom picture is an error"), Refused.HasErrors());
 	return true;
 }
 

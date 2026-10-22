@@ -3,10 +3,13 @@
 
 #include "DesktopPlatformModule.h"
 #include "HAL/IConsoleManager.h"
+#include "MantleModelThumbnail.h"
 #include "MantlePng.h"
 #include "MantleRuntime.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
 #include "RenderingThread.h"
 #include "Slate/WidgetRenderer.h"
 #include "TextureResource.h"
@@ -21,6 +24,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
@@ -44,6 +48,8 @@ void SMantleThumbnailSection::Construct(const FArguments& InArgs)
 	OnUseView = InArgs._OnUseView;
 	Render = InArgs._Render;
 	UseViewLabel = InArgs._UseViewLabel.IsEmpty() ? FMantleThumbnailText::UseThisView() : InArgs._UseViewLabel;
+	bAngleSliders = InArgs._AngleSliders;
+	DefaultAngle = InArgs._DefaultAngle;
 
 	const FVector2f Size = PreviewSize(Target);
 	ChildSlot
@@ -60,9 +66,14 @@ void SMantleThumbnailSection::Construct(const FArguments& InArgs)
 			SNew(SVerticalBox)
 			.Visibility_Lambda([this] { return Current().Mode == EMantleThumbnailMode::Angle ? EVisibility::Visible : EVisibility::Collapsed; })
 			+ SVerticalBox::Slot().AutoHeight() [ InArgs._AngleContent.Widget ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeAngleSliders()
+			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
 			[
 				SNew(SHorizontalBox)
+				.Visibility(bAngleSliders ? EVisibility::Collapsed : EVisibility::Visible)
 				+ SHorizontalBox::Slot().AutoWidth()
 				[
 					SNew(SButton)
@@ -144,6 +155,11 @@ void SMantleThumbnailSection::SetMode(EMantleThumbnailMode Mode)
 	if (Next.Mode != Mode)
 	{
 		Next.Mode = Mode;
+		// Choose the angle with sliders starts from the kind's own view, not from nothing.
+		if (Mode == EMantleThumbnailMode::Angle && bAngleSliders && Next.Angle.IsNearlyZero())
+		{
+			Next.Angle = DefaultAngle.Get(FRotator::ZeroRotator);
+		}
 		SetChoice(Next);
 	}
 }
@@ -170,6 +186,53 @@ TSharedRef<SWidget> SMantleThumbnailSection::MakeModeRow(EMantleThumbnailMode Mo
 			[
 				SNew(STextBlock).WrapTextAt(500.0f).ColorAndOpacity(FSlateColor::UseSubduedForeground()).Text(FMantleThumbnailText::ModeHelp(Mode))
 			]
+		];
+}
+
+TSharedRef<SWidget> SMantleThumbnailSection::MakeAngleSliders()
+{
+	// One row: the label, then a spin box that edits one part of the angle.
+	auto Row = [this](const FText& Label, const FText& Tip, const float Min, const float Max, TFunction<float(const FMantleThumbnailChoice&)> Get,
+		TFunction<void(FMantleThumbnailChoice&, float)> Set) -> TSharedRef<SWidget>
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
+			[
+				SNew(SBox).WidthOverride(48.0f)[ SNew(STextBlock).Text(Label) ]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.0f)
+			[
+				SNew(SSpinBox<float>)
+				.MinValue(Min).MaxValue(Max).MinSliderValue(Min).MaxSliderValue(Max)
+				.ToolTipText(Tip)
+				.Value_Lambda([this, Get] { return Get(Current()); })
+				.OnValueChanged_Lambda([this, Set](float Value)
+				{
+					FMantleThumbnailChoice Next = Current();
+					Set(Next, Value);
+					SetChoice(Next);
+				})
+			];
+	};
+	return SNew(SVerticalBox)
+		.Visibility(bAngleSliders ? EVisibility::Visible : EVisibility::Collapsed)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 1.0f)
+		[
+			Row(LOCTEXT("AngleTurn", "Turn"), LOCTEXT("AngleTurnTip", "Turn the model left or right, in degrees."), -180.0f, 180.0f,
+				[](const FMantleThumbnailChoice& C) { return static_cast<float>(C.Angle.Yaw); },
+				[](FMantleThumbnailChoice& C, float V) { C.Angle.Yaw = V; })
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 1.0f)
+		[
+			Row(LOCTEXT("AngleTilt", "Tilt"), LOCTEXT("AngleTiltTip", "Look from above or below, in degrees."), -89.0f, 89.0f,
+				[](const FMantleThumbnailChoice& C) { return static_cast<float>(C.Angle.Pitch); },
+				[](FMantleThumbnailChoice& C, float V) { C.Angle.Pitch = V; })
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 1.0f)
+		[
+			Row(LOCTEXT("AngleZoom", "Zoom"), LOCTEXT("AngleZoomTip", "1 is the whole model; more is closer."), 0.25f, 4.0f,
+				[](const FMantleThumbnailChoice& C) { return C.Zoom; },
+				[](FMantleThumbnailChoice& C, float V) { C.Zoom = V; })
 		];
 }
 
@@ -356,6 +419,65 @@ namespace MantleThumbnailSectionDevShot
 			FPlatformMisc::RequestExit(false);
 		}
 	}
+
+	/**
+	 * A real model through each choice, as a vehicle, weapon or consumable gets it (FMantleModelThumbnail): the catalog thumbnail capture of the model
+	 * (Automatic and Choose the angle) and a custom image, and the section with its Turn / Tilt / Zoom sliders on the chosen angle. Uploads nothing.
+	 */
+	void RunModelSamples(const TArray<FString>& Args)
+	{
+		if (Args.Num() < 3)
+		{
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_THUMBNAIL_SHOT usage: Mantle.Dev.ThumbnailModelSamples <Model> <Directory> <Custom.png> [Exit]"));
+			return;
+		}
+		FString Path = Args[0];
+		if (!FPackageName::GetShortName(Path).Contains(TEXT(".")))
+		{
+			Path += TEXT(".") + FPackageName::GetShortName(Path);
+		}
+		UObject* Model = LoadObject<UObject>(nullptr, *Path);
+		if (!Model)
+		{
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_THUMBNAIL_SHOT model %s did not load"), *Path);
+			return;
+		}
+		IFileManager::Get().MakeDirectory(*Args[1], true);
+		const FMantleThumbnailResolver::FRender Render = FMantleModelThumbnail::RenderFor([Model]() -> UObject* { return Model; });
+		struct FSample { const TCHAR* Name; EMantleThumbnailMode Mode; };
+		for (const FSample& Sample : { FSample{ TEXT("automatic"), EMantleThumbnailMode::Automatic }, FSample{ TEXT("angle"), EMantleThumbnailMode::Angle },
+			FSample{ TEXT("custom"), EMantleThumbnailMode::Custom } })
+		{
+			FMantleThumbnailChoice Choice;
+			Choice.Mode = Sample.Mode;
+			Choice.Angle = FRotator(-12.0, 150.0, 0.0);
+			Choice.Zoom = 1.3f;
+			Choice.ImageFile.FilePath = Args[2];
+			const FMantleThumbnailResult Picture = FMantleThumbnailResolver::Resolve(Choice, FMantleThumbnailTarget::Square(), Render);
+			const FString File = FPaths::Combine(Args[1], FString::Printf(TEXT("model_thumbnail_%s.png"), Sample.Name));
+			const bool bSaved = Picture.Succeeded() && FFileHelper::SaveArrayToFile(FMantleThumbnailResolver::ToPng(Picture, FMantleThumbnailTarget::Square()), *File);
+			UE_LOG(LogMantle, Display, TEXT("MANTLE_THUMBNAIL_SHOT %s %s %s"), *File, bSaved ? TEXT("saved") : TEXT("NOT saved"), *(Picture.Succeeded() ? Picture.Source : Picture.Error));
+			if (Sample.Mode == EMantleThumbnailMode::Angle)
+			{
+				const TSharedRef<SMantleThumbnailSection> Section = SNew(SMantleThumbnailSection)
+					.Target(FMantleThumbnailTarget::Square())
+					.AngleSliders(true)
+					.DefaultAngle(FMantleModelThumbnail::DefaultView())
+					.Choice(Choice)
+					.Render(Render);
+				Save(SNew(SBox).Padding(12.0f)[Section], FPaths::Combine(Args[1], TEXT("model_section_angle.png")), 560.0f, 1400.0f);
+			}
+		}
+		if (Args.Num() > 3 && Args[3].Equals(TEXT("Exit"), ESearchCase::IgnoreCase))
+		{
+			FPlatformMisc::RequestExit(false);
+		}
+	}
+
+	FAutoConsoleCommand ModelCommand(
+		TEXT("Mantle.Dev.ThumbnailModelSamples"),
+		TEXT("Mantle.Dev.ThumbnailModelSamples <Model> <Directory> <Custom.png> [Exit]: a model through each thumbnail choice (the catalog capture), and the section with its angle sliders. Uploads nothing."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&RunModelSamples));
 
 	FAutoConsoleCommand Command(
 		TEXT("Mantle.Dev.ThumbnailSectionShot"),

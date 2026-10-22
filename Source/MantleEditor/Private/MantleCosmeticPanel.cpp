@@ -10,6 +10,10 @@
 #include "MantleCosmeticPreviewRetarget.h"
 #include "MantleCosmeticPreviewViewport.h"
 #include "MantleCosmeticThumbnail.h"
+#include "MantleThumbnailStore.h"
+#include "SMantleThumbnailSection.h"
+#include "IImageWrapper.h"
+#include "IImageWrapperModule.h"
 #include "MantleCosmeticUpload.h"
 #include "MantleCosmeticValidation.h"
 #include "MantleClothingColorPreview.h"
@@ -22,6 +26,7 @@
 #include "MantleMetaHumanPose.h"
 #include "MantleParametricOutfit.h"
 #include "MantleOverlayChecks.h"
+#include "MantleOverlayWorn.h"
 #include "MantleOverlayGuide.h"
 #include "MantleParametricOutfitAuthoring.h"
 #include "MantleReferenceBodies.h"
@@ -273,6 +278,12 @@ void SMantleCosmeticPanel::Construct(const FArguments& InArgs)
 	const TAttribute<EVisibility> Previewable = TAttribute<EVisibility>::CreateLambda([this]
 	{
 		return Draft.Class == EMantleCosmeticClass::Garment || Draft.Class == EMantleCosmeticClass::Hair || Draft.Class == EMantleCosmeticClass::Avatar || Draft.Class == EMantleCosmeticClass::Accessory || Draft.Class == EMantleCosmeticClass::Overlay ? EVisibility::Visible : EVisibility::Collapsed;
+	});
+
+	// #124: every class takes the shared Thumbnail section.
+	const TAttribute<EVisibility> Thumbnailable = TAttribute<EVisibility>::CreateLambda([this]
+	{
+		return EVisibility::Visible;
 	});
 
 	ChildSlot
@@ -965,6 +976,16 @@ void SMantleCosmeticPanel::Construct(const FArguments& InArgs)
 					MakeSection(LOCTEXT("PreviewTitle", "Preview"), MakePreviewSection(), Previewable)
 				]
 
+				// #124: the thumbnail, the same section in every uploader.
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+				[
+					// The section carries its own heading, so it is not wrapped in MakeSection's.
+					SNew(SBox).Visibility(Thumbnailable)
+					[
+						MakeThumbnailSection()
+					]
+				]
+
 				// The one button.
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 6)
 				[
@@ -1266,6 +1287,7 @@ void SMantleCosmeticPanel::SetSlot(const FString& Slot)
 		Draft.OverlayNormalFile.Reset();
 	}
 	bAccessoryPlacementInitialized = FMantleAccessorySettings::Load(Draft, AccessorySettingsFile());
+	LoadThumbnailChoice();
 	RefreshAccessoryPreview();
 	// #483: the sections the new slot takes.
 	RefreshOutfitSections();
@@ -1307,6 +1329,7 @@ void SMantleCosmeticPanel::SetSource(UObject* Source)
 	ClothingMaterialNames = FMantleCosmeticExport::SectionMaterialNames(Cast<USkeletalMesh>(Source), 0);
 	RefreshClothingColors();
 	bAccessoryPlacementInitialized = FMantleAccessorySettings::Load(Draft, AccessorySettingsFile());
+	LoadThumbnailChoice();
 	Draft.CardsEntry = INDEX_NONE;
 	Draft.SourceSection = INDEX_NONE;
 	Draft.SectionRoles.Reset();
@@ -2151,6 +2174,7 @@ void SMantleCosmeticPanel::ShowHairHeadFit()
 FReply SMantleCosmeticPanel::OnCheck()
 {
 	BuildPackage();
+	if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
 	return FReply::Handled();
 }
 
@@ -2158,8 +2182,10 @@ FReply SMantleCosmeticPanel::OnUpload()
 {
 	if (!BuildPackage())
 	{
+		if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
 		return FReply::Handled();
 	}
+	if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
 	if (!FMantleCreatorSignIn::EnsureSignedIn(LOCTEXT("UploadSignInReason", "Sign in to publish this item to Mantle.")))
 	{
 		return FReply::Handled();
@@ -2413,6 +2439,58 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakePreviewSection()
 				SAssignNew(PreviewViewport, SMantleCosmeticPreviewViewport)
 			]
 		];
+}
+
+TSharedRef<SWidget> SMantleCosmeticPanel::MakeThumbnailSection()
+{
+	return SAssignNew(ThumbnailSection, SMantleThumbnailSection)
+		.Target(FMantleThumbnailTarget::Square())
+		.Choice_Lambda([this] { return Draft.Thumbnail; })
+		.OnChoiceChanged_Raw(this, &SMantleCosmeticPanel::ThumbnailChoiceChanged)
+		.AngleSliders(true)
+		.DefaultAngle_Lambda([this] { return FMantleCosmeticThumbnail::DefaultView(Draft.Class == EMantleCosmeticClass::Accessory); })
+		.Render(FMantleThumbnailResolver::FRender([this](const FMantleThumbnailChoice&, TArray<FColor>& OutPixels, int32& OutWidth, int32& OutHeight, FString& OutError)
+		{
+			// The picture the upload carries is the one the check just exported, so it is shown from the package.
+			const FMantleCosmeticUploadAsset* Asset = Package.IsSet() && !Package->ThumbnailKey.IsEmpty() ? Package->FindAsset(Package->ThumbnailKey) : nullptr;
+			if (!Asset)
+			{
+				OutError = TEXT("Choose Check only to draw this picture.");
+				return false;
+			}
+			IImageWrapperModule& Wrappers = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+			const TSharedPtr<IImageWrapper> Wrapper = Wrappers.CreateImageWrapper(EImageFormat::PNG);
+			TArray64<uint8> Raw;
+			if (!Wrapper.IsValid() || !Wrapper->SetCompressed(Asset->Bytes.GetData(), Asset->Bytes.Num()) || !Wrapper->GetRaw(ERGBFormat::BGRA, 8, Raw))
+			{
+				OutError = TEXT("The exported thumbnail could not be shown.");
+				return false;
+			}
+			OutWidth = Wrapper->GetWidth();
+			OutHeight = Wrapper->GetHeight();
+			OutPixels.SetNumUninitialized(static_cast<int32>(Raw.Num() / sizeof(FColor)));
+			FMemory::Memcpy(OutPixels.GetData(), Raw.GetData(), OutPixels.Num() * sizeof(FColor));
+			return true;
+		}))
+		[
+			SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			.Text(LOCTEXT("ThumbnailAngleHint", "Choose Check only to see the picture from this angle."))
+		];
+}
+
+void SMantleCosmeticPanel::LoadThumbnailChoice()
+{
+	const UObject* Source = Draft.Source.Get();
+	FMantleThumbnailStore::Load(Source ? Source->GetPathName() : FString(), FString::FromInt(static_cast<int32>(Draft.Class)), Draft.Thumbnail, FMantleThumbnailStore::DefaultConfigFile());
+	if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
+}
+
+void SMantleCosmeticPanel::ThumbnailChoiceChanged(const FMantleThumbnailChoice& Choice)
+{
+	Draft.Thumbnail = Choice;
+	Package.Reset();
+	const UObject* Source = Draft.Source.Get();
+	FMantleThumbnailStore::Save(Source ? Source->GetPathName() : FString(), FString::FromInt(static_cast<int32>(Draft.Class)), Choice, FMantleThumbnailStore::DefaultConfigFile());
 }
 
 bool SMantleCosmeticPanel::IsOutfitAuthoringCandidate(const FAssetData& Asset, bool bFace) const
@@ -3140,126 +3218,26 @@ FReply SMantleCosmeticPanel::OnPreviewOverlay()
 		ShowIssues(Built.Issues, Built.Notes);
 		return Refuse(TEXT("The overlay does not pass the checks yet; fix the problems listed under the checks, then Preview."));
 	}
-	const FMantleCosmeticUploadAsset* MaskAsset = Built.FindAsset(Built.MaskKey);
-	if (!MaskAsset)
+	FMantleOverlayWorn Worn;
+	FString Refusal;
+	if (!FMantleOverlayWorn::Make(Built, Draft.Slot, *Contract, OverlayPreviewBody.Get(), OverlayPreviewFace.Get(), Worn, Refusal))
 	{
-		return Refuse(TEXT("Choose the overlay's mask first."));
+		return Refuse(Refusal);
 	}
-	FString Error;
-	FMantleTextureBuildParams MaskParams;
-	MaskParams.Role = EMantleTextureRole::Data;
-	MaskParams.MaxDimension = FMantleOverlayChecks::MaxSize;
-	MaskParams.AddressX = MaskParams.AddressY = TA_Clamp;
-	MaskParams.LODGroup = TEXTUREGROUP_Character;
-	UTexture2D* MaskTexture = FMantleRuntimeTextureBuilder::BuildFromBytes(MaskAsset->Bytes, MaskParams, &Error);
-	if (!MaskTexture)
-	{
-		return Refuse(FString::Printf(TEXT("The mask could not be loaded for the preview: %s"), *Error));
-	}
-	UTexture2D* NormalTexture = nullptr;
-	if (const FMantleCosmeticUploadAsset* NormalAsset = Built.FindAsset(Built.OverlayNormalKey))
-	{
-		FMantleTextureBuildParams NormalParams = MaskParams;
-		NormalParams.Role = EMantleTextureRole::Normal;
-		NormalTexture = FMantleRuntimeTextureBuilder::BuildFromBytes(NormalAsset->Bytes, NormalParams, &Error);
-		if (!NormalTexture)
-		{
-			return Refuse(FString::Printf(TEXT("The normal map could not be loaded for the preview: %s"), *Error));
-		}
-	}
-
-	// The converted body and face: the picked ones, else Mantle's reference body and face.
-	const bool bFace = FMantleOverlayChecks::IsFaceSlot(Draft.Slot);
-	USkeletalMesh* Body = OverlayPreviewBody.Get();
-	USkeletalMesh* Face = OverlayPreviewFace.Get();
-	if (!Body)
-	{
-		FString WhyNot;
-		const TArray<USkeletalMesh*> References = FMantleReferenceBodies::FindBodies(*Contract, &WhyNot);
-		Body = References.IsEmpty() ? nullptr : References[0];
-		if (!Body)
-		{
-			return Refuse(FString::Printf(TEXT("There is no converted MetaHuman body to preview on: %s Choose a converted body under Preview body."), *WhyNot));
-		}
-	}
-	if (!Face)
-	{
-		Face = FMantleReferenceBodies::GetFace();
-	}
-	if (bFace && !Face)
-	{
-		return Refuse(TEXT("A face overlay needs a converted MetaHuman face to preview on. Choose one under Preview face."));
-	}
-
-	// The shared skin materials the game draws overlays on. They are project content, so a project without them shows the mesh as it is.
+	const bool bFace = Worn.bFace;
+	USkeletalMesh* Body = Worn.Body;
+	USkeletalMesh* Face = Worn.Face;
 	USkeletalMesh* Target = bFace ? Face : Body;
-	UMaterialInterface* Parent = LoadObject<UMaterialInterface>(nullptr, bFace
-		? TEXT("/Game/Avatars/Appearance/Shared/MI_MantleSharedFace.MI_MantleSharedFace")
-		: TEXT("/Game/Avatars/Appearance/Shared/MI_MantleSharedBody.MI_MantleSharedBody"));
-	TMap<int32, UMaterialInterface*> BodyMaterials;
-	TMap<int32, UMaterialInterface*> FaceMaterials;
-	FString Note;
-	if (!Parent)
-	{
-		Note = TEXT(" The shared skin material (/Game/Avatars/Appearance/Shared) is not in this project, so the mask is not drawn; the mesh shows as it is.");
-	}
-	else
-	{
-		UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(Parent, GetTransientPackage());
-		const bool bScar = FMantleOverlayChecks::IsScarSlot(Draft.Slot);
-		const TCHAR* MaskName = bScar ? TEXT("ScarMask") : TEXT("TattooMask");
-		UTexture* Existing = nullptr;
-		if (!Material->GetTextureParameterValue(FHashedMaterialParameterInfo(FName(MaskName)), Existing))
-		{
-			Note = FString::Printf(TEXT(" The shared skin material has no %s parameter, so the mask is not drawn."), MaskName);
-		}
-		else
-		{
-			Material->SetTextureParameterValue(FName(MaskName), MaskTexture);
-			if (bScar)
-			{
-				if (NormalTexture)
-				{
-					Material->SetTextureParameterValue(TEXT("ScarNormal"), NormalTexture);
-				}
-				Material->SetScalarParameterValue(TEXT("ScarStrength"), 1.0f);
-				Material->SetVectorParameterValue(TEXT("ScarColor"), FLinearColor(0.35f, 0.12f, 0.10f));
-				Material->SetScalarParameterValue(TEXT("ScarRoughness"), 0.5f);
-			}
-			else
-			{
-				Material->SetScalarParameterValue(TEXT("TattooStrength"), 1.0f);
-				Material->SetVectorParameterValue(TEXT("TattooColor"), FLinearColor(0.02f, 0.02f, 0.05f));
-			}
-			// The skin sections only: eyes, teeth and lashes keep their own materials.
-			const TArray<FString> Names = FMantleCosmeticExport::SectionMaterialNames(Target, 0);
-			const TArray<FString> Roles = FMantleCosmeticExport::DefaultSectionRoles(Target, 0);
-			const TArray<FSkeletalMaterial>& Slots = Target->GetMaterials();
-			TMap<int32, UMaterialInterface*>& Applied = bFace ? FaceMaterials : BodyMaterials;
-			for (int32 Slot = 0; Slot < Slots.Num(); ++Slot)
-			{
-				const int32 Section = Names.IndexOfByKey(Slots[Slot].MaterialSlotName.ToString());
-				if (Roles.IsValidIndex(Section) && Roles[Section] == TEXT("skin"))
-				{
-					Applied.Add(Slot, Material);
-				}
-			}
-			if (Applied.IsEmpty() && Slots.Num() == 1)
-			{
-				Applied.Add(0, Material);
-			}
-			if (Applied.IsEmpty())
-			{
-				Note = TEXT(" Could not tell which part of the mesh is the skin, so the mask is not drawn.");
-			}
-		}
-	}
+	const TMap<int32, UMaterialInterface*>& BodyMaterials = Worn.BodyMaterials;
+	const TMap<int32, UMaterialInterface*>& FaceMaterials = Worn.FaceMaterials;
+	const FString Note = Worn.Note;
+	// The preview viewport holds the instance through its components; the worn set's own references go with this function.
 
 	PreviewInputError.Reset();
 	AvatarPreviewStatus.Reset();
 	bAvatarPreviewFailed = false;
 	PreviewViewport->ShowOverlay(Body, Face, BodyMaterials, FaceMaterials, bFace, Body->GetPathName() + (Face ? Face->GetPathName() : FString()) + Draft.Slot);
-	const bool bDrawn = !BodyMaterials.IsEmpty() || !FaceMaterials.IsEmpty();
+	const bool bDrawn = Worn.bDrawn;
 	OverlayPreviewStatus = FString::Printf(TEXT("%s on %s.%s"), *Draft.Slot, *Target->GetName(), *Note);
 	bOverlayPreviewFailed = !bDrawn;
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_COSMETIC_PREVIEW overlay slot=%s target=%s drawn=%d"), *Draft.Slot, *Target->GetPathName(), bDrawn ? 1 : 0);
@@ -3985,6 +3963,95 @@ namespace MantleCosmeticPanelDevShot
 		TEXT("Mantle.Dev.ConvertPanelShot"),
 		TEXT("Mantle.Dev.ConvertPanelShot <Character> <Directory> [Confirm keys]: converts a character in the Cosmetics panel, uses its first clothing piece, and renders the panel after each step. Nothing uploads."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&SMantleCosmeticPanel::DevConvertShot));
+}
+
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleCosmeticPanelDevShot
+{
+	FAutoConsoleCommand PanelShotCommand(
+		TEXT("Mantle.Dev.CosmeticPanelShot"),
+		TEXT("Mantle.Dev.CosmeticPanelShot <File.png> [Exit]: renders the Cosmetics panel offscreen, to show its Thumbnail section. Uploads nothing."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&SMantleCosmeticPanel::DevPanelShot));
+}
+
+void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
+{
+	using namespace MantleCosmeticPanelDevShot;
+	if (Args.IsEmpty())
+	{
+		UE_LOG(LogMantle, Error, TEXT("MANTLE_PANEL_SHOT usage: Mantle.Dev.CosmeticPanelShot <File.png> [Exit]"));
+		return;
+	}
+	const TSharedPtr<SDockTab> Tab = FGlobalTabmanager::Get()->TryInvokeTab(TabName);
+	if (Tab.IsValid())
+	{
+		const TSharedRef<SMantleCosmeticPanel> Panel = StaticCastSharedRef<SMantleCosmeticPanel>(Tab->GetContent());
+		FString SourcePath;
+		FString CustomPng;
+		bool bAngle = false;
+		int32 ClassNumber = static_cast<int32>(EMantleCosmeticClass::Garment);
+		for (int32 Index = 1; Index < Args.Num(); ++Index)
+		{
+			if (Args[Index].StartsWith(TEXT("Source=")))
+			{
+				SourcePath = Args[Index].Mid(7);
+			}
+			else if (Args[Index].StartsWith(TEXT("Class=")))
+			{
+				ClassNumber = FCString::Atoi(*Args[Index].Mid(6));
+			}
+			else if (Args[Index].StartsWith(TEXT("SaveCustom=")))
+			{
+				CustomPng = Args[Index].Mid(11);
+			}
+			else if (Args[Index].Equals(TEXT("Angle"), ESearchCase::IgnoreCase))
+			{
+				bAngle = true;
+			}
+		}
+		if (!SourcePath.IsEmpty())
+		{
+			if (!FPackageName::GetShortName(SourcePath).Contains(TEXT(".")))
+			{
+				SourcePath += TEXT(".") + FPackageName::GetShortName(SourcePath);
+			}
+			if (UObject* Item = LoadObject<UObject>(nullptr, *SourcePath))
+			{
+				Panel->Draft.Class = static_cast<EMantleCosmeticClass>(ClassNumber);
+				Panel->SetSource(Item);
+				if (!CustomPng.IsEmpty())
+				{
+					FMantleThumbnailChoice Choice;
+					Choice.Mode = EMantleThumbnailMode::Custom;
+					Choice.ImageFile.FilePath = CustomPng;
+					Panel->ThumbnailChoiceChanged(Choice);
+					Panel->ThumbnailSection->Refresh();
+				}
+			}
+			else
+			{
+				UE_LOG(LogMantle, Error, TEXT("MANTLE_PANEL_SHOT failed: %s did not load"), *SourcePath);
+			}
+		}
+		if (bAngle)
+		{
+			// Choose the angle, from the class's default view: the same sliders the builders show.
+			FMantleThumbnailChoice Choice = Panel->Draft.Thumbnail;
+			Choice.Mode = EMantleThumbnailMode::Angle;
+			Choice.Angle = FMantleCosmeticThumbnail::DefaultView(Panel->Draft.Class == EMantleCosmeticClass::Accessory);
+			Panel->Draft.Thumbnail = Choice;
+			Panel->ThumbnailSection->Refresh();
+		}
+		Save(Panel, Args[0], 640.0f, 6000.0f);
+	}
+	else
+	{
+		UE_LOG(LogMantle, Error, TEXT("MANTLE_PANEL_SHOT failed: the panel did not open"));
+	}
+	if (Args.ContainsByPredicate([](const FString& Arg) { return Arg.Equals(TEXT("Exit"), ESearchCase::IgnoreCase); }))
+	{
+		FPlatformMisc::RequestExit(false);
+	}
 }
 
 void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)

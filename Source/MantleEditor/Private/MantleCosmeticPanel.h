@@ -82,6 +82,13 @@ public:
 	 */
 	static void DevConvertShot(const TArray<FString>& Args);
 
+	/**
+	 * #124: maintainer command Mantle.Dev.CosmeticPanelShot <File.png> [Source=<asset>] [Class=<number>] [SaveCustom=<png>] [Angle] [Exit]: opens the panel
+	 * (with Source as the item, as that class) and renders it offscreen, to show the shared Thumbnail section as the cosmetic uploader has it; SaveCustom first
+	 * chooses that custom image for the item, saved as the creator's choice would be.
+	 */
+	static void DevPanelShot(const TArray<FString>& Args);
+
 private:
 	void SetClass(EMantleCosmeticClass Class);
 	void SetSource(UObject* Source);
@@ -172,6 +179,15 @@ private:
 	 * body it was made on, or a catalog avatar by id (#283). Avatars: the body posed by its retargeter (OnPreviewAvatar).
 	 */
 	TSharedRef<SWidget> MakePreviewSection();
+
+	/** #124: the Thumbnail section every uploader shows, on this draft's choice. */
+	TSharedRef<SWidget> MakeThumbnailSection();
+	/** Reads the saved thumbnail choice for the draft's source and class (Automatic when none) and redraws the section. */
+	void LoadThumbnailChoice();
+	/** The creator changed the choice: kept on the draft and saved for this source; the package is built again. */
+	void ThumbnailChoiceChanged(const FMantleThumbnailChoice& Choice);
+	/** The thumbnail section, to redraw it after a check. */
+	TSharedPtr<class SMantleThumbnailSection> ThumbnailSection;
 	FReply OnPreview();
 	FText GetPreviewStatusText() const;
 	void ApplyPreviewAnimation();
