@@ -4024,7 +4024,7 @@ namespace MantleCosmeticPanelDevShot
 {
 	FAutoConsoleCommand PanelShotCommand(
 		TEXT("Mantle.Dev.CosmeticPanelShot"),
-		TEXT("Mantle.Dev.CosmeticPanelShot <File.png> [Exit]: renders the Cosmetics panel offscreen, to show its Thumbnail section. Uploads nothing."),
+		TEXT("Mantle.Dev.CosmeticPanelShot <File.png> [Exit] [Source= Class= Body= Face=]: renders the Cosmetics panel offscreen, to show its Thumbnail section. Uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&SMantleCosmeticPanel::DevPanelShot));
 }
 
@@ -4042,6 +4042,8 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 		const TSharedRef<SMantleCosmeticPanel> Panel = StaticCastSharedRef<SMantleCosmeticPanel>(Tab->GetContent());
 		FString SourcePath;
 		FString CustomPng;
+		// #52: Body= and Face= (asset paths) and Build check the draft as the Check button does, so the hair fit card shows.
+		FString BodyPath, FacePath;
 		bool bAngle = false;
 		int32 ClassNumber = static_cast<int32>(EMantleCosmeticClass::Garment);
 		for (int32 Index = 1; Index < Args.Num(); ++Index)
@@ -4053,6 +4055,14 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 			else if (Args[Index].StartsWith(TEXT("Class=")))
 			{
 				ClassNumber = FCString::Atoi(*Args[Index].Mid(6));
+			}
+			else if (Args[Index].StartsWith(TEXT("Body=")))
+			{
+				BodyPath = Args[Index].Mid(5);
+			}
+			else if (Args[Index].StartsWith(TEXT("Face=")))
+			{
+				FacePath = Args[Index].Mid(5);
 			}
 			else if (Args[Index].StartsWith(TEXT("SaveCustom=")))
 			{
@@ -4086,6 +4096,20 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 			{
 				UE_LOG(LogMantle, Error, TEXT("MANTLE_PANEL_SHOT failed: %s did not load"), *SourcePath);
 			}
+		}
+		const auto LoadPath = [](FString Path) -> UObject*
+		{
+			if (Path.IsEmpty()) return nullptr;
+			if (!FPackageName::GetShortName(Path).Contains(TEXT("."))) Path += TEXT(".") + FPackageName::GetShortName(Path);
+			return LoadObject<UObject>(nullptr, *Path);
+		};
+		if (!BodyPath.IsEmpty() || !FacePath.IsEmpty())
+		{
+			Panel->Draft.AuthoringBody = Cast<USkeletalMesh>(LoadPath(BodyPath));
+			Panel->Draft.AuthoringFace = Cast<USkeletalMesh>(LoadPath(FacePath));
+			if (Panel->Draft.Slot.IsEmpty()) Panel->Draft.Slot = TEXT("hair");
+			Panel->Draft.bRenderThumbnail = false;
+			Panel->BuildPackage();
 		}
 		if (bAngle)
 		{
