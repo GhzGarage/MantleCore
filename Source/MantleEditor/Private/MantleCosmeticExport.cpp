@@ -2283,7 +2283,7 @@ namespace MantleCosmeticExportPrivate
 		if (!Mesh)
 		{
 			Issues.Add(FMantleCosmeticChecks::Error(TEXT("there is no converted MetaHuman body or face to place the picture on."),
-				TEXT("Open Place it and choose the body or face to place it on.")));
+				TEXT("Choose a converted MetaHuman under Preview body (optional) or Preview face (optional) to place it on.")));
 			return false;
 		}
 		TArray<FMantleOverlayBake::FTriangle> Triangles;
