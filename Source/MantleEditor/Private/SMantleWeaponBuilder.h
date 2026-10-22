@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MantleThumbnailChoice.h"
 #include "MantleBuilderKind.h"
 #include "MantleLibraryPublish.h"
 #include "MantleWeaponBuilderKind.h"
@@ -46,6 +47,11 @@ private:
 	TSharedRef<SWidget> MakeTuningStep();
 	TSharedRef<SWidget> MakePartsAndSoundStep();
 	TSharedRef<SWidget> MakeCreateStep();
+	/** #124: the Thumbnail step, the shared section on the weapon's (or consumable's) model. */
+	TSharedRef<SWidget> MakeThumbnailStep();
+	/** The choice is kept under the weapon's safe name (FMantleThumbnailStore, class "weapon"): Create saves it again under the name it wrote. */
+	void LoadThumbnailChoice(const FString& SafeName);
+	void SaveThumbnailChoice(const FString& SafeName);
 
 	TSharedRef<SWidget> MakeHoldCard(EMantleWeaponHold Hold);
 
@@ -81,6 +87,8 @@ private:
 	bool IsSelectedAssetPackage(const UObject* Object) const;
 
 	TStrongObjectPtr<UMantleWeaponSource> Working;
+	/** #124: how the weapon's library picture is made. */
+	FMantleThumbnailChoice ThumbnailChoice;
 	FSoftObjectPath SourceAssetPath;
 	FString SourceBaselineSignature;
 	TSharedPtr<FMantleWeaponBuilderKind> Kind;

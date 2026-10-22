@@ -32,6 +32,9 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SSpinBox.h"
+#include "MantleModelThumbnail.h"
+#include "MantleThumbnailStore.h"
+#include "SMantleThumbnailSection.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -908,6 +911,17 @@ TSharedRef<SWidget> SMantleVehicleBuilder::MakeModelStep()
 			[
 				SAssignNew(ModelRowsBox, SVerticalBox)
 			]
+			// #124: the library card's picture, the same Thumbnail section every Mantle uploader shows.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
+			[
+				SAssignNew(ThumbnailSection, SMantleThumbnailSection)
+					.Target(FMantleThumbnailTarget::Square())
+					.AngleSliders(true)
+					.DefaultAngle(FMantleModelThumbnail::DefaultView())
+					.Choice_Lambda([this] { return ThumbnailChoice; })
+					.OnChoiceChanged_Raw(this, &SMantleVehicleBuilder::ThumbnailChoiceChanged)
+					.Render(FMantleModelThumbnail::RenderFor([this]() -> UObject* { return Mesh.Get(); }))
+			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
 			[
 				SNew(SBox).HeightOverride(44.f)
@@ -1021,11 +1035,51 @@ void SMantleVehicleBuilder::SetMesh(const FAssetData& Asset)
 	}
 	Mesh = Model;
 	MeshProblem = FText::GetEmpty();
+	LoadThumbnailChoice();
 	ReadModel();
 	if (Asset.IsValid() && !Model)
 	{
 		// The picker lets any model through so a wrong one can be explained here, instead of being refused without a word.
 		MeshProblem = LOCTEXT("NotAModel", "That isn't a model. Pick a Static Mesh or a Skeletal Mesh.");
+	}
+}
+
+void SMantleVehicleBuilder::LoadThumbnailChoice()
+{
+	FMantleThumbnailStore::Load(Mesh.IsValid() ? Mesh->GetPathName() : FString(), TEXT("vehicle"), ThumbnailChoice, FMantleThumbnailStore::DefaultConfigFile());
+	if (ThumbnailSection.IsValid())
+	{
+		ThumbnailSection->Refresh();
+	}
+}
+
+void SMantleVehicleBuilder::ThumbnailChoiceChanged(const FMantleThumbnailChoice& Choice)
+{
+	ThumbnailChoice = Choice;
+	FMantleThumbnailStore::Save(Mesh.IsValid() ? Mesh->GetPathName() : FString(), TEXT("vehicle"), Choice, FMantleThumbnailStore::DefaultConfigFile());
+}
+
+void SMantleVehicleBuilder::ApplyThumbnailChoice(FMantleVehicleBuildResult& Result)
+{
+	if (!Result.bOk || !Result.Source || ThumbnailChoice.Mode == EMantleThumbnailMode::Automatic)
+	{
+		return;
+	}
+	// The build took the automatic picture by itself; the creator's choice replaces it.
+	const FMantleThumbnailResult Picture = FMantleThumbnailResolver::Resolve(ThumbnailChoice, FMantleThumbnailTarget::Square(),
+		FMantleModelThumbnail::RenderFor([this]() -> UObject* { return Mesh.Get(); }));
+	if (!Picture.Succeeded())
+	{
+		Result.Notes.Add(FString::Printf(TEXT("Your thumbnail choice could not be used (%s), so the vehicle keeps the automatic picture."), *Picture.Error));
+		return;
+	}
+	Result.Source->Modify();
+	Result.Source->ThumbnailPng = FMantleThumbnailResolver::ToPng(Picture, FMantleThumbnailTarget::Square());
+	Result.Source->MarkPackageDirty();
+	Result.Notes.Add(Picture.Warning.IsEmpty() ? Picture.Source : FString::Printf(TEXT("%s (%s)"), *Picture.Source, *Picture.Warning));
+	if (Result.bSaved)
+	{
+		Result.bSaved = FMantleVehicleBuilder::SaveVehicle(*Result.Source, Result.SaveProblem);
 	}
 }
 
@@ -1382,7 +1436,8 @@ FReply SMantleVehicleBuilder::OnBuild()
 	{
 		return FReply::Handled();
 	}
-	const FMantleVehicleBuildResult Result = FMantleVehicleBuilder::BuildAny(Mesh.Get(), SelectedPresetId, MakeBuildOptions());
+	FMantleVehicleBuildResult Result = FMantleVehicleBuilder::BuildAny(Mesh.Get(), SelectedPresetId, MakeBuildOptions());
+	ApplyThumbnailChoice(Result);
 	if (Result.bOk && Result.Source)
 	{
 		RememberBuilt(Result);

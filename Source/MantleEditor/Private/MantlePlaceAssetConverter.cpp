@@ -19,6 +19,9 @@
 #include "MantleVehicleConverter.h"
 #include "MantleVehicleSource.h"
 #include "MantleVehicleThumbnail.h"
+#include "MantleCosmeticThumbnail.h"
+#include "MantleModelThumbnail.h"
+#include "MantleThumbnailStore.h"
 
 #include "Animation/AnimSequence.h"
 #include "Engine/SkeletalMesh.h"
@@ -2741,6 +2744,42 @@ bool FMantlePlaceAssetConverter::ConvertWeapon(const FMantleGatheredWeapon& Weap
 	ReadPart(Parts.Projectile, Converted.Projectile);
 	Converted.FireSoundKey = Parts.Fire ? FMantlePlaceAssets::SoundKey(Parts.Fire) : FString();
 	Converted.FireSuppressedSoundKey = Parts.FireSuppressed ? FMantlePlaceAssets::SoundKey(Parts.FireSuppressed) : FString();
+	// #124: its library picture, from the creator's choice (the weapon builder's Thumbnail step) or Automatic: the model in the catalog's thumbnail scene. A texture
+	// upload beside the weapon's, like a vehicle's, named on its library item. A weapon that cannot get one (no renderer) publishes without, as before.
+	{
+		FMantleThumbnailChoice Choice;
+		FMantleThumbnailStore::Load(Weapon.Name, TEXT("weapon"), Choice, FMantleThumbnailStore::DefaultConfigFile());
+		USkeletalMesh* Model = const_cast<USkeletalMesh*>(Mesh);
+		const FMantleThumbnailResult Picture = FMantleThumbnailResolver::Resolve(Choice, FMantleThumbnailTarget::Square(),
+			FMantleModelThumbnail::RenderFor([Model]() -> UObject* { return Model; }));
+		if (Picture.Succeeded())
+		{
+			FMantleConvertedTexture Texture;
+			Texture.Format = TEXT("png");
+			Texture.Width = FMantleThumbnailTarget::Square().Width;
+			Texture.Height = FMantleThumbnailTarget::Square().Height;
+			Texture.Bytes = FMantleThumbnailResolver::ToPng(Picture, FMantleThumbnailTarget::Square());
+			Texture.Hash = FMantleSha256::AssetHash(Texture.Bytes);
+			Texture.Key = FString::Printf(TEXT("weaponpicture:%s"), *HexOfHash(Texture.Hash));
+			Texture.Name = FString::Printf(TEXT("%s library picture"), *Weapon.Name);
+			Converted.ThumbnailKey = Out.AddTexture(MoveTemp(Texture));
+			if (!Picture.Warning.IsEmpty())
+			{
+				Out.Issues.Add(WarningIssue(FString::Printf(TEXT("The weapon '%s' thumbnail: %s"), *Weapon.Name, *Picture.Warning), TEXT("Use a bigger picture in the weapon builder's Thumbnail step.")));
+			}
+		}
+		else if (Choice.Mode == EMantleThumbnailMode::Custom)
+		{
+			Out.Issues.Add(ErrorIssue(FString::Printf(TEXT("The weapon '%s' thumbnail's custom image could not be used: %s"), *Weapon.Name, *Picture.Error),
+				TEXT("Open Tools > Mantle > Build a weapon, choose another picture in the Thumbnail step, press Create weapon, then publish again.")));
+			return false;
+		}
+		else if (FMantleCosmeticThumbnail::CanCapture())
+		{
+			Out.Issues.Add(WarningIssue(FString::Printf(TEXT("The weapon '%s' thumbnail could not be taken (%s), so its library card has no picture."), *Weapon.Name, *Picture.Error),
+				TEXT("Publish again; if it keeps happening, choose a Custom image in the weapon builder's Thumbnail step.")));
+		}
+	}
 	Out.Weapons.Add(MoveTemp(Converted));
 	return true;
 }

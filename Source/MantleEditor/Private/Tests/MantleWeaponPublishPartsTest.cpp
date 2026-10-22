@@ -1,6 +1,9 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantlePlaceAssetConverter.h"
 #include "MantlePlaceAssets.h"
+#include "MantlePng.h"
+#include "MantleThumbnailChoice.h"
+#include "MantleThumbnailStore.h"
 #include "MantleWeaponBuilderExport.h"
 #include "MantleWeaponBuilderLogic.h"
 #include "MantleWeaponDocument.h"
@@ -15,6 +18,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "Sound/SoundWave.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectIterator.h"
@@ -176,6 +180,26 @@ bool FMantleWeaponPublishPartsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the grip's model key"), Converted->Attachments[1].MeshKey, GripKey);
 	TestEqual(TEXT("the attack sound's key"), Converted->FireSoundKey, SoundKey);
 	TestTrue(TEXT("no quieter sound key"), Converted->FireSuppressedSoundKey.IsEmpty());
+
+	// #124: with a custom thumbnail chosen for it (kept under the weapon's name), the weapon uploads a 512 x 512 library picture beside it.
+	{
+		TArray<FColor> Pixels;
+		Pixels.Init(FColor(200, 80, 40, 255), 640 * 640);
+		const FString PictureFile = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), TEXT("MantleWeaponThumbnail.png"));
+		FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(640, 640, Pixels), *PictureFile);
+		FMantleThumbnailChoice Choice;
+		Choice.Mode = EMantleThumbnailMode::Custom;
+		Choice.ImageFile.FilePath = PictureFile;
+		FMantleThumbnailStore::Save(Weapon.Name, TEXT("weapon"), Choice, FMantleThumbnailStore::DefaultConfigFile());
+		ON_SCOPE_EXIT { FMantleThumbnailStore::Save(Weapon.Name, TEXT("weapon"), FMantleThumbnailChoice(), FMantleThumbnailStore::DefaultConfigFile()); };
+		FMantlePlaceAssetConverter PictureConverter;
+		FMantlePlaceAssetSet PictureSet;
+		if (TestTrue(TEXT("it converts with a custom thumbnail"), PictureConverter.ConvertWeapon(Dependencies.Weapons[0], PictureSet)))
+		{
+			const FMantleConvertedWeapon* WithPicture = PictureSet.FindWeapon(Dependencies.Weapons[0].Key);
+			TestTrue(TEXT("it names a library picture"), WithPicture && !WithPicture->ThumbnailKey.IsEmpty());
+		}
+	}
 
 	// Written once everything has an id: the settings file names the uploads, the parts' materials included.
 	int32 NextId = 1;

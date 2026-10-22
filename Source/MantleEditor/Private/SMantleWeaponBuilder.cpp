@@ -43,6 +43,9 @@
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Sound/SoundWave.h"
+#include "MantleModelThumbnail.h"
+#include "MantleThumbnailStore.h"
+#include "SMantleThumbnailSection.h"
 
 #define LOCTEXT_NAMESPACE "MantleWeaponBuilder"
 
@@ -569,6 +572,12 @@ TArray<FMantleBuilderStep> SMantleWeaponBuilder::MakeSteps()
 	}
 	{
 		FMantleBuilderStep& Step = Steps.AddDefaulted_GetRef();
+		Step.Title = FMantleThumbnailText::Heading();
+		Step.Help = LOCTEXT("StepThumbnailHelp", "The picture of this item in the library. Mantle takes one for you; you can choose the angle or use your own picture.");
+		Step.MakeContent = [this] { return MakeThumbnailStep(); };
+	}
+	{
+		FMantleBuilderStep& Step = Steps.AddDefaulted_GetRef();
 		Step.Title = LOCTEXT("StepCreate", "Create");
 		Step.Help = LOCTEXT("StepCreateHelp", "This is what you chose. Press Create weapon to save it. You can go back to any step first.");
 		Step.MakeContent = [this] { return MakeCreateStep(); };
@@ -693,6 +702,7 @@ void SMantleWeaponBuilder::LoadSourceAsset(UMantleWeaponSource* Source)
 		&& SourcePackage->GetName().Equals(ExpectedPackagePath, ESearchCase::IgnoreCase)
 		&& Source->GetName().Equals(ExpectedAssetName, ESearchCase::IgnoreCase);
 	CreatedSafeName = bHasOutputIdentity ? SafeAssetName(Source->DisplayName) : FString();
+	LoadThumbnailChoice(SafeAssetName(Source->DisplayName));
 	CreatedSignature.Reset();
 	bSelectedAssetEditedSinceCreate = false;
 	bNameEdited = true;
@@ -2396,6 +2406,35 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakePartsAndSoundStep()
 	return SNew(SScrollBox) + SScrollBox::Slot()[Rows];
 }
 
+TSharedRef<SWidget> SMantleWeaponBuilder::MakeThumbnailStep()
+{
+	return SNew(SScrollBox)
+		+ SScrollBox::Slot()
+		[
+			SNew(SMantleThumbnailSection)
+				.Target(FMantleThumbnailTarget::Square())
+				.AngleSliders(true)
+				.DefaultAngle(FMantleModelThumbnail::DefaultView())
+				.Choice_Lambda([this] { return ThumbnailChoice; })
+				.OnChoiceChanged_Lambda([this](const FMantleThumbnailChoice& Choice)
+				{
+					ThumbnailChoice = Choice;
+					SaveThumbnailChoice(SafeAssetName(Working->DisplayName));
+				})
+				.Render(FMantleModelThumbnail::RenderFor([this]() -> UObject* { return LoadModel(); }))
+		];
+}
+
+void SMantleWeaponBuilder::LoadThumbnailChoice(const FString& SafeName)
+{
+	FMantleThumbnailStore::Load(SafeName, TEXT("weapon"), ThumbnailChoice, FMantleThumbnailStore::DefaultConfigFile());
+}
+
+void SMantleWeaponBuilder::SaveThumbnailChoice(const FString& SafeName)
+{
+	FMantleThumbnailStore::Save(SafeName, TEXT("weapon"), ThumbnailChoice, FMantleThumbnailStore::DefaultConfigFile());
+}
+
 TSharedRef<SWidget> SMantleWeaponBuilder::MakeCreateStep()
 {
 	using namespace MantleWeaponBuilderPanelPrivate;
@@ -2787,6 +2826,8 @@ void SMantleWeaponBuilder::Create()
 	}
 
 	CreatedSafeName = SafeAssetName(Working->DisplayName);
+	// #124: the picture's choice goes with the weapon Create wrote, under its final name, so publishing finds it.
+	SaveThumbnailChoice(CreatedSafeName);
 	SourceAssetPath = FSoftObjectPath(Asset);
 	SourceBaselineSignature = EditSignature(*Asset);
 
