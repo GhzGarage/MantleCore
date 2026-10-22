@@ -148,8 +148,11 @@ FMantleThumbnailSubject FMantleOverlayWorn::ToSubject() const
 	FMantleThumbnailSubject Subject = FMantleCosmeticThumbnail::AvatarSubject(Body, Face);
 	if (!bFace && Body)
 	{
-		// A body overlay: the whole standing body, not just the head and shoulders.
-		Subject.Frame = Body->GetImportedBounds().GetBox();
+		// A body overlay: the whole standing body, not just the head and shoulders, with room round it (the imported bounds are a little tight).
+		FBox Whole = Body->GetImportedBounds().GetBox();
+		Whole = Whole.ExpandBy(Whole.GetExtent() * 0.12);
+		Subject.Frame = Whole;
+		Subject.Describe.ReplaceInline(TEXT(", headshot"), TEXT(", full body"));
 	}
 	Subject.MaterialOverrides.Add(BodyMaterials);
 	if (Subject.SkeletalMeshes.Num() > 1)
