@@ -233,7 +233,7 @@ namespace MantleOverlayWornDevCommands
 	{
 		if (Args.Num() < 5)
 		{
-			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED usage: Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Exit]"));
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED usage: Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>,<yaw>] [Zoom=<z>] [Exit]"));
 			return;
 		}
 		IFileManager::Get().MakeDirectory(*Args[0], true);
@@ -264,7 +264,21 @@ namespace MantleOverlayWornDevCommands
 		{
 			Draft.OverlayPlacement.DepthCm = FCString::Atof(*Args[6]);
 		}
+		// Angle=<pitch>,<yaw> and Zoom=<z> choose the thumbnail's angle and closeness (a grazing close-up to read a scar's relief); else Automatic.
 		Draft.Thumbnail.Mode = EMantleThumbnailMode::Automatic;
+		for (const FString& Arg : Args)
+		{
+			FString Pitch, Yaw;
+			if (Arg.StartsWith(TEXT("Angle=")) && Arg.Mid(6).Split(TEXT(","), &Pitch, &Yaw))
+			{
+				Draft.Thumbnail.Mode = EMantleThumbnailMode::Angle;
+				Draft.Thumbnail.Angle = FRotator(FCString::Atof(*Pitch), FCString::Atof(*Yaw), 0.0);
+			}
+			else if (Arg.StartsWith(TEXT("Zoom=")))
+			{
+				Draft.Thumbnail.Zoom = FCString::Atof(*Arg.Mid(5));
+			}
+		}
 		// The same default spot the panel starts on, moved by the offset.
 		USkeletalMesh* Mesh = FMantleOverlayChecks::IsFaceSlot(Draft.Slot) ? FMantleReferenceBodies::GetFace() : nullptr;
 		if (!Mesh && !FMantleOverlayChecks::IsFaceSlot(Draft.Slot))
@@ -315,7 +329,7 @@ namespace MantleOverlayWornDevCommands
 
 	FAutoConsoleCommand OverlayPlacedCommand(
 		TEXT("Mantle.Dev.OverlayPlacedSample"),
-		TEXT("Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Exit]: a placed picture through the panel's export; the baked mask, normal map and Automatic thumbnail as PNGs. Uploads nothing."),
+		TEXT("Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>,<yaw>] [Zoom=<z>] [Exit]: a placed picture through the panel's export; the baked mask, normal map and Automatic thumbnail as PNGs. Uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunPlacedSample));
 
 	FAutoConsoleCommand OverlaySamplesCommand(
