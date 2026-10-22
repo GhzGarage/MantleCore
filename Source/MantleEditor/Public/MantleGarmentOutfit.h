@@ -144,8 +144,8 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	/**
 	 * Clothing cut from a character's own mesh (#55) is refused when shaping the MetaHuman like the skin under it turns over
 	 * more than this share of the MetaHuman's triangles: that skin isn't a whole body (Vampire's merged mesh: 3.6%; her
-	 * separate bare body: 1.1%, at the toes in her heels), and the resize would carry its folds into the clothing. The
-	 * character then uploads as a fixed avatar (owner's call).
+	 * separate bare body: 1.1%, at the toes in her heels), and the resize would carry its folds into the clothing. Its
+	 * clothing then isn't offered as items (owner's call); the character itself still converts.
 	 */
 	static constexpr double MaxFoldShare = 0.025;
 
@@ -234,7 +234,7 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * leaving its Notes; false with OutRefusal ("code" and a sentence) when the MetaHuman can't be read or the body can't
 	 * be posed as it was.
 	 * bCutFromOwnMesh: the garments were cut from the character's own mesh (#55); refused ("not_splittable") when its skin
-	 * doesn't shape cleanly (SplitsCleanly), so the character uploads as a fixed avatar.
+	 * doesn't shape cleanly (SplitsCleanly): the clothing isn't offered as items.
 	 */
 	static bool MakeFromWork(const FMantleConvertMetaHumanWork& Work, const FString& BodyName, const FString& Folder, TConstArrayView<USkeletalMesh*> Garments,
 		FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal, bool bCutFromOwnMesh = false);

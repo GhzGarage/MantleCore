@@ -3947,7 +3947,7 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 			const bool bCut = Indices.ContainsByPredicate([this](const int32 Index) { return ConvertContext->Garments[Index].Sections.Num() > 0; });
 			bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Result, RefusalCode, Refusal, bCut);
 		}
-		// Its own mesh can't be split cleanly: Convert's note says it uploads as a fixed avatar.
+		// Its own mesh can't be split cleanly: Convert's note says its clothing isn't offered.
 		if (RefusalCode == TEXT("not_splittable"))
 		{
 			ConvertContext->Notes.AddUnique(Refusal);

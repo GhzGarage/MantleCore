@@ -13,6 +13,7 @@
 #include "MantleNailSeating.h"
 #include "MantleOutfitSections.h"
 #include "MantleParametricOutfitAuthoring.h"
+#include "MantleSettings.h"
 
 #include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
@@ -1358,8 +1359,9 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		if (bCutFromOwnMesh && !SplitsCleanly(Turned, BodyTriangles))
 		{
 			OutRefusalCode = TEXT("not_splittable");
-			OutRefusal = FString::Printf(TEXT("%s can't be split cleanly: the skin under its clothing isn't a whole body (shaping a MetaHuman like it folds %.1f%% of it), so its clothing would come out crushed and isn't offered. It stays a fixed avatar: upload it with the As-is route, clothes and all."),
-				*BodyName, BodyTriangles > 0 ? 100.0 * Turned / BodyTriangles : 0.0);
+			OutRefusal = FString::Printf(TEXT("%s can't be split cleanly: the skin under its clothing isn't a whole body (shaping a MetaHuman like it folds %.1f%% of it), so its clothing would come out crushed and isn't offered as items. The character itself still converts to a MetaHuman, without that clothing.%s"),
+				*BodyName, BodyTriangles > 0 ? 100.0 * Turned / BodyTriangles : 0.0,
+				UMantleSettings::AllowsAsIsAvatars() ? TEXT(" To keep it as it is, clothes and all, upload it with the As-is route.") : TEXT(""));
 			UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_SPLIT %s: not splittable (%d of %d triangles turned over)"), *BodyName, Turned, BodyTriangles);
 			return false;
 		}
