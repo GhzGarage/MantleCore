@@ -37,8 +37,22 @@ struct MANTLEEDITOR_API FMantleHairCards
 	/** Triangle clusters that share an edge (by position): the cards. Each entry lists triangle indices. */
 	static TArray<TArray<int32>> FindCards(TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Indices);
 
-	/** Triangle numbers of complete cards within Budget. Never collapses a card or splits its alpha silhouette. */
+	/**
+	 * Triangle numbers of complete cards within Budget. Never collapses a card or splits its alpha silhouette.
+	 * The kept cards are spread evenly over the style (farthest-point pick over the cards' centres, a card that no longer
+	 * fits is skipped for a smaller one), so a small budget gives thin but even hair, not patches.
+	 */
 	static TArray<int32> SelectWholeCards(TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Indices, int32 Budget);
+	/** The smallest card's triangle count in a triangle list; 0 when it has none. */
+	static int32 SmallestCardTriangles(TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Indices);
+
+	/**
+	 * Splits a triangle Budget over hair sections by their triangle share, but never below a section's smallest card
+	 * (the section keeps at least one card; the other sections give up their share to pay for it). When even one smallest
+	 * card per section does not fit, every section gets exactly its smallest card and bOverBudget is true.
+	 */
+	static TArray<int32> AllocateSectionBudgets(TConstArrayView<int32> SectionTriangles, TConstArrayView<int32> SectionSmallestCard, int32 Budget, bool& bOverBudget);
+
 	/** Normalize Epic's atlas channel layouts to Mantle's coverage/depth/seed RGB contract. */
 	static FColor AtlasPixel(int32 Layout, TConstArrayView<FColor> Textures, bool bPreserveNativeCoordU = false);
 };

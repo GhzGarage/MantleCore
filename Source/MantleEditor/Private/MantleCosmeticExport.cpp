@@ -1676,8 +1676,12 @@ namespace MantleCosmeticExportPrivate
 		bool bFlatColourFound = false;
 	};
 
-	/** Drop whole cards within each section, compact every retained attribute; material mappings stay fixed. */
-	bool ReduceHairCards(FMeshSource& Mesh, int32 Budget, FString& Error)
+	/**
+	 * Drop whole cards within each section, compact every retained attribute; material mappings stay fixed. Each section
+	 * keeps at least its smallest card and the kept cards are spread evenly over the style. When Warnings is given, a pack that
+	 * cannot fit even then keeps that smallest fit and says so there; without it (the lower LODs) it fails as before.
+	 */
+	bool ReduceHairCards(FMeshSource& Mesh, int32 Budget, FString& Error, TArray<FString>* Warnings = nullptr)
 	{
 		if (Mesh.NumTriangles <= Budget) return true;
 		const FMantleGlbMesh Original = Mesh.Glb;
@@ -1685,12 +1689,21 @@ namespace MantleCosmeticExportPrivate
 		Reduced.Positions.Reset(); Reduced.Normals.Reset(); Reduced.Tangents.Reset(); Reduced.UVs.Reset();
 		Reduced.UV1s.Reset(); Reduced.Colors.Reset(); Reduced.InfluenceJoints.Reset(); Reduced.InfluenceWeights.Reset();
 		Reduced.HairCoordU.Reset(); Reduced.HairRootUV.Reset(); Reduced.Primitives.Reset();
-		int32 Kept = 0;
+		TArray<int32> SectionTriangles, SectionSmallest;
 		for (const FMantleGlbPrimitive& Part : Original.Primitives)
 		{
 			TArray<uint32> Absolute; for (uint32 I : Part.Indices) Absolute.Add(I + Part.FirstVertex);
-			const int32 PartBudget = FMath::FloorToInt(static_cast<double>(Budget) * (Part.Indices.Num() / 3) / Mesh.NumTriangles);
-			const auto Triangles = FMantleHairCards::SelectWholeCards(Original.Positions, Absolute, PartBudget);
+			SectionTriangles.Add(Part.Indices.Num() / 3);
+			SectionSmallest.Add(FMantleHairCards::SmallestCardTriangles(Original.Positions, Absolute));
+		}
+		bool bOverBudget = false;
+		const TArray<int32> PartBudgets = FMantleHairCards::AllocateSectionBudgets(SectionTriangles, SectionSmallest, Budget, bOverBudget);
+		if (bOverBudget && !Warnings) { Error = TEXT("a hair section cannot fit its budget without splitting a card; provide a coarser authored cards LOD"); return false; }
+		int32 Kept = 0, PartIndex = 0;
+		for (const FMantleGlbPrimitive& Part : Original.Primitives)
+		{
+			TArray<uint32> Absolute; for (uint32 I : Part.Indices) Absolute.Add(I + Part.FirstVertex);
+			const auto Triangles = FMantleHairCards::SelectWholeCards(Original.Positions, Absolute, PartBudgets[PartIndex++]);
 			if (Triangles.IsEmpty()) { Error = TEXT("a hair section cannot fit its budget without splitting a card; provide a coarser authored cards LOD"); return false; }
 			auto& Out = Reduced.Primitives.AddDefaulted_GetRef(); Out.MaterialIndex = Part.MaterialIndex; Out.FirstVertex = Reduced.Positions.Num();
 			TMap<uint32, uint32> Remap;
@@ -1713,6 +1726,10 @@ namespace MantleCosmeticExportPrivate
 		}
 		Mesh.Glb = MoveTemp(Reduced); Mesh.NumTriangles = Kept; Mesh.Bounds = FBox3f(ForceInit);
 		for (const auto P : Mesh.Glb.Positions) Mesh.Bounds += P;
+		if (Warnings && Kept > Budget)
+		{
+			Warnings->Add(FString::Printf(TEXT("this hair cannot be made smaller than %d triangles without splitting a card (the limit is %d), so it keeps its smallest fit of at least one card from each section."), Kept, Budget));
+		}
 		return true;
 	}
 
@@ -5731,7 +5748,9 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 			if (bHair)
 			{
 				const int32 Before = Mesh.NumTriangles;
-				if (!ReduceHairCards(Mesh, Class.MaxTriangles, Error)) { Issues.Add(FMantleCosmeticChecks::Error(Error)); return Package; }
+				TArray<FString> BudgetWarnings;
+				if (!ReduceHairCards(Mesh, Class.MaxTriangles, Error, &BudgetWarnings)) { Issues.Add(FMantleCosmeticChecks::Error(Error)); return Package; }
+				for (const FString& Warning : BudgetWarnings) Issues.Add(FMantleCosmeticChecks::Warning(Warning));
 				if (Before != Mesh.NumTriangles) Package.Notes.Add(FString::Printf(TEXT("Whole-card budget reduction: %d to %d triangles (no card collapses)"), Before, Mesh.NumTriangles));
 				if (!BindRigidlyToHead(Mesh, Body, Error))
 				{
