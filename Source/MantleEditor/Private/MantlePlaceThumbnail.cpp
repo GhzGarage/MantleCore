@@ -171,7 +171,7 @@ FMantlePlaceThumbnailView FMantlePlaceThumbnail::AutoView(UWorld* World)
 FMantlePlaceThumbnailView FMantlePlaceThumbnail::ViewFor(UWorld* World)
 {
 	if (const AMantlePlaceSettingsActor* Settings = World ? AMantlePlaceSettingsActor::Find(World) : nullptr;
-		Settings && Settings->bThumbnailChosenView)
+		Settings && Settings->ThumbnailChoice.Mode == EMantleThumbnailMode::Angle)
 	{
 		FMantlePlaceThumbnailView View;
 		View.Location = Settings->ThumbnailLocation;
@@ -340,4 +340,32 @@ bool FMantlePlaceThumbnail::Capture(UWorld* World, const FMantlePlaceThumbnailVi
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_PLACE_THUMBNAIL captured %dx%d from %s (%s view, FOV %.0f) after %d warm-up capture(s) and %d settle frames; %d sky piece(s) added for it"),
 		Width, Height, *View.Location.ToCompactString(), View.bAutomatic ? TEXT("automatic") : TEXT("chosen"), View.FOV, WarmUps + 1, SettleFrames, Added.Num());
 	return true;
+}
+
+FMantleThumbnailChoice FMantlePlaceThumbnail::ChoiceFor(UWorld* World)
+{
+	const AMantlePlaceSettingsActor* Settings = World ? AMantlePlaceSettingsActor::Find(World) : nullptr;
+	return Settings ? Settings->ThumbnailChoice : FMantleThumbnailChoice();
+}
+
+FMantleThumbnailResolver::FRender FMantlePlaceThumbnail::RenderFor(UWorld* World)
+{
+	const TWeakObjectPtr<UWorld> Weak = World;
+	return [Weak](const FMantleThumbnailChoice&, TArray<FColor>& OutPixels, int32& OutWidth, int32& OutHeight, FString& OutError)
+	{
+		UWorld* Level = Weak.Get();
+		if (!Level)
+		{
+			OutError = TEXT("there is no level to draw");
+			return false;
+		}
+		OutWidth = Width;
+		OutHeight = Height;
+		return Capture(Level, ViewFor(Level), OutPixels, OutError);
+	};
+}
+
+FMantleThumbnailResult FMantlePlaceThumbnail::Resolve(UWorld* World)
+{
+	return FMantleThumbnailResolver::Resolve(ChoiceFor(World), Target(), RenderFor(World));
 }

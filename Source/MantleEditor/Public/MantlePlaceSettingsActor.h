@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Info.h"
 #include "Materials/MaterialInterface.h"
+#include "MantleThumbnailChoice.h"
 #include "UObject/SoftObjectPtr.h"
 
 #include "MantlePlaceSettingsActor.generated.h"
@@ -367,21 +368,24 @@ public:
 	// The place's picture in the catalogue (#786): taken at every publish, from the view below or, when none is chosen,
 	// from above and behind the first Player Start. Publish shows it before anything is sent.
 
-	/** Take the thumbnail from the view below instead of the automatic one. Use Current View sets it. */
-	UPROPERTY(EditAnywhere, Category = "Mantle|Thumbnail", meta = (DisplayName = "Use Chosen View"))
-	bool bThumbnailChosenView = false;
+	/**
+	 * How the thumbnail is made (#124): Automatic, Choose the angle (the camera below) or a Custom image. Set it in the Publish window's Thumbnail
+	 * section, the same one every Mantle uploader shows.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Mantle|Thumbnail")
+	FMantleThumbnailChoice ThumbnailChoice;
 
-	/** Where the thumbnail's camera stands. */
-	UPROPERTY(EditAnywhere, Category = "Mantle|Thumbnail", meta = (EditCondition = "bThumbnailChosenView", DisplayName = "Camera Location"))
+	/** Where the thumbnail's camera stands when Choose the angle is on. */
+	UPROPERTY(EditAnywhere, Category = "Mantle|Thumbnail", meta = (DisplayName = "Camera Location"))
 	FVector ThumbnailLocation = FVector::ZeroVector;
 
 	/** Where it looks. */
-	UPROPERTY(EditAnywhere, Category = "Mantle|Thumbnail", meta = (EditCondition = "bThumbnailChosenView", DisplayName = "Camera Rotation"))
+	UPROPERTY(EditAnywhere, Category = "Mantle|Thumbnail", meta = (DisplayName = "Camera Rotation"))
 	FRotator ThumbnailRotation = FRotator::ZeroRotator;
 
 	/** How wide it sees, in degrees across. */
 	UPROPERTY(EditAnywhere, Category = "Mantle|Thumbnail",
-		meta = (EditCondition = "bThumbnailChosenView", DisplayName = "Field of View", ClampMin = "10", ClampMax = "120", UIMin = "20", UIMax = "100"))
+		meta = (DisplayName = "Field of View", ClampMin = "10", ClampMax = "120", UIMin = "20", UIMax = "100"))
 	float ThumbnailFOV = 60.f;
 
 	/** Take the thumbnail from where the level viewport's camera is now. */
