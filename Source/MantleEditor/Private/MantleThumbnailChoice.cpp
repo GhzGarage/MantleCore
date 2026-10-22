@@ -113,6 +113,11 @@ namespace MantleThumbnailPrivate
 	}
 }
 
+bool FMantleThumbnailResolver::IsInsideProject(const FString& File)
+{
+	return !File.IsEmpty() && FPaths::IsUnderDirectory(FPaths::ConvertRelativePathToFull(File), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()));
+}
+
 FIntRect FMantleThumbnailResolver::CropRect(int32 Width, int32 Height, const FMantleThumbnailTarget& Target)
 {
 	if (Width <= 0 || Height <= 0 || Target.Width <= 0 || Target.Height <= 0)
@@ -279,6 +284,12 @@ FMantleThumbnailResult FMantleThumbnailResolver::Resolve(const FMantleThumbnailC
 		return Result;
 	}
 	Result.Pixels = MoveTemp(Fitted);
+	// A PNG outside the project is only on this machine: say so, so the choice does not quietly break when the project moves.
+	if (Choice.Mode == EMantleThumbnailMode::Custom && Choice.Texture.IsNull() && !IsInsideProject(Choice.ImageFile.FilePath))
+	{
+		const FString Travel = TEXT("This picture is outside your project, so it will not move with the project. Put the PNG inside the project folder, or use a texture.");
+		Result.Warning = Result.Warning.IsEmpty() ? Travel : Result.Warning + TEXT(" ") + Travel;
+	}
 	return Result;
 }
 

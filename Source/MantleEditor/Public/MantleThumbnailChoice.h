@@ -127,6 +127,9 @@ struct MANTLEEDITOR_API FMantleThumbnailResolver
 	static bool FitToTarget(TConstArrayView<FColor> Pixels, int32 Width, int32 Height, const FMantleThumbnailTarget& Target,
 		TArray<FColor>& OutPixels, FString& OutWarning, FString& OutError);
 
+	/** Whether File is inside the project folder (so a custom PNG goes with the project, and with source control). Pure. */
+	static bool IsInsideProject(const FString& File);
+
 	/** Reads the choice's custom image (its Texture, else its PNG file) into pixels, top row first. False with a plain reason. */
 	static bool LoadCustom(const FMantleThumbnailChoice& Choice, TArray<FColor>& OutPixels, int32& OutWidth, int32& OutHeight, FString& OutError);
 

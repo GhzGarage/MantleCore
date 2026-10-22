@@ -411,6 +411,14 @@ bool FMantleCosmeticThumbnail::Capture(const FMantleThumbnailSubject& Subject, i
 		Component->SetForcedLOD(1);
 		Scene.AddComponent(Component, FTransform::Identity);
 		Drawn.Emplace(Component, Mesh);
+		// #124: materials drawn in place of the mesh's own (an overlay on the skin).
+		if (Subject.MaterialOverrides.IsValidIndex(Index))
+		{
+			for (const TPair<int32, UMaterialInterface*>& Entry : Subject.MaterialOverrides[Index])
+			{
+				Component->SetMaterial(Entry.Key, Entry.Value);
+			}
+		}
 		// #483: the sections the item leaves out. After AddComponent: the component's LOD infos exist once it is registered.
 		if (Subject.HiddenSlots.IsValidIndex(Index))
 		{

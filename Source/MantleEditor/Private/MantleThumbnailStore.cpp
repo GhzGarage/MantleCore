@@ -7,6 +7,11 @@
 
 FString FMantleThumbnailStore::DefaultConfigFile()
 {
+	return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectConfigDir(), TEXT("MantleThumbnailChoices.ini")));
+}
+
+FString FMantleThumbnailStore::LegacyConfigFile()
+{
 	return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Config"), TEXT("MantleThumbnailChoices.ini")));
 }
 
@@ -15,7 +20,8 @@ FString FMantleThumbnailStore::SectionFor(const FString& SourcePath, const FStri
 	return FString::Printf(TEXT("%s|%s"), *SourcePath, *ClassName);
 }
 
-bool FMantleThumbnailStore::Load(const FString& SourcePath, const FString& ClassName, FMantleThumbnailChoice& OutChoice, const FString& ConfigFile)
+bool FMantleThumbnailStore::Load(const FString& SourcePath, const FString& ClassName, FMantleThumbnailChoice& OutChoice, const FString& ConfigFile,
+	const FString& LegacyFile)
 {
 	OutChoice = FMantleThumbnailChoice();
 	if (SourcePath.IsEmpty())
@@ -27,7 +33,23 @@ bool FMantleThumbnailStore::Load(const FString& SourcePath, const FString& Class
 	Saved.Read(ConfigFile);
 	if (!Saved.Contains(Section))
 	{
-		return false;
+		// The first version kept choices per machine: move this one into the project's file.
+		const FString Legacy = !LegacyFile.IsEmpty() ? LegacyFile : (ConfigFile == DefaultConfigFile() ? LegacyConfigFile() : FString());
+		if (Legacy.IsEmpty() || !FPaths::FileExists(Legacy))
+		{
+			return false;
+		}
+		FConfigFile Old;
+		Old.Read(Legacy);
+		if (!Old.Contains(Section) || !Load(SourcePath, ClassName, OutChoice, Legacy, FString()))
+		{
+			return false;
+		}
+		Save(SourcePath, ClassName, OutChoice, ConfigFile);
+		Old.Remove(Section);
+		Old.bCanSaveAllSections = true;
+		Old.Write(Legacy, false);
+		return true;
 	}
 	FString Text;
 	if (Saved.GetString(*Section, TEXT("Mode"), Text))

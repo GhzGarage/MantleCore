@@ -4,6 +4,7 @@
 #include "MantleCosmeticPackage.h"
 #include "MantleOverlayChecks.h"
 #include "MantlePng.h"
+#include "MantleThumbnailChoice.h"
 
 #include "Dom/JsonObject.h"
 #include "Misc/AutomationTest.h"
@@ -309,6 +310,50 @@ bool FMantleOverlayExportTest::RunTest(const FString& Parameters)
 	Draft.OverlayMaskFile = BlankFile;
 	const FMantleCosmeticPackage Blank = FMantleCosmeticExport::BuildCore(Draft, *Contract);
 	TestTrue(TEXT("a blank mask is an error"), HasError(Blank.Issues, TEXT("blank")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleOverlayCustomThumbnailTest,
+	"Mantle.Editor.Overlay.CustomThumbnail",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+// #124: an overlay takes the shared Thumbnail section too: a custom image is its 512 x 512 thumbnail, and one that cannot be used refuses the export.
+bool FMantleOverlayCustomThumbnailTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleOverlayTestPrivate;
+	FString ContractError;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+	if (!TestNotNull(TEXT("the contract loads"), Contract))
+	{
+		return false;
+	}
+	const FString MaskFile = WritePng(128, 128, RedDisc(128), TEXT("overlay_thumb_mask"));
+	const FString PictureFile = WritePng(640, 640, RedDisc(640), TEXT("overlay_thumb_picture"));
+	ON_SCOPE_EXIT
+	{
+		IFileManager::Get().Delete(*MaskFile);
+		IFileManager::Get().Delete(*PictureFile);
+	};
+	FMantleCosmeticDraft Draft;
+	Draft.Class = EMantleCosmeticClass::Overlay;
+	Draft.Slot = TEXT("tattoo_body");
+	Draft.Name = TEXT("Test tattoo");
+	Draft.bPublic = false;
+	Draft.bRenderThumbnail = false;
+	Draft.OverlayMaskFile = MaskFile;
+	Draft.Thumbnail.Mode = EMantleThumbnailMode::Custom;
+	Draft.Thumbnail.ImageFile.FilePath = PictureFile;
+	const FMantleCosmeticPackage Package = FMantleCosmeticExport::BuildCore(Draft, *Contract);
+	TestFalse(TEXT("a custom thumbnail exports without errors"), Package.HasErrors());
+	const FMantleCosmeticUploadAsset* Thumbnail = Package.FindAsset(Package.ThumbnailKey);
+	int32 Width = 0, Height = 0;
+	bool bAlpha = false;
+	TestTrue(TEXT("the thumbnail is a PNG"), Thumbnail && FMantlePng::ReadHeader(Thumbnail->Bytes, Width, Height, bAlpha));
+	TestEqual(TEXT("512 wide"), Width, Contract->ThumbnailSize);
+
+	Draft.Thumbnail.ImageFile.FilePath = PictureFile + TEXT(".missing.png");
+	TestTrue(TEXT("a custom picture that is not there refuses the export"), FMantleCosmeticExport::BuildCore(Draft, *Contract).HasErrors());
 	return true;
 }
 

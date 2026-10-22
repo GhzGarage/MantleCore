@@ -8,6 +8,7 @@
 class FPreviewScene;
 class USkeletalMesh;
 class USkeletalMeshComponent;
+class UMaterialInterface;
 class UStaticMesh;
 
 /** What a cosmetic thumbnail shows, and how the camera frames it. */
@@ -25,6 +26,13 @@ struct FMantleThumbnailSubject
 	 * out: the rest of a one-piece outfit, the source character's skin). Absent entries draw every slot.
 	 */
 	TArray<TArray<int32>> HiddenSlots;
+
+	/**
+	 * #124: per entry of SkeletalMeshes, materials drawn in place of the mesh's own, by slot (an overlay's skin material with its mask drawn on the body).
+	 * Absent entries draw their own. KeepAlive holds what these name (transient instances) as long as the subject lives.
+	 */
+	TArray<TMap<int32, UMaterialInterface*>> MaterialOverrides;
+	TArray<TStrongObjectPtr<UObject>> KeepAlive;
 
 	/** An accessory, alone, at its pivot. */
 	UStaticMesh* StaticMesh = nullptr;

@@ -2304,23 +2304,70 @@ namespace MantleCosmeticExportPrivate
 			return;
 		}
 
-		// The thumbnail is the mask itself, light on dark, at the thumbnail size.
+		// #124: the thumbnail is the creator's custom image; else the avatar wearing the mark, by the catalog thumbnail capture from the chosen angle; else, when
+		// nothing can render (-NullRHI, a commandlet), the mask itself, light on dark.
 		const int32 ThumbSize = Contract.ThumbnailSize;
-		TArray<FColor> Scaled;
-		Scaled.SetNumUninitialized(ThumbSize * ThumbSize);
-		FImageUtils::ImageResize(MaskSize.X, MaskSize.Y, TArrayView<const FColor>(MaskPixels), ThumbSize, ThumbSize, TArrayView<FColor>(Scaled), false, false);
-		for (FColor& Pixel : Scaled)
+		const FMantleThumbnailTarget ThumbTarget{ ThumbSize, ThumbSize };
+		TArray<uint8> ThumbPng;
+		FString ThumbNote;
+		const FMantleThumbnailChoice& ThumbChoice = Draft.Thumbnail;
+		if (ThumbChoice.Mode == EMantleThumbnailMode::Custom)
 		{
-			const float T = Pixel.R / 255.0f;
-			Pixel = FColor(static_cast<uint8>(FMath::Lerp(38.0f, 235.0f, T)), static_cast<uint8>(FMath::Lerp(42.0f, 235.0f, T)),
-				static_cast<uint8>(FMath::Lerp(48.0f, 235.0f, T)), 255);
+			const FMantleThumbnailResult Picture = FMantleThumbnailResolver::Resolve(ThumbChoice, ThumbTarget, FMantleThumbnailResolver::FRender());
+			if (!Picture.Succeeded())
+			{
+				Issues.Add(FMantleCosmeticChecks::Error(FString::Printf(TEXT("the thumbnail's custom image could not be used: %s"), *Picture.Error),
+					TEXT("Choose another picture in the Thumbnail section, or go back to Automatic.")));
+				return;
+			}
+			ThumbPng = FMantleThumbnailResolver::ToPng(Picture, ThumbTarget);
+			ThumbNote = Picture.Warning.IsEmpty() ? Picture.Source : FString::Printf(TEXT("%s (%s)"), *Picture.Source, *Picture.Warning);
+		}
+		else if (FMantleCosmeticThumbnail::CanCapture())
+		{
+			FMantleOverlayWorn Worn;
+			FString Why;
+			if (FMantleOverlayWorn::Make(Package, Draft.Slot, Contract, nullptr, nullptr, Worn, Why) && Worn.bDrawn)
+			{
+				FMantleThumbnailSubject Subject = Worn.ToSubject();
+				FMantleModelThumbnail::ApplyChoice(Subject, ThumbChoice);
+				TArray<FColor> Pixels;
+				FString WhyNot;
+				if (FMantleCosmeticThumbnail::Capture(Subject, ThumbSize, Pixels, WhyNot))
+				{
+					ThumbPng = FMantlePng::EncodeRGBA8(ThumbSize, ThumbSize, Pixels);
+					ThumbNote = FString::Printf(TEXT("Thumbnail: scene capture of %s"), *Subject.Describe);
+				}
+				else
+				{
+					UE_LOG(LogMantle, Log, TEXT("MANTLE_COSMETIC_THUMBNAIL overlay fallback=mask reason=\"%s\""), *WhyNot);
+				}
+			}
+			else
+			{
+				UE_LOG(LogMantle, Log, TEXT("MANTLE_COSMETIC_THUMBNAIL overlay fallback=mask reason=\"%s\""), Why.IsEmpty() ? *Worn.Note : *Why);
+			}
+		}
+		if (ThumbPng.IsEmpty())
+		{
+			TArray<FColor> Scaled;
+			Scaled.SetNumUninitialized(ThumbSize * ThumbSize);
+			FImageUtils::ImageResize(MaskSize.X, MaskSize.Y, TArrayView<const FColor>(MaskPixels), ThumbSize, ThumbSize, TArrayView<FColor>(Scaled), false, false);
+			for (FColor& Pixel : Scaled)
+			{
+				const float T = Pixel.R / 255.0f;
+				Pixel = FColor(static_cast<uint8>(FMath::Lerp(38.0f, 235.0f, T)), static_cast<uint8>(FMath::Lerp(42.0f, 235.0f, T)),
+					static_cast<uint8>(FMath::Lerp(48.0f, 235.0f, T)), 255);
+			}
+			ThumbPng = FMantlePng::EncodeRGBA8(ThumbSize, ThumbSize, Scaled);
+			ThumbNote = TEXT("thumbnail is the mask");
 		}
 		FMantleAssetUploadOptions ThumbnailOptions;
 		ThumbnailOptions.Kind = TEXT("texture");
-		Package.AddAsset(TEXT("thumbnail"), TEXT("Thumbnail"), ThumbnailOptions, FMantlePng::EncodeRGBA8(ThumbSize, ThumbSize, Scaled));
+		Package.AddAsset(TEXT("thumbnail"), TEXT("Thumbnail"), ThumbnailOptions, MoveTemp(ThumbPng));
 		Package.ThumbnailKey = TEXT("thumbnail");
-		Package.Notes.Add(FString::Printf(TEXT("Overlay %s: mask %dx%d%s; thumbnail is the mask"), *Draft.Slot, MaskSize.X, MaskSize.Y,
-			bHasNormal ? *FString::Printf(TEXT(", normal map %dx%d"), NormalSize.X, NormalSize.Y) : TEXT("")));
+		Package.Notes.Add(FString::Printf(TEXT("Overlay %s: mask %dx%d%s; %s"), *Draft.Slot, MaskSize.X, MaskSize.Y,
+			bHasNormal ? *FString::Printf(TEXT(", normal map %dx%d"), NormalSize.X, NormalSize.Y) : TEXT(""), *ThumbNote));
 
 		for (const FMantleCosmeticUploadAsset& Asset : Package.Assets)
 		{
