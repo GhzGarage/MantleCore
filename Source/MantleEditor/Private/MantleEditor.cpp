@@ -27,6 +27,7 @@
 #include "MantlePlaceImporter.h"
 #include "MantlePlaceSettingsActor.h"
 #include "MantlePlaceThumbnail.h"
+#include "SMantleThumbnailSection.h"
 #include "MantlePlacePreview.h"
 #include "MantleCheck.h"
 #include "MantlePlaceValidator.h"
@@ -274,68 +275,19 @@ namespace
 	}
 
 	/**
-	 * #786: the place's thumbnail as the publish will take it, for the notes dialog: the picture, or why there is none,
-	 * and whether the view is the automatic one. Taken again whenever the view changes.
-	 */
-	struct FThumbnailPreview
-	{
-		TWeakObjectPtr<UWorld> World;
-		TSharedPtr<FSlateDynamicImageBrush> Brush;
-		FText Note;
-		bool bAutomatic = true;
-
-		void Take()
-		{
-			Brush.Reset();
-			UWorld* Level = World.Get();
-			FString WhyNot;
-			if (!Level || !FMantlePlaceThumbnail::CanCapture(&WhyNot))
-			{
-				Note = FText::Format(LOCTEXT("ThumbnailNone", "No thumbnail this time ({0}); the place publishes without one."),
-					FText::FromString(WhyNot.IsEmpty() ? FString(TEXT("no level")) : WhyNot));
-				return;
-			}
-			const FMantlePlaceThumbnailView View = FMantlePlaceThumbnail::ViewFor(Level);
-			bAutomatic = View.bAutomatic;
-			TArray<FColor> Pixels;
-			{
-				FScopedSlowTask Task(1.f, LOCTEXT("ThumbnailTaking", "Taking the place's thumbnail..."));
-				Task.MakeDialog();
-				if (!FMantlePlaceThumbnail::Capture(Level, View, Pixels, WhyNot))
-				{
-					Note = FText::Format(LOCTEXT("ThumbnailFailed", "The thumbnail could not be taken ({0}); the place publishes without one."),
-						FText::FromString(WhyNot));
-					return;
-				}
-			}
-			// FColor is BGRA in memory, the order the dynamic brush takes. A new name each time, so Slate never shows the old one.
-			TArray<uint8> Bytes;
-			Bytes.Append(reinterpret_cast<const uint8*>(Pixels.GetData()), Pixels.Num() * sizeof(FColor));
-			static int32 Serial = 0;
-			Brush = FSlateDynamicImageBrush::CreateWithImageData(*FString::Printf(TEXT("MantlePlaceThumbnail_%d"), ++Serial),
-				FVector2f(FMantlePlaceThumbnail::Width, FMantlePlaceThumbnail::Height), Bytes);
-			Note = bAutomatic
-				? LOCTEXT("ThumbnailAutomatic", "Automatic view: from behind the first Player Start. Fly the viewport to a better spot and choose Use current view to change it.")
-				: LOCTEXT("ThumbnailChosen", "Your chosen view (Mantle Place Settings > Thumbnail).");
-		}
-	};
-
-	/**
-	 * Asks for this revision's notes before publishing, showing the thumbnail the publish will take (#786) with the
-	 * choice of view. Empty notes are fine; false means the creator cancelled, and so nothing is published.
+	 * Asks for this revision's notes before publishing, showing the thumbnail the publish will take (#786) in the shared
+	 * Thumbnail section (#124): Automatic, Choose the angle or a Custom image. Empty notes are fine; false means the creator cancelled, and so nothing is published.
 	 */
 	bool AskForRevisionNotes(UWorld* World, FString& OutNotes)
 	{
 		bool bConfirmed = false;
 		TSharedPtr<SMultiLineEditableTextBox> NotesBox;
-		const TSharedRef<FThumbnailPreview> Thumbnail = MakeShared<FThumbnailPreview>();
-		Thumbnail->World = World;
-		Thumbnail->Take();
+		const TWeakObjectPtr<UWorld> WeakWorld = World;
 
 		const TSharedRef<SWindow> Window = SNew(SWindow)
 			.Title(LOCTEXT("PublishNotesTitle", "Publish to Mantle"))
 			.SizingRule(ESizingRule::FixedSize)
-			.ClientSize(FVector2f(520.0f, 600.0f))
+			.ClientSize(FVector2f(560.0f, 820.0f))
 			.SupportsMinimize(false)
 			.SupportsMaximize(false);
 		const TWeakPtr<SWindow> WeakWindow = Window;
@@ -364,79 +316,46 @@ namespace
 					.HintText(LOCTEXT("PublishNotesHint", "Revision notes (optional)"))
 					.AutoWrapText(true)
 				]
-				// #786: the catalogue picture this publish takes, and where it is taken from.
+				// #786, #124: the catalogue picture this publish takes: the Thumbnail section every Mantle uploader shows.
 				+ SVerticalBox::Slot()
 				.AutoHeight()
-				.Padding(0.0f, 12.0f, 0.0f, 4.0f)
+				.Padding(0.0f, 12.0f, 0.0f, 0.0f)
 				[
-					SNew(STextBlock)
-					.Font(FAppStyle::GetFontStyle("BoldFont"))
-					.Text(LOCTEXT("ThumbnailTitle", "Thumbnail in the catalogue"))
-				]
-				+ SVerticalBox::Slot()
-				.AutoHeight()
-				.HAlign(HAlign_Center)
-				[
-					SNew(SBox)
-					.WidthOverride(480.0f)
-					.HeightOverride(270.0f)
-					[
-						SNew(SImage)
-						.Image_Lambda([Thumbnail]() -> const FSlateBrush* { return Thumbnail->Brush.IsValid() ? Thumbnail->Brush.Get() : FAppStyle::GetBrush("WhiteBrush"); })
-						.ColorAndOpacity_Lambda([Thumbnail]() { return Thumbnail->Brush.IsValid() ? FSlateColor(FLinearColor::White) : FSlateColor(FLinearColor(0.02f, 0.02f, 0.02f)); })
-					]
-				]
-				+ SVerticalBox::Slot()
-				.AutoHeight()
-				.Padding(0.0f, 4.0f, 0.0f, 4.0f)
-				[
-					SNew(STextBlock)
-					.AutoWrapText(true)
-					.Text_Lambda([Thumbnail]() { return Thumbnail->Note; })
-				]
-				+ SVerticalBox::Slot()
-				.AutoHeight()
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot()
-					.AutoWidth()
-					.Padding(0.0f, 0.0f, 8.0f, 0.0f)
-					[
-						SNew(SButton)
-						.Text(LOCTEXT("ThumbnailUseView", "Use current view"))
-						.ToolTipText(LOCTEXT("ThumbnailUseViewTooltip", "Take the thumbnail from where the level viewport's camera is now. Saved on Mantle Place Settings > Thumbnail."))
-						.OnClicked_Lambda([Thumbnail]()
+					SNew(SMantleThumbnailSection)
+					.Target(FMantlePlaceThumbnail::Target())
+					.Render(FMantlePlaceThumbnail::RenderFor(World))
+					.UseViewLabel(LOCTEXT("ThumbnailUseView", "Use current view"))
+					.Choice_Lambda([WeakWorld]() { return FMantlePlaceThumbnail::ChoiceFor(WeakWorld.Get()); })
+					.OnChoiceChanged_Lambda([WeakWorld](const FMantleThumbnailChoice& Choice)
+					{
+						AMantlePlaceSettingsActor* Settings = AMantlePlaceSettingsActor::FindOrAdd(WeakWorld.Get());
+						if (!Settings)
 						{
-							// Checked first, so the level gets no settings actor for a click that cannot set a view.
-							if (!GCurrentLevelEditingViewportClient || !GCurrentLevelEditingViewportClient->IsPerspective())
-							{
-								Thumbnail->Note = LOCTEXT("ThumbnailNeedsPerspective", "Click into a perspective level viewport, frame the shot there, then choose Use current view again.");
-								return FReply::Handled();
-							}
-							if (AMantlePlaceSettingsActor* Settings = AMantlePlaceSettingsActor::FindOrAdd(Thumbnail->World.Get()))
-							{
-								Settings->SetThumbnailFromViewport();
-							}
-							Thumbnail->Take();
-							return FReply::Handled();
-						})
-					]
-					+ SHorizontalBox::Slot()
-					.AutoWidth()
-					[
-						SNew(SButton)
-						.Text(LOCTEXT("ThumbnailUseAutomatic", "Use automatic view"))
-						.IsEnabled_Lambda([Thumbnail]() { return !Thumbnail->bAutomatic; })
-						.OnClicked_Lambda([Thumbnail]()
+							return;
+						}
+						const FScopedTransaction Transaction(LOCTEXT("ThumbnailChanged", "Change the Mantle thumbnail"));
+						Settings->Modify();
+						const bool bToAngle = Choice.Mode == EMantleThumbnailMode::Angle && Settings->ThumbnailChoice.Mode != EMantleThumbnailMode::Angle;
+						Settings->ThumbnailChoice = Choice;
+						// Choose the angle starts from where the level viewport is, unless a view was chosen before.
+						if (bToAngle && Settings->ThumbnailLocation.IsNearlyZero() && Settings->ThumbnailRotation.IsNearlyZero())
 						{
-							if (AMantlePlaceSettingsActor* Settings = AMantlePlaceSettingsActor::Find(Thumbnail->World.Get()))
-							{
-								Settings->UseAutomaticView();
-							}
-							Thumbnail->Take();
-							return FReply::Handled();
-						})
-					]
+							Settings->SetThumbnailFromViewport();
+						}
+					})
+					.OnUseView_Lambda([WeakWorld]() -> FText
+					{
+						// Checked first, so the level gets no settings actor for a click that cannot set a view.
+						if (!GCurrentLevelEditingViewportClient || !GCurrentLevelEditingViewportClient->IsPerspective())
+						{
+							return LOCTEXT("ThumbnailNeedsPerspective", "Click into a perspective level viewport, frame the shot there, then choose Use current view again.");
+						}
+						if (AMantlePlaceSettingsActor* Settings = AMantlePlaceSettingsActor::FindOrAdd(WeakWorld.Get()))
+						{
+							Settings->SetThumbnailFromViewport();
+						}
+						return FText::GetEmpty();
+					})
 				]
 				+ SVerticalBox::Slot()
 				.AutoHeight()

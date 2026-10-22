@@ -353,7 +353,8 @@ bool FMantleLevelPublishSource::Prepare(FMantleValidationResult& OutValidation, 
 	// #786: the catalogue picture, captured after everything else converts. Without a renderer (a headless publish)
 	// the place publishes without one.
 	FString NoCapture;
-	bThumbnailStep = FMantlePlaceThumbnail::CanCapture(&NoCapture);
+	// A custom image (#124) needs no renderer.
+	bThumbnailStep = FMantlePlaceThumbnail::CanCapture(&NoCapture) || FMantlePlaceThumbnail::ChoiceFor(Level).Mode == EMantleThumbnailMode::Custom;
 	if (!bThumbnailStep)
 	{
 		UE_LOG(LogMantle, Display, TEXT("MANTLE_PUBLISH thumbnail skipped (%s)"), *NoCapture);
@@ -409,17 +410,22 @@ void FMantleLevelPublishSource::Convert(int32 Step, FMantlePlaceAssetSet& Set)
 	// Taken once per publish: a regather (NeedsNewAssets) keeps the picture it already has rather than uploading another.
 	if (bThumbnailStep && UIImage == UIImages.Num() && Set.Thumbnail.IsEmpty())
 	{
-		TArray<FColor> Pixels;
-		FString Error;
-		if (UWorld* Level = World.Get(); Level && FMantlePlaceThumbnail::Capture(Level, FMantlePlaceThumbnail::ViewFor(Level), Pixels, Error))
+		const FMantleThumbnailResult Picture = FMantlePlaceThumbnail::Resolve(World.Get());
+		const FString Error = Picture.Error;
+		if (Picture.Succeeded())
 		{
-			Converter->ConvertThumbnail(Pixels, FMantlePlaceThumbnail::Width, FMantlePlaceThumbnail::Height, Set);
+			UE_LOG(LogMantle, Display, TEXT("MANTLE_PUBLISH %s"), *Picture.Source);
+			if (!Picture.Warning.IsEmpty())
+			{
+				Set.Issues.Add({ EMantleIssueSeverity::Warning, FString(), Picture.Warning, FString() });
+			}
+			Converter->ConvertThumbnail(Picture.Pixels, FMantlePlaceThumbnail::Width, FMantlePlaceThumbnail::Height, Set);
 		}
 		else
 		{
 			Set.Issues.Add({ EMantleIssueSeverity::Warning, FString(),
 				FString::Printf(TEXT("The place's thumbnail could not be taken (%s), so it publishes without a picture."), *Error),
-				TEXT("Publish again; if it keeps happening, choose another view on Mantle Place Settings > Thumbnail.") });
+				TEXT("Publish again; if it keeps happening, choose another thumbnail in the Publish window's Thumbnail section.") });
 		}
 	}
 }

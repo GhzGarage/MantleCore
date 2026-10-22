@@ -62,7 +62,7 @@ bool AMantlePlaceSettingsActor::SetThumbnailFromViewport()
 	}
 	const FScopedTransaction Transaction(LOCTEXT("UseCurrentView", "Use current view for the Mantle thumbnail"));
 	Modify();
-	bThumbnailChosenView = true;
+	ThumbnailChoice.Mode = EMantleThumbnailMode::Angle;
 	ThumbnailLocation = Viewport->GetViewLocation();
 	ThumbnailRotation = Viewport->GetViewRotation();
 	ThumbnailRotation.Roll = 0.0;
@@ -79,7 +79,7 @@ void AMantlePlaceSettingsActor::UseAutomaticView()
 {
 	const FScopedTransaction Transaction(LOCTEXT("UseAutomaticView", "Use the automatic Mantle thumbnail"));
 	Modify();
-	bThumbnailChosenView = false;
+	ThumbnailChoice.Mode = EMantleThumbnailMode::Automatic;
 }
 
 void AMantlePlaceSettingsActor::ApplyTo(UWorld* World, FMantleSettings& Out)

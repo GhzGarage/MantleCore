@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MantleThumbnailChoice.h"
 
 class UWorld;
 
@@ -55,4 +56,19 @@ public:
 
 	/** Renders World from View: Width x Height opaque pixels, top row first. */
 	static bool Capture(UWorld* World, const FMantlePlaceThumbnailView& View, TArray<FColor>& OutPixels, FString& OutError);
+
+	/** The thumbnail choice on World's Mantle Place Settings (#124); Automatic when it has none. */
+	static FMantleThumbnailChoice ChoiceFor(UWorld* World);
+
+	/** The shared resolver's render for a place: the level from its automatic view or the chosen camera (Capture). */
+	static FMantleThumbnailResolver::FRender RenderFor(UWorld* World);
+
+	/**
+	 * The place's final picture (#124): Width x Height, from the settings' choice. A custom image needs no renderer; Automatic and Choose the angle do
+	 * (CanCapture).
+	 */
+	static FMantleThumbnailResult Resolve(UWorld* World);
+
+	/** The shared resolver's target for a place: Width x Height. */
+	static FMantleThumbnailTarget Target() { return { Width, Height }; }
 };
