@@ -17,7 +17,7 @@ struct MANTLEEDITOR_API FMantleOverlayPlacement
 	/** The picture's width on the surface; its height follows the picture's shape. */
 	float WidthCm = 10.f;
 	/** How far either side of the projector's origin the picture reaches along its direction. */
-	float DepthCm = 6.f;
+	float DepthCm = 15.f;
 	/** The share of the depth over which the mark fades out (0 = hard edge, 1 = fades from the middle). */
 	float Falloff = 0.4f;
 	/** How strongly a scar's normal map pushes (0 = flat). Scars only. */

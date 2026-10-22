@@ -233,14 +233,14 @@ namespace MantleOverlayWornDevCommands
 	{
 		if (Args.Num() < 5)
 		{
-			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED usage: Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [Exit]"));
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED usage: Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Exit]"));
 			return;
 		}
 		IFileManager::Get().MakeDirectory(*Args[0], true);
 		// Exit however this ends, so an unattended run never leaves an editor behind.
 		ON_SCOPE_EXIT
 		{
-			if (Args.Num() > 6 && Args[6].Equals(TEXT("Exit"), ESearchCase::IgnoreCase))
+			if (Args.ContainsByPredicate([](const FString& Arg) { return Arg.Equals(TEXT("Exit"), ESearchCase::IgnoreCase); }))
 			{
 				FPlatformMisc::RequestExit(false);
 			}
@@ -260,6 +260,10 @@ namespace MantleOverlayWornDevCommands
 		Draft.bOverlayPlaced = true;
 		Draft.OverlayPictureFile = Args[1];
 		Draft.OverlayPlacement.WidthCm = Args.Num() > 5 && Args[5].IsNumeric() ? FCString::Atof(*Args[5]) : 14.f;
+		if (Args.Num() > 6 && Args[6].IsNumeric())
+		{
+			Draft.OverlayPlacement.DepthCm = FCString::Atof(*Args[6]);
+		}
 		Draft.Thumbnail.Mode = EMantleThumbnailMode::Automatic;
 		// The same default spot the panel starts on, moved by the offset.
 		USkeletalMesh* Mesh = FMantleOverlayChecks::IsFaceSlot(Draft.Slot) ? FMantleReferenceBodies::GetFace() : nullptr;
@@ -297,7 +301,7 @@ namespace MantleOverlayWornDevCommands
 
 	FAutoConsoleCommand OverlayPlacedCommand(
 		TEXT("Mantle.Dev.OverlayPlacedSample"),
-		TEXT("Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [Exit]: a placed picture through the panel's export; the baked mask, normal map and Automatic thumbnail as PNGs. Uploads nothing."),
+		TEXT("Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Exit]: a placed picture through the panel's export; the baked mask, normal map and Automatic thumbnail as PNGs. Uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunPlacedSample));
 
 	FAutoConsoleCommand OverlaySamplesCommand(
