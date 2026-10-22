@@ -6,7 +6,7 @@
 #include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Widgets/SCompoundWidget.h"
 
-class FSlateDynamicImageBrush;
+struct FSlateDynamicImageBrush;
 
 /**
  * The Thumbnail section every Mantle uploader shows (#124): Automatic, Choose the angle, Custom image, and the exact picture that will be uploaded.
