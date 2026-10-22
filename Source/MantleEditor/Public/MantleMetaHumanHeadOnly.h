@@ -59,7 +59,7 @@ public:
 	static constexpr double EyeShareAboveNeck = 0.55;
 	/** Without a skeleton, the neck is the narrowest cross-section between these shares of the standing height (above the feet). */
 	static constexpr double NeckSearchLowShare = 0.70;
-	static constexpr double NeckSearchHighShare = 0.93;
+	static constexpr double NeckSearchHighShare = 0.87;
 	/** Skin slots must span at least this share of the mesh's height. */
 	static constexpr double CoveredSpanShare = 0.6;
 	/** Skin may start no higher than this share of the height above the lowest point. */
