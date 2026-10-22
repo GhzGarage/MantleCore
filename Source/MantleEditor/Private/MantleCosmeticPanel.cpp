@@ -2100,7 +2100,7 @@ void SMantleCosmeticPanel::ShowHairHeadFit()
 	}
 	// The hair card lives in its own box so confirming it leaves every check above it alone.
 	const TSharedRef<SVerticalBox> Card = SNew(SVerticalBox);
-	Card->AddSlot().AutoHeight()[Card];
+	IssuesBox->AddSlot().AutoHeight()[Card];
 	// #52: which route this hair takes, in words, before anything it did to the hair.
 	if (Package->bHasHairRoute)
 	{
