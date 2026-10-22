@@ -11,6 +11,7 @@
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticThumbnail.h"
 #include "MantleEditorActions.h"
+#include "MantleHairFitPictures.h"
 #include "MantlePng.h"
 
 #include "Engine/SkeletalMesh.h"
@@ -35,45 +36,6 @@ namespace MantleDevRenderHairFitPrivate
 	{
 		if (!FPackageName::GetShortName(Path).Contains(TEXT("."))) Path += TEXT(".") + FPackageName::GetShortName(Path);
 		return LoadObject<T>(nullptr, *Path);
-	}
-
-	/** One static mesh of the head (grey) and the hair (brown): vertex colours on the engine's vertex colour material. */
-	UStaticMesh* BuildHeadAndHair(const FMantleHairFitMeshes& Meshes, const TArray<FVector3f>& HairPositions)
-	{
-		UStaticMesh* Mesh = NewObject<UStaticMesh>(GetTransientPackage(), NAME_None, RF_Transient);
-		UStaticMeshDescription* Description = UStaticMesh::CreateStaticMeshDescription(Mesh);
-		FMeshDescription& MD = Description->GetMeshDescription();
-		FStaticMeshAttributes Attributes(MD);
-		Attributes.Register();
-		TVertexInstanceAttributesRef<FVector4f> Colors = Attributes.GetVertexInstanceColors();
-		const FPolygonGroupID Group = MD.CreatePolygonGroup();
-		Attributes.GetPolygonGroupMaterialSlotNames()[Group] = TEXT("HairFit");
-
-		const auto AddPart = [&](const TArray<FVector3f>& Positions, const TArray<uint32>& Triangles, const FLinearColor& Colour)
-		{
-			TArray<FVertexID> Vertices;
-			for (const FVector3f& P : Positions) Vertices.Add(MD.CreateVertex()), Attributes.GetVertexPositions()[Vertices.Last()] = P;
-			for (int32 T = 0; T + 2 < Triangles.Num(); T += 3)
-			{
-				TArray<FVertexInstanceID> Corners;
-				for (int32 C = 0; C < 3; ++C)
-				{
-					const FVertexInstanceID Corner = MD.CreateVertexInstance(Vertices[Triangles[T + C]]);
-					Colors[Corner] = FVector4f(Colour);
-					Corners.Add(Corner);
-				}
-				MD.CreateTriangle(Group, Corners);
-			}
-		};
-		AddPart(Meshes.HeadPositions, Meshes.HeadTriangles, FLinearColor(0.45f, 0.40f, 0.36f));
-		AddPart(HairPositions, Meshes.HairTriangles, FLinearColor(0.20f, 0.09f, 0.03f));
-
-		UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineDebugMaterials/VertexColorMaterial.VertexColorMaterial"));
-		Mesh->GetStaticMaterials().Add(FStaticMaterial(Material, TEXT("HairFit")));
-		UStaticMesh::FBuildMeshDescriptionsParams Params;
-		Params.bBuildSimpleCollision = false;
-		Mesh->BuildFromMeshDescriptions({&MD}, Params);
-		return Mesh;
 	}
 
 	void Run(const TArray<FString>& Args)
@@ -113,26 +75,19 @@ namespace MantleDevRenderHairFitPrivate
 			return;
 		}
 
-		// One frame for every picture: the head and the fitted hair.
-		FBox Frame(ForceInit);
-		for (const FVector3f& P : Meshes.HeadPositions) Frame += FVector(P);
-		for (const FVector3f& P : Meshes.AfterPositions) Frame += FVector(P);
-		UE_LOG(LogMantleRenderHairFit, Display, TEXT("MANTLE_RENDER_HAIRFIT frame=%s"), *Frame.ToString());
+		UE_LOG(LogMantleRenderHairFit, Display, TEXT("MANTLE_RENDER_HAIRFIT frame=%s"), *FMantleHairFitPictures::FrameOf(Meshes).ToString());
 
 		struct FView { const TCHAR* Name; float Yaw; };
-		const FView Views[] = { {TEXT("front"), 270.f}, {TEXT("angled"), 225.f}, {TEXT("side"), 180.f}, {TEXT("back"), 90.f} };
+		const FView Views[] = { {TEXT("front"), FMantleHairFitPictures::FrontYaw}, {TEXT("angled"), FMantleHairFitPictures::AngledYaw},
+			{TEXT("side"), FMantleHairFitPictures::SideYaw}, {TEXT("back"), FMantleHairFitPictures::BackYaw} };
 		for (const bool bAfter : { false, true })
 		{
-			TStrongObjectPtr<UStaticMesh> Shown(BuildHeadAndHair(Meshes, bAfter ? Meshes.AfterPositions : Meshes.BeforePositions));
 			for (const FView& View : Views)
 			{
-				FMantleThumbnailSubject Shot = FMantleCosmeticThumbnail::AccessorySubject(Shown.Get(), FQuat::Identity, true);
-				Shot.Frame = Frame;
-				Shot.View = FRotator(0.0f, View.Yaw, 0.0f);
 				TArray<FColor> Pixels;
 				FString Error;
 				const FString File = FPaths::Combine(Args[3], FString::Printf(TEXT("%s_%s_%s.png"), *Args[4], bAfter ? TEXT("after") : TEXT("before"), View.Name));
-				const bool bWritten = FMantleCosmeticThumbnail::Capture(Shot, Size, Pixels, Error)
+				const bool bWritten = FMantleHairFitPictures::Render(Meshes, bAfter, View.Yaw, Size, Pixels, Error)
 					&& FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Size, Size, Pixels), *File);
 				UE_LOG(LogMantleRenderHairFit, Display, TEXT("MANTLE_RENDER_HAIRFIT %s %s %s"), View.Name, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Error);
 			}
