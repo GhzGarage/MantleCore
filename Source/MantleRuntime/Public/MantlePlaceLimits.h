@@ -187,6 +187,12 @@ struct MANTLERUNTIME_API FMantlePlaceLimits
 	/** WeaponSpawn entities in one place (#789). Cross-entity: the schema states it in prose. */
 	static constexpr int32 MaxWeaponSpawnsPerPlace = 32;
 
+	/** Seats in one place (GhzGarage/MantleCore#142). Cross-entity: the schema states it in prose. */
+	static constexpr int32 MaxSeatsPerPlace = 256;
+
+	/** A seat's hip position, each axis in centimetres from its entity's origin (#142). */
+	static constexpr double MaxSeatOffset = 100000.0;
+
 	/** ScriptPoint entities in one place (#838). Cross-entity: the schema states it in prose. */
 	static constexpr int32 MaxScriptPoints = 64;
 
