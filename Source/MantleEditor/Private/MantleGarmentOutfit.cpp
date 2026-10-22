@@ -1899,7 +1899,7 @@ bool FMantleGarmentOutfit::IsTrimOn(const FMantleGlbMesh& Trim, const FMantleGlb
 	return TrimNear(Trim, Garment) >= TrimNearShare;
 }
 
-double FMantleGarmentOutfit::TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment, float NearCm, int32* OutTrimTriangles, int32* OutGarmentTriangles)
+double FMantleGarmentOutfit::TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment, float WithinCm, int32* OutTrimTriangles, int32* OutGarmentTriangles)
 {
 	int32 TrimTriangles = 0;
 	int32 GarmentTriangles = 0;
@@ -1922,7 +1922,7 @@ double FMantleGarmentOutfit::TrimNear(const FMantleGlbMesh& Trim, const FMantleG
 	int32 Close = 0;
 	for (int32 Point = 0; Point < Trim.Positions.Num(); ++Point)
 	{
-		Close += Near.IsTracked(Point) && FMath::Abs(Near.ClearanceCm[Point]) <= NearCm ? 1 : 0;
+		Close += Near.IsTracked(Point) && FMath::Abs(Near.ClearanceCm[Point]) <= WithinCm ? 1 : 0;
 	}
 	return Trim.Positions.IsEmpty() ? 0.0 : static_cast<double>(Close) / Trim.Positions.Num();
 }

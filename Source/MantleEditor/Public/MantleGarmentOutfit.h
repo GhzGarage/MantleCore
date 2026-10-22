@@ -276,11 +276,11 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	static bool IsTrimOn(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment);
 
 	/**
-	 * Pure (tested): the share of Trim's points within NearCm (TrimNearCm) of Garment's surface, or 0 when Trim is too big to be its
+	 * Pure (tested): the share of Trim's points within WithinCm (TrimNearCm) of Garment's surface, or 0 when Trim is too big to be its
 	 * trim (TrimMaxTriangleShare). OutTrimTriangles and OutGarmentTriangles, when given, get the two triangle counts, so a 0 can be
 	 * told apart: too big, or not lying on it.
 	 */
-	static double TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment, float NearCm = TrimNearCm, int32* OutTrimTriangles = nullptr,
+	static double TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment, float WithinCm = TrimNearCm, int32* OutTrimTriangles = nullptr,
 		int32* OutGarmentTriangles = nullptr);
 
 	/**
