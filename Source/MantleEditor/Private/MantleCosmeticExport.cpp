@@ -5747,6 +5747,36 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 
 			if (bHair)
 			{
+				// Which route this hair takes, in words for the panel; sculpted solid hair is flagged, not blocked.
+				{
+					TArray<uint32> RouteIndices;
+					for (const FMantleGlbPrimitive& Primitive : Mesh.Glb.Primitives)
+					{
+						for (const uint32 Index : Primitive.Indices) RouteIndices.Add(Index + static_cast<uint32>(Primitive.FirstVertex));
+					}
+					FMantleHairRoute::FInput RouteInput;
+					RouteInput.bGroom = IsGroomAsset(Source);
+					RouteInput.bSkeletalMesh = Source && Source->IsA<USkeletalMesh>();
+					RouteInput.bMetaHumanOrigin = !RouteInput.bGroom && !RouteInput.bSkeletalMesh && !ShouldFitThirdPartyHairCardsToHead(Source);
+					RouteInput.bPlacedByHand = Draft.bPlaceHairByHand;
+					RouteInput.Triangles = Mesh.NumTriangles;
+					RouteInput.Budget = Class.MaxTriangles;
+					if (!RouteInput.bGroom && !RouteInput.bSkeletalMesh)
+					{
+						for (const TArray<int32>& Piece : FMantleHairCards::FindCards(Mesh.Glb.Positions, RouteIndices))
+						{
+							++RouteInput.Pieces;
+							RouteInput.LargestPieceTriangles = FMath::Max(RouteInput.LargestPieceTriangles, Piece.Num());
+						}
+					}
+					Package.HairRoute = FMantleHairRoute::Decide(RouteInput);
+					Package.bHasHairRoute = true;
+					Package.Notes.Add(FString::Printf(TEXT("Hair route: %s. %s"), *Package.HairRoute.Title, *Package.HairRoute.Words));
+					if (!Package.HairRoute.bSupported)
+					{
+						Issues.Add(FMantleCosmeticChecks::Warning(Package.HairRoute.Words, TEXT("Hair cards, MetaHuman grooms and skeletal hair are supported today.")));
+					}
+				}
 				const int32 Before = Mesh.NumTriangles;
 				TArray<FString> BudgetWarnings;
 				if (!ReduceHairCards(Mesh, Class.MaxTriangles, Error, &BudgetWarnings)) { Issues.Add(FMantleCosmeticChecks::Error(Error)); return Package; }
