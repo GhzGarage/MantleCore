@@ -12,6 +12,8 @@ struct MANTLEEDITOR_API FMantleSilhouette
 	/** Side to side and front to back, per band: the torso alone (the narrowest cross-section, so arms and cloaks don't count). */
 	double Width[Bands] = { 0.0, 0.0, 0.0 };
 	double Depth[Bands] = { 0.0, 0.0, 0.0 };
+	/** Which bands had a torso to measure (a band under a robe, with no bare skin, has none); bValid when any did. */
+	bool bBand[Bands] = { false, false, false };
 	bool bValid = false;
 
 	FString ToString(bool bShareOfHeight = false) const;
@@ -42,20 +44,24 @@ public:
 	static constexpr double SlabHalfShare = 0.012;
 	/** Vertices further apart than this (share of height) across a slab belong to different parts (an arm apart from the torso). */
 	static constexpr double GapShare = 0.025;
+	/** The run of vertices that is taken for the torso must be at least this wide (share of height): an arm or a leg alone is not one. */
+	static constexpr double MinTorsoWidthShare = 0.10;
 	/** How far a seed moves a slider per unit of size difference, and the most it moves one (share of the slider's range). */
 	static constexpr double SeedGain = 1.0;
 	static constexpr double SeedLimit = 0.5;
 
 	/**
 	 * The silhouette of Vertices (Z up, Y front to back, X side to side, cm) standing FeetZ at its lowest and HeightCm tall.
-	 * False when a band has no torso in it (an empty mesh, or a height that is not positive).
+	 * Out.bBand says which bands had a torso (at least MinTorsoWidthShare wide); false when none did (an empty mesh, no bare skin on
+	 * the torso, or a height that is not positive). Pass only vertices that are bare or skin-tight: clothing would measure as body.
 	 */
 	static bool Measure(TConstArrayView<FVector3f> Vertices, double FeetZ, double HeightCm, FMantleSilhouette& Out);
 
 	/**
 	 * The slider moves that take the default body's silhouette to Source's, both measured as shares of their own height (pass
-	 * silhouettes already divided by height). Weight follows every band, Fat the waist and hips, Muscularity the chest.
-	 * Each is clamped to +-SeedLimit of the range.
+	 * silhouettes already divided by height). Weight follows every band both measured, Fat the waist and hips, Muscularity the chest;
+	 * a slider whose bands were not measured on Source stays at 0. Each is clamped to +-SeedLimit of the range, and a build
+	 * slimmer than the default never goes above it.
 	 */
 	static FMantleSliderSeed Seed(const FMantleSilhouette& Source, const FMantleSilhouette& Default);
 

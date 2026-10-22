@@ -86,6 +86,28 @@ bool FMantleBodySilhouetteSeedTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("a huge one is clamped"), FMath::IsNearlyEqual(Huge.Weight, FMantleBodySilhouette::SeedLimit) && FMath::IsNearlyEqual(Huge.Fat, FMantleBodySilhouette::SeedLimit));
 
 	TestTrue(TEXT("an unmeasured build moves nothing"), FMath::IsNearlyZero(FMantleBodySilhouette::Seed(FMantleSilhouette(), Default).Weight));
+
+	// Only the legs bare (a robe over the torso): no band at the chest or waist, so nothing seeds from them.
+	TArray<FVector3f> Legs;
+	for (const FVector3f& Vertex : SilhouetteTestTube(30.0, 20.0, false))
+	{
+		if (Vertex.Z < 40.0)
+		{
+			Legs.Add(Vertex);
+		}
+	}
+	FMantleSilhouette Covered;
+	TestFalse(TEXT("no bare torso, no silhouette"), FMantleBodySilhouette::Measure(Legs, 0.0, 170.0, Covered));
+
+	// A bulky robe over the chest and waist, a slim body measured at the hips alone: Fat and Weight follow the hips only, Muscularity stays 0.
+	FMantleSilhouette HipsOnly = Default;
+	HipsOnly.bBand[FMantleSilhouette::Chest] = false;
+	HipsOnly.bBand[FMantleSilhouette::Waist] = false;
+	HipsOnly.Width[FMantleSilhouette::Chest] = HipsOnly.Width[FMantleSilhouette::Waist] = 99.0;
+	HipsOnly.Depth[FMantleSilhouette::Chest] = HipsOnly.Depth[FMantleSilhouette::Waist] = 99.0;
+	const FMantleSliderSeed Partial = FMantleBodySilhouette::Seed(HipsOnly, Default);
+	TestTrue(TEXT("unmeasured bands are left out of every slider"), FMath::IsNearlyZero(Partial.Weight) && FMath::IsNearlyZero(Partial.Fat));
+	TestTrue(TEXT("and the chest slider stays put"), FMath::IsNearlyZero(Partial.Muscularity));
 	return true;
 }
 

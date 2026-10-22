@@ -4,8 +4,11 @@
 FString FMantleSilhouette::ToString(const bool bShareOfHeight) const
 {
 	const double K = bShareOfHeight ? 100.0 : 1.0;
-	return FString::Printf(TEXT("width %.1f / %.1f / %.1f, depth %.1f / %.1f / %.1f %s (chest / waist / hips)"), Width[0] * K, Width[1] * K, Width[2] * K, Depth[0] * K,
-		Depth[1] * K, Depth[2] * K, bShareOfHeight ? TEXT("% of height") : TEXT("cm"));
+	auto Band = [this, K](const int32 Index)
+	{
+		return bBand[Index] ? FString::Printf(TEXT("%.1f x %.1f"), Width[Index] * K, Depth[Index] * K) : FString(TEXT("not measured"));
+	};
+	return FString::Printf(TEXT("chest %s, waist %s, hips %s (width x depth, %s)"), *Band(0), *Band(1), *Band(2), bShareOfHeight ? TEXT("% of height") : TEXT("cm"));
 }
 
 FString FMantleSliderSeed::ToString() const
@@ -62,7 +65,7 @@ bool FMantleBodySilhouette::Measure(const TConstArrayView<FVector3f> Vertices, c
 				MaxY = FMath::Max(MaxY, Points[Index].Y);
 			}
 			const double Width = Points[Last].X - Points[First].X;
-			if (Width < BestWidth)
+			if (Width >= MinTorsoWidthShare * HeightCm && Width < BestWidth)
 			{
 				BestWidth = Width;
 				BestDepth = MaxY - MinY;
@@ -70,13 +73,14 @@ bool FMantleBodySilhouette::Measure(const TConstArrayView<FVector3f> Vertices, c
 		}
 		if (BestWidth == TNumericLimits<double>::Max() || BestWidth <= 0.0 || BestDepth <= 0.0)
 		{
-			return false;
+			continue;
 		}
 		Out.Width[Band] = BestWidth;
 		Out.Depth[Band] = BestDepth;
+		Out.bBand[Band] = true;
+		Out.bValid = true;
 	}
-	Out.bValid = true;
-	return true;
+	return Out.bValid;
 }
 
 FMantleSilhouette FMantleBodySilhouette::Normalised(const FMantleSilhouette& Silhouette, const double HeightCm)
@@ -102,19 +106,35 @@ FMantleSliderSeed FMantleBodySilhouette::Seed(const FMantleSilhouette& Source, c
 	{
 		return Out;
 	}
+	// A band counts when both silhouettes measured it; the others stay out of every slider.
 	auto Ratio = [&](const int32 Band)
 	{
 		return 0.5 * (Source.Width[Band] / Default.Width[Band] + Source.Depth[Band] / Default.Depth[Band]);
 	};
+	auto Both = [&](const int32 Band) { return Source.bBand[Band] && Default.bBand[Band]; };
 	auto Move = [](const double Ratio)
 	{
 		return FMath::Clamp((Ratio - 1.0) * SeedGain, -SeedLimit, SeedLimit);
 	};
-	const double Chest = Ratio(FMantleSilhouette::Chest);
-	const double Waist = Ratio(FMantleSilhouette::Waist);
-	const double Hips = Ratio(FMantleSilhouette::Hips);
-	Out.Weight = Move((Chest + Waist + Hips) / 3.0);
-	Out.Fat = Move((Waist + Hips) * 0.5);
-	Out.Muscularity = Move(Chest);
+	auto Mean = [&](std::initializer_list<int32> Bands, double& OutMove)
+	{
+		double Sum = 0.0;
+		int32 Count = 0;
+		for (const int32 Band : Bands)
+		{
+			if (Both(Band))
+			{
+				Sum += Ratio(Band);
+				++Count;
+			}
+		}
+		if (Count > 0)
+		{
+			OutMove = Move(Sum / Count);
+		}
+	};
+	Mean({ FMantleSilhouette::Chest, FMantleSilhouette::Waist, FMantleSilhouette::Hips }, Out.Weight);
+	Mean({ FMantleSilhouette::Waist, FMantleSilhouette::Hips }, Out.Fat);
+	Mean({ FMantleSilhouette::Chest }, Out.Muscularity);
 	return Out;
 }

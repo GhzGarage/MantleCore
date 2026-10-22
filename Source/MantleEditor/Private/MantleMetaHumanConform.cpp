@@ -378,6 +378,7 @@ namespace MantleMetaHumanConformPrivate
 			if (!FMantleMetaHumanHeadOnly::MeasureBuild(*Source, Clean.SourceHeightCm, Build, BuildError))
 			{
 				UE_LOG(LogMantle, Warning, TEXT("MANTLE_CONVERT_FACEONLY %s: its build was not read (%s); the body sliders keep their defaults"), *Name, *BuildError);
+				Context.Notes.Add(FString::Printf(TEXT("%s: its build couldn't be seen (%s), so the body sliders start at MetaHuman's default."), *Part.Name, *BuildError));
 			}
 			bDone = FMantleMetaHumanConform::ConformHeadOnly(*Clean.Mesh.Get(), Clean.HeadJoint, TargetCm, Work.bFeminineBody, CharacterFolder, Name,
 				Result, OutError, &Build);
