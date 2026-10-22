@@ -3330,7 +3330,7 @@ FMantleParseResult FMantlePlaceParser::ParseFromString(const FString& Json, cons
 		Ctx, Root,
 		{ TEXT("schemaVersion"), TEXT("placeId"), TEXT("revision"), TEXT("metadata"),
 		  TEXT("settings"), TEXT("assets"), TEXT("entities"), TEXT("scripts"), TEXT("scriptApi"),
-		  TEXT("uiDocuments"), TEXT("storage"), TEXT("localization"), TEXT("audience") },
+		  TEXT("uiDocuments"), TEXT("storage"), TEXT("seats"), TEXT("localization"), TEXT("audience") },
 		TEXT(""));
 
 	RequireString(Ctx, Root, TEXT("placeId"), TEXT(""), Place.PlaceId);
@@ -4174,6 +4174,63 @@ FMantleParseResult FMantlePlaceParser::ParseFromString(const FString& Json, cons
 		else
 		{
 			EntityById.Add(Entity.Id, &Entity);
+		}
+	}
+
+	// seats — optional. Sit spots (#142): {entity, position, yaw, style}, each on an entity of this place.
+	if (Root->HasField(TEXT("seats")))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* SeatsArray = nullptr;
+		if (!Root->TryGetArrayField(TEXT("seats"), SeatsArray))
+		{
+			Ctx.Fail(TEXT("/seats"), TEXT("expected an array"));
+		}
+		else
+		{
+			if (SeatsArray->Num() > FMantlePlaceLimits::MaxSeatsPerPlace)
+			{
+				Ctx.Fail(TEXT("/seats"), FString::Printf(TEXT("has %d seats; a place may have at most %d"),
+					SeatsArray->Num(), FMantlePlaceLimits::MaxSeatsPerPlace));
+			}
+			for (int32 i = 0; i < SeatsArray->Num() && i < FMantlePlaceLimits::MaxSeatsPerPlace; ++i)
+			{
+				const FString Path = Index(TEXT("/seats"), i);
+				const TSharedPtr<FJsonObject>* Obj = nullptr;
+				FMantleSeat Seat;
+				if (!(*SeatsArray)[i].IsValid() || !(*SeatsArray)[i]->TryGetObject(Obj))
+				{
+					Ctx.Fail(Path, TEXT("expected an object"));
+					Place.Seats.Add(MoveTemp(Seat));
+					continue;
+				}
+				RequireNoUnknownKeys(Ctx, *Obj, { TEXT("entity"), TEXT("position"), TEXT("yaw"), TEXT("style") }, Path);
+				if (RequireString(Ctx, *Obj, TEXT("entity"), Path, Seat.Entity) && !EntityIds.Contains(Seat.Entity))
+				{
+					Ctx.Fail(Join(Path, TEXT("entity")), FString::Printf(TEXT("'%s' does not name any entity in this place"), *Seat.Entity));
+				}
+				TArray<double> Position;
+				if (ReadNumberArray(Ctx, *Obj, TEXT("position"), 3, Path, Position))
+				{
+					for (int32 Axis = 0; Axis < 3; ++Axis)
+					{
+						RangeCheck(Ctx, Position[Axis], -FMantlePlaceLimits::MaxSeatOffset, FMantlePlaceLimits::MaxSeatOffset,
+							Index(Join(Path, TEXT("position")), Axis));
+					}
+					Seat.Position = FVector(Position[0], Position[1], Position[2]);
+				}
+				double Yaw = 0.0;
+				if (RequireNumber(Ctx, *Obj, TEXT("yaw"), Path, Yaw))
+				{
+					RangeCheck(Ctx, Yaw, -360.0, 360.0, Join(Path, TEXT("yaw")));
+					Seat.Yaw = Yaw;
+				}
+				FString Style;
+				if (RequireString(Ctx, *Obj, TEXT("style"), Path, Style) && !MantleParseSeatStyle(Style, Seat.Style))
+				{
+					Ctx.Fail(Join(Path, TEXT("style")), FString::Printf(TEXT("'%s' is not a seat style; the only one is 'bench'"), *Style));
+				}
+				Place.Seats.Add(MoveTemp(Seat));
+			}
 		}
 	}
 

@@ -119,6 +119,13 @@ enum class EMantleWaterBodyType : uint8
 	Custom
 };
 
+/** A seat's style (GhzGarage/MantleCore#142), the place file's seats[].style: it only picks the sit clip set. */
+enum class EMantleSeatStyle : uint8
+{
+	/** Sitting on a bench, a chair-height seat or a ledge; the game fits the hip to the floor under the seat. */
+	Bench
+};
+
 /** How a water spline runs out of one of its points (#997), the place file's point interp: the engine's ESplinePointType. */
 enum class EMantleWaterSplinePointType : uint8
 {
@@ -320,6 +327,9 @@ MANTLERUNTIME_API bool MantleParseTextVerticalAlignment(const FString& In, EMant
 /** "lake", "river", "ocean", "custom" (#997); parsing is case-exact, as the schema's enum is. */
 MANTLERUNTIME_API const TCHAR* MantleWaterBodyTypeToString(EMantleWaterBodyType Type);
 MANTLERUNTIME_API bool MantleParseWaterBodyType(const FString& In, EMantleWaterBodyType& Out);
+/** "bench" (#142); parsing is case-exact, and any other text is refused, with no fallback. */
+MANTLERUNTIME_API const TCHAR* MantleSeatStyleToString(EMantleSeatStyle Style);
+MANTLERUNTIME_API bool MantleParseSeatStyle(const FString& In, EMantleSeatStyle& Out);
 /** "curve", "linear", "constant", "curveClamped", "curveCustomTangent" (#997); parsing is case-exact. */
 MANTLERUNTIME_API const TCHAR* MantleWaterSplinePointTypeToString(EMantleWaterSplinePointType Type);
 MANTLERUNTIME_API bool MantleParseWaterSplinePointType(const FString& In, EMantleWaterSplinePointType& Out);
@@ -500,6 +510,21 @@ struct FMantleAudience
 	{
 		return Maturity == EMantleMaturity::Unrated && Platforms.Num() == 0;
 	}
+};
+
+/**
+ * One sit spot (GhzGarage/MantleCore#142), the place file's seats[]: a place-level list rather than an entity, because
+ * a prop can have several. Added without a schema version bump.
+ */
+struct FMantleSeat
+{
+	/** The id of the entity the seat belongs to; it must be in the place's entities. */
+	FString Entity;
+	/** Where the hip rests, in the owning entity's local space (centimetres). */
+	FVector Position = FVector::ZeroVector;
+	/** The way the seated body faces: degrees about up, in the owning entity's local space. Yaw only. */
+	double Yaw = 0.0;
+	EMantleSeatStyle Style = EMantleSeatStyle::Bench;
 };
 
 struct FMantleLocalization
@@ -1492,6 +1517,8 @@ struct FMantlePlace
 	TArray<FMantleUIDocument> UIDocuments;
 	/** storage (#614 stage 4): at most FMantlePlaceLimits::MaxStorageEntries library items, names unique. */
 	TArray<FMantleStorageEntry> Storage;
+	/** seats (#142): at most FMantlePlaceLimits::MaxSeatsPerPlace sit spots, each on an entity of the place. */
+	TArray<FMantleSeat> Seats;
 	/**
 	 * Not in the place file: what the storage resolve answered for Storage, kept by FMantleStorage::Apply (#614
 	 * stage 5). One entry per distinct item version that resolved to a usable vehicle or weapon, or (#838) a script

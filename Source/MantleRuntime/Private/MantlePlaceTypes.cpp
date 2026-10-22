@@ -51,6 +51,10 @@ namespace
 		TEXT("ocean"),
 		TEXT("custom")
 	};
+	// In EMantleSeatStyle order; a seat's style (#142).
+	const TCHAR* const GSeatStyleNames[] = {
+		TEXT("bench")
+	};
 	const TCHAR* const GWaterSplinePointTypeNames[] = {
 		TEXT("curve"),
 		TEXT("linear"),
@@ -348,6 +352,17 @@ const TCHAR* MantleWaterBodyTypeToString(EMantleWaterBodyType Type)
 bool MantleParseWaterBodyType(const FString& In, EMantleWaterBodyType& Out)
 {
 	return ParseEnum(In, GWaterBodyTypeNames, Out);
+}
+
+const TCHAR* MantleSeatStyleToString(EMantleSeatStyle Style)
+{
+	const int32 Index = static_cast<int32>(Style);
+	return (Index >= 0 && Index < UE_ARRAY_COUNT(GSeatStyleNames)) ? GSeatStyleNames[Index] : TEXT("bench");
+}
+
+bool MantleParseSeatStyle(const FString& In, EMantleSeatStyle& Out)
+{
+	return ParseEnum(In, GSeatStyleNames, Out);
 }
 
 const TCHAR* MantleWaterSplinePointTypeToString(EMantleWaterSplinePointType Type)
