@@ -1720,8 +1720,14 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 				}
 				const FMantleGlbMesh* TrimMesh = Geometry(Trim);
 				const FMantleGlbMesh* OtherMesh = TrimMesh ? Geometry(Other) : nullptr;
-				const double Near = OtherMesh ? TrimNear(*TrimMesh, *OtherMesh) : 0.0;
-				UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT trim check %s on %s: %.0f%% within %.0f cm"), *A.Name, *B.Name, 100.0 * Near, TrimNearCm);
+				int32 TrimTriangles = 0;
+				int32 OtherTriangles = 0;
+				const double Near = OtherMesh ? TrimNear(*TrimMesh, *OtherMesh, TrimNearCm, &TrimTriangles, &OtherTriangles) : 0.0;
+				// The closeness at a few distances too, so the rule can be set from the numbers rather than a guess.
+				const double Near1 = OtherMesh ? TrimNear(*TrimMesh, *OtherMesh, 1.0f) : 0.0;
+				const double Near3 = OtherMesh ? TrimNear(*TrimMesh, *OtherMesh, 3.0f) : 0.0;
+				UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT trim check %s on %s: %.0f%% within %.0f cm (%.0f%% within 1 cm, %.0f%% within 3 cm; %d of %d triangles, at most %.0f%% to be trim)"),
+					*A.Name, *B.Name, 100.0 * Near, TrimNearCm, 100.0 * Near1, 100.0 * Near3, TrimTriangles, OtherTriangles, 100.0 * TrimMaxTriangleShare);
 				if (Near >= BestNear)
 				{
 					Best = Other;
@@ -1893,12 +1899,14 @@ bool FMantleGarmentOutfit::IsTrimOn(const FMantleGlbMesh& Trim, const FMantleGlb
 	return TrimNear(Trim, Garment) >= TrimNearShare;
 }
 
-double FMantleGarmentOutfit::TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment)
+double FMantleGarmentOutfit::TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment, float NearCm, int32* OutTrimTriangles, int32* OutGarmentTriangles)
 {
 	int32 TrimTriangles = 0;
 	int32 GarmentTriangles = 0;
 	for (const FMantleGlbPrimitive& Primitive : Trim.Primitives) { TrimTriangles += Primitive.Indices.Num() / 3; }
 	for (const FMantleGlbPrimitive& Primitive : Garment.Primitives) { GarmentTriangles += Primitive.Indices.Num() / 3; }
+	if (OutTrimTriangles) { *OutTrimTriangles = TrimTriangles; }
+	if (OutGarmentTriangles) { *OutGarmentTriangles = GarmentTriangles; }
 	if (TrimTriangles == 0 || GarmentTriangles == 0 || TrimTriangles > TrimMaxTriangleShare * GarmentTriangles)
 	{
 		return 0.0;
@@ -1914,7 +1922,7 @@ double FMantleGarmentOutfit::TrimNear(const FMantleGlbMesh& Trim, const FMantleG
 	int32 Close = 0;
 	for (int32 Point = 0; Point < Trim.Positions.Num(); ++Point)
 	{
-		Close += Near.IsTracked(Point) && FMath::Abs(Near.ClearanceCm[Point]) <= TrimNearCm ? 1 : 0;
+		Close += Near.IsTracked(Point) && FMath::Abs(Near.ClearanceCm[Point]) <= NearCm ? 1 : 0;
 	}
 	return Trim.Positions.IsEmpty() ? 0.0 : static_cast<double>(Close) / Trim.Positions.Num();
 }

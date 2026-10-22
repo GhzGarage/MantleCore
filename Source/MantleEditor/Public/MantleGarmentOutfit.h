@@ -275,8 +275,13 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	/** Pure (tested): whether Trim is a thin piece lying on Garment (a corset's lace edging), by TrimMaxTriangleShare, TrimNearShare and TrimNearCm. */
 	static bool IsTrimOn(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment);
 
-	/** Pure (tested): the share of Trim's points within TrimNearCm of Garment's surface, or 0 when Trim is too big to be its trim (TrimMaxTriangleShare). */
-	static double TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment);
+	/**
+	 * Pure (tested): the share of Trim's points within NearCm (TrimNearCm) of Garment's surface, or 0 when Trim is too big to be its
+	 * trim (TrimMaxTriangleShare). OutTrimTriangles and OutGarmentTriangles, when given, get the two triangle counts, so a 0 can be
+	 * told apart: too big, or not lying on it.
+	 */
+	static double TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment, float NearCm = TrimNearCm, int32* OutTrimTriangles = nullptr,
+		int32* OutGarmentTriangles = nullptr);
 
 	/**
 	 * Pure (tested): Trim's geometry added to Garment as more primitives (its materials after Garment's: OutMaterials gets
