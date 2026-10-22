@@ -166,6 +166,37 @@ bool FMantleGarmentOutfitWeightsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitRootOnlyTest,
+	"Mantle.Editor.GarmentOutfit.FollowsRootOnly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitRootOnlyTest::RunTest(const FString& Parameters)
+{
+	// A cloth asset's export: every vertex on root, as Short Sleeve Tee and Sleeveless Shirt v4 uploaded.
+	FMantleGlbMesh Garment;
+	Garment.Joints.Add({ FName(TEXT("root")), INDEX_NONE, FTransform::Identity });
+	Garment.Positions = { FVector3f(0, 0, 100), FVector3f(10, 0, 120) };
+	Garment.NumInfluences = 1;
+	Garment.InfluenceJoints = { 0, 0 };
+	Garment.InfluenceWeights = { 1.0f, 1.0f };
+	TestTrue(TEXT("weights on root alone do not follow the body"), FMantleGarmentOutfit::FollowsRootOnly(Garment));
+
+	// The body's bones in the table do not help while no weight is on them.
+	Garment.Joints.Add({ FName(TEXT("spine_05")), 0, FTransform::Identity });
+	TestTrue(TEXT("unweighted body bones do not count"), FMantleGarmentOutfit::FollowsRootOnly(Garment));
+
+	// One vertex on the spine is skinned to the body.
+	Garment.NumInfluences = 2;
+	Garment.InfluenceJoints = { 0, 1, 0, 0 };
+	Garment.InfluenceWeights = { 0.5f, 0.5f, 1.0f, 0.0f };
+	TestFalse(TEXT("a weight on a body bone follows the body"), FMantleGarmentOutfit::FollowsRootOnly(Garment));
+
+	// A mesh with no skin at all follows nothing.
+	TestTrue(TEXT("no skin follows nothing"), FMantleGarmentOutfit::FollowsRootOnly(FMantleGlbMesh()));
+	return true;
+}
+
 #endif
 
 #if WITH_DEV_AUTOMATION_TESTS

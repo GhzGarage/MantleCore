@@ -135,6 +135,13 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	static bool TransferWeights(FMantleGlbMesh& Garment, const FMantleGlbMesh& Body, int32& OutFar, double& OutMeanCm, FString& OutError);
 
 	/**
+	 * Pure (tested): whether Mesh's weights all sit on its root bones (joints with no parent), or it has no skin. Such a
+	 * garment (a cloth asset or static mesh made into an Outfit exports on root alone) cannot follow the body: the client
+	 * takes the wearer's weights by bone name, and root is the only name it has.
+	 */
+	static bool FollowsRootOnly(const FMantleGlbMesh& Mesh);
+
+	/**
 	 * The MetaHuman's skin is shaped like the original body's where clothing is within ShapeNearCm of it, not at all past
 	 * ShapeFarCm (in between, in proportion), and the moves smoothed ShapeSmoothIters passes over its edges: its hands,
 	 * face and the rest stay MetaHuman's own.

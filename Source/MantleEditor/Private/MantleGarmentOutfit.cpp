@@ -660,6 +660,23 @@ bool FMantleGarmentOutfit::TransferWeights(FMantleGlbMesh& Garment, const FMantl
 	return true;
 }
 
+bool FMantleGarmentOutfit::FollowsRootOnly(const FMantleGlbMesh& Mesh)
+{
+	if (!Mesh.IsSkinned() || Mesh.NumInfluences <= 0)
+	{
+		return true;
+	}
+	for (int32 Index = 0; Index < Mesh.InfluenceJoints.Num(); ++Index)
+	{
+		const int32 Joint = Mesh.InfluenceJoints[Index];
+		if (Mesh.InfluenceWeights.IsValidIndex(Index) && Mesh.InfluenceWeights[Index] > 0.0f && Mesh.Joints.IsValidIndex(Joint) && Mesh.Joints[Joint].Parent != INDEX_NONE)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 void FMantleGarmentOutfit::WeldedSurface(const FMantleGlbMesh& Mesh, FMantleSkinnedMeshLOD& Out, TArray<int32>& OutPointOf)
 {
 	Out = FMantleSkinnedMeshLOD();

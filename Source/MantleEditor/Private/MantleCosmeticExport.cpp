@@ -20,6 +20,7 @@
 #include "MantleReferenceBodies.h"
 #include "MantleEmoteRetarget.h"
 #include "MantleGarmentFitter.h"
+#include "MantleGarmentOutfit.h"
 #include "MantleHairCards.h"
 #include "MantleHairColor.h"
 #include "MantleHairCardsFit.h"
@@ -1352,6 +1353,24 @@ namespace MantleCosmeticExportPrivate
 			(FPlatformTime::Seconds() - Start) * 1000.0));
 		UE_LOG(LogMantle, Log, TEXT("MANTLE_COSMETIC_LODS %s triangles=%s"), What, *FString::Join(Counts, TEXT("/")));
 		return Lower;
+	}
+
+	/**
+	 * The skin of Body (its reference LOD, fitted to Class's skeleton as a garment is) for a garment skinned to root alone
+	 * (FMantleGarmentOutfit::FollowsRootOnly) to take with FMantleGarmentOutfit::TransferWeights.
+	 */
+	bool ReadBodySkin(USkeletalMesh* Body, const FMantleContractClass& Class, const FMantleAvatarContract& Contract, FMantleGlbMesh& OutSkin, FString& OutError)
+	{
+		const int32 LOD = FMantleCosmeticExport::FindReferenceLOD(Body, Contract);
+		FMeshSource Source;
+		int32 Dropped = 0;
+		if (LOD == INDEX_NONE || !ReadSkeletalLOD(Body, LOD, Source, OutError) || !FitToClassSkeleton(Source, Class, Contract, false, Dropped, OutError))
+		{
+			OutError = FString::Printf(TEXT("its skin could not be taken from the body %s%s"), *Body->GetName(), OutError.IsEmpty() ? TEXT("") : *(TEXT(": ") + OutError));
+			return false;
+		}
+		OutSkin = MoveTemp(Source.Glb);
+		return true;
 	}
 
 	/** LOD0 and the generated lower LODs as the GLB (one mesh per LOD when there are several). */
@@ -5542,6 +5561,8 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 			ThumbnailBody = Body;
 
 			FMeshSource Mesh;
+			// A garment skinned to root alone takes this body's skin (every LOD).
+			FMantleGlbMesh BodySkin;
 			bool bHairCards = false;
 			TArray<UTexture2D*> CardTextures;
 			TArray<TArray<uint8>> GroomAtlases;
@@ -5612,6 +5633,23 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 				if (Helpers > 0)
 				{
 					Package.Notes.Add(FString::Printf(TEXT("%d helper bones that carry no weight and are not on the MetaHuman skeleton were left out"), Helpers));
+				}
+				// Weights on root alone (a cloth asset or static mesh made into an Outfit) cannot follow the body: the client
+				// takes the wearer's weights by bone name. The garment takes its authoring body's skin and bones instead.
+				if (FMantleGarmentOutfit::FollowsRootOnly(Mesh.Glb))
+				{
+					int32 Far = 0;
+					double MeanCm = 0.0;
+					if (!ReadBodySkin(Body, Class, Contract, BodySkin, Error) || !FMantleGarmentOutfit::TransferWeights(Mesh.Glb, BodySkin, Far, MeanCm, Error))
+					{
+						Issues.Add(FMantleCosmeticChecks::Error(FString::Printf(TEXT("%s is skinned to its root bone only, so it would not move with the body (%s)."),
+							*Garment->GetName(), *Error),
+							TEXT("Skin the clothing to the MetaHuman body skeleton (metahuman_base_skel), or choose the MetaHuman body it was made on under Authored on.")));
+						return Package;
+					}
+					Mesh.MostInfluences = Mesh.Glb.NumInfluences;
+					Package.Notes.Add(FString::Printf(TEXT("Skinned to its root bone only: took the skin of %s (%d bones; %d of %d vertices more than %.0f cm from it, mean %.2f cm)"),
+						*Body->GetName(), Mesh.Glb.Joints.Num(), Far, Mesh.Glb.Positions.Num(), FMantleGarmentOutfit::NearCm, MeanCm));
 				}
 
 				// Skin sections and extra garment pieces among the sections that upload (all of them unless the panel
@@ -6081,6 +6119,16 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 			else if (!bHair && Draft.bGenerateLODs)
 			{
 				LowerLODs = MakeLowerLODs(Cast<USkeletalMesh>(Source), Mesh, Contract, TEXT("Garment"), Package, Draft.KeepSlots.GetPtrOrNull());
+				for (FMeshSource& Lower : LowerLODs)
+				{
+					int32 Far = 0;
+					double MeanCm = 0.0;
+					if (BodySkin.IsSkinned() && !FMantleGarmentOutfit::TransferWeights(Lower.Glb, BodySkin, Far, MeanCm, Error))
+					{
+						Issues.Add(FMantleCosmeticChecks::Error(FString::Printf(TEXT("a lower LOD could not take the body's skin (%s)."), *Error)));
+						return Package;
+					}
+				}
 			}
 			if (bHair && OutHairPreview) *OutHairPreview = PreviewMesh(Mesh, LowerLODs);
 			if (bHair && OutHairSourceFace && bFace) *OutHairSourceFace = PreviewMesh(FaceMesh);
