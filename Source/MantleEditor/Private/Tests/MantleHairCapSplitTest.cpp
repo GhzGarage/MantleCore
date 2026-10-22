@@ -311,6 +311,43 @@ bool FMantleHairCardsFitRunTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHairCardsFitClearFaceTest,
+	"Mantle.Editor.HairCardsFit.OnlyFaceCoverageTheFitAddedIsUndone",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHairCardsFitClearFaceTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleHairCapSplitTestPrivate;
+	TArray<FVector3f> HeadP; TArray<uint32> HeadI;
+	CapTestSphere(9.f, 16, 24, HeadP, HeadI);
+	FMantleHairHeadSamples Head; FString Error;
+	if (!TestTrue(TEXT("head samples build"), Head.Build(HeadP, HeadI, Error))) { AddError(Error); return false; }
+
+	// The sphere is centred on the origin (radius 9, top 9, +Y forward): at z = -5 the skin is in the face zone.
+	const FVector3f Fringe(0.f, 8.f, -5.f);   // in front of the face
+	const FVector3f Clear(0.f, 12.f, -5.f);   // well in front of it
+	const FVector3f Crown(0.f, 0.f, 9.1f);
+	TestTrue(TEXT("the fringe spot covers the face"), FMantleHairCardsFit::CoversFace(Head, FVector(Fringe)));
+	TestFalse(TEXT("the clear spot does not"), FMantleHairCardsFit::CoversFace(Head, FVector(Clear)));
+	TestFalse(TEXT("the crown does not"), FMantleHairCardsFit::CoversFace(Head, FVector(Crown)));
+
+	// 0: a deliberate fringe, over the face as made and after the fit. 1: a lock the fit pushed onto the face. 2: the crown. 3: moved but still clear.
+	const TArray<FVector3f> Baseline = {Fringe, Clear, Crown, Clear};
+	TArray<FVector3f> Fitted = {Fringe + FVector3f(0.f, 0.2f, 0.f), Fringe, Crown, Clear + FVector3f(0.f, 1.f, 0.f)};
+	const TArray<FVector3f> FittedBefore = Fitted;
+	const int32 Restored = FMantleHairCardsFit::ClearFaceAddedByTheFit(Head, TArray<int32>({0, 1, 2, 3}), Baseline, Fitted);
+	TestEqual(TEXT("one vertex went back"), Restored, 1);
+	TestTrue(TEXT("the deliberate fringe stays"), Fitted[0].Equals(FittedBefore[0], 1.e-5f));
+	TestTrue(TEXT("the lock the fit pushed onto the face goes back"), Fitted[1].Equals(Baseline[1], 1.e-5f));
+	TestTrue(TEXT("the crown stays"), Fitted[2].Equals(FittedBefore[2], 1.e-5f));
+	TestTrue(TEXT("hair that is still clear stays"), Fitted[3].Equals(FittedBefore[3], 1.e-5f));
+	// Nothing added by the fit, nothing changes.
+	TArray<FVector3f> Same = Baseline;
+	TestEqual(TEXT("an unchanged fit restores nothing"), FMantleHairCardsFit::ClearFaceAddedByTheFit(Head, TArray<int32>({0, 1, 2, 3}), Baseline, Same), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMantleHairCardsFitCapGuardTest,
 	"Mantle.Editor.HairCardsFit.ABigSheetFarFromTheSkinIsHairNotACap",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

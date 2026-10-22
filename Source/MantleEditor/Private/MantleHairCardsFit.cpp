@@ -29,6 +29,28 @@ bool FMantleHairCardsFit::CoversScalp(TConstArrayView<FVector3f> HeadPositions, 
 	return CapSize.X >= CapMinScalpSpan * ScalpSize.X && CapSize.Y >= CapMinScalpSpan * ScalpSize.Y;
 }
 
+bool FMantleHairCardsFit::CoversFace(const FMantleHairHeadSamples& Head, const FVector& P)
+{
+	int32 Id = INDEX_NONE;
+	double D2 = 0.0;
+	Head.Nearest(P, Id, D2);
+	if (Id == INDEX_NONE || Head.Normal(Id).Y <= 0.3 || Head.TopCm() - Head.Point(Id).Z <= FaceClearTopCm) return false;
+	return ((P - Head.Point(Id)) | Head.Normal(Id)) < FaceClearMarginCm;
+}
+
+int32 FMantleHairCardsFit::ClearFaceAddedByTheFit(const FMantleHairHeadSamples& Head, TConstArrayView<int32> Vertices, TConstArrayView<FVector3f> Baseline, TArray<FVector3f>& Fitted)
+{
+	int32 Restored = 0;
+	for (const int32 V : Vertices)
+	{
+		if (!Fitted.IsValidIndex(V) || !Baseline.IsValidIndex(V)) continue;
+		if (!CoversFace(Head, FVector(Fitted[V])) || CoversFace(Head, FVector(Baseline[V]))) continue;
+		Fitted[V] = Baseline[V];
+		++Restored;
+	}
+	return Restored;
+}
+
 FVector3f FMantleHairCardsFit::RotateUpright(const FVector3f& P, int32 QuarterTurns)
 {
 	// +1: Y-up to Z-up (up becomes +Z, the file's +Z becomes -Y); -1: the other way.
@@ -126,6 +148,8 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 	Out.QuarterTurns = Turns;
 	if (Turns != 0) Out.Notes.Add(TEXT("The hair was lying on its side (its file is Y-up), so it was turned upright."));
 	FMantleHairPieceFit::ApplyTo(Piece, Out.Positions);
+	// The hair as made, sized and seated rigidly: the face-coverage baseline for what the scalp fit then adds.
+	const TArray<FVector3f> AfterPiece = Out.Positions;
 	Out.Notes.Add(Piece.Describe());
 	if (!Piece.bKeepsOutOfHead)
 	{
@@ -188,6 +212,17 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 	{
 		if (bCapVertex[V] && Scalp.CapPositions.IsValidIndex(V)) Out.Positions[V] = Scalp.CapPositions[V];
 		else if (!bCapVertex[V] && Scalp.CardPositions.IsValidIndex(V)) Out.Positions[V] = Scalp.CardPositions[V];
+	}
+	// A fringe or a lock over one eye stays; hair the scalp fit pushed onto the face goes back to where the rigid fit had it.
+	{
+		TArray<int32> CardVertexIds;
+		for (const uint32 V : TSet<uint32>(Split.CardIndices)) CardVertexIds.Add(static_cast<int32>(V));
+		CardVertexIds.Sort();
+		Out.FaceVerticesMoved = ClearFaceAddedByTheFit(Samples, CardVertexIds, AfterPiece, Out.Positions);
+		if (Out.FaceVerticesMoved > 0)
+		{
+			Out.Notes.Add(FString::Printf(TEXT("Hair over the face: %d hair vertices that the fit had pushed onto the face were put back."), Out.FaceVerticesMoved));
+		}
 	}
 	const FMantleScalpFit::FMetrics& M = Scalp.Metrics;
 	Out.Notes.Add(FString::Printf(TEXT("Hair scalp fit: %d cards, roots within 5 mm of the skin %.0f%% to %.0f%%, %d vertices lifted off the skin (largest %.1f cm)"),
