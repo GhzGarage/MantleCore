@@ -2408,7 +2408,6 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakePartsAndSoundStep()
 
 TSharedRef<SWidget> SMantleWeaponBuilder::MakeThumbnailStep()
 {
-	using namespace MantleWeaponBuilderPanelPrivate;
 	return SNew(SScrollBox)
 		+ SScrollBox::Slot()
 		[
@@ -2420,7 +2419,7 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakeThumbnailStep()
 				.OnChoiceChanged_Lambda([this](const FMantleThumbnailChoice& Choice)
 				{
 					ThumbnailChoice = Choice;
-					SaveThumbnailChoice(SafeAssetName(Working->DisplayName));
+					SaveThumbnailChoice(MantleWeaponBuilderLogic::SafeAssetName(Working->DisplayName));
 				})
 				.Render(FMantleModelThumbnail::RenderFor([this]() -> UObject* { return LoadModel(); }))
 		];
