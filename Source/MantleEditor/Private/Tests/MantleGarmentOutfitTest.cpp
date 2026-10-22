@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleGarmentOutfit.h"
+#include "MantleAvatarStripFixer.h"
 #include "MantleAvatarRefitFixer.h"
 #include "MantleOutfitSections.h"
 #include "MantleSkinnedMesh.h"
@@ -384,12 +385,28 @@ bool FMantleGarmentOutfitBareBodyRankTest::RunTest(const FString& Parameters)
 {
 	// A whole body wearing nothing beats one in underwear; a part, or a dressed body not named bare, is no bare body.
 	const int32 Bare = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Girl_Body"), 0, 1.0);
-	const int32 Underwear = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 2, 0.99);
-	TestTrue(TEXT("nothing on is best"), Bare > Underwear);
-	TestTrue(TEXT("underwear is a bare body"), Underwear >= 0);
-	TestTrue(TEXT("a nude name beats underwear"), FMantleGarmentOutfit::BareBodyRank(TEXT("Nude"), 1, 1.0) > Underwear);
+	const int32 Underwear = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 1, 0.99);
+	TestTrue(TEXT("all skin is best"), Bare > Underwear);
+	TestTrue(TEXT("a body in underwear is a bare body"), Underwear >= 0);
+	TestTrue(TEXT("a nude name is too"), FMantleGarmentOutfit::BareBodyRank(TEXT("Nude"), 1, 1.0) >= 0);
 	TestEqual(TEXT("a torso alone is a part"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Torso"), 0, 0.45), -1);
 	TestEqual(TEXT("a dressed body is not bare"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Nightwear"), 3, 1.0), -1);
+	// Vampire's pack: her all-skin body (SK_VampireGirl: body, eyes, mouth, lashes, head) beats the one in underwear.
+	TestTrue(TEXT("all skin beats underwear"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl"), 0, 0.96)
+		> FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 1, 1.0));
+	// Strip's check, which FindBareBody counts by: her sections are skin or a face detail, her underwear is neither.
+	for (const TCHAR* Part : { TEXT("M_VG_Body"), TEXT("M_VG_Head") })
+	{
+		TestTrue(FString::Printf(TEXT("%s is skin"), Part), FMantleAvatarStrip::LooksLikeSkin(Part, Part, FString()));
+	}
+	for (const TCHAR* Part : { TEXT("M_VG_Eyes"), TEXT("M_VG_Mouth"), TEXT("M_VG_Lashes") })
+	{
+		TestTrue(FString::Printf(TEXT("%s is a face detail"), Part), FMantleAvatarStrip::NamesFaceDetail(Part, Part));
+	}
+	TestFalse(TEXT("underwear is not skin"), FMantleAvatarStrip::LooksLikeSkin(TEXT("M_VG_Underwear"), TEXT("M_VG_Underwear"), FString()));
+	TestFalse(TEXT("nor a face detail"), FMantleAvatarStrip::NamesFaceDetail(TEXT("M_VG_Underwear"), TEXT("M_VG_Underwear")));
+	TestTrue(TEXT("an underwear material is underwear"), FMantleGarmentOutfit::IsUnderwearName(TEXT("M_VG_Underwear")));
+	TestFalse(TEXT("a corset is not underwear"), FMantleGarmentOutfit::IsUnderwearName(TEXT("M_VG_Corset")));
 	return true;
 }
 
@@ -417,5 +434,72 @@ bool FMantleGarmentOutfitSplitsCleanlyTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("unmoved, none turned"), FMantleGarmentOutfit::TurnedTriangles(Before, Mesh), 0);
 	Mesh.Positions[3] = FVector3f(0.25f, 0.25f, 0.0f);
 	TestEqual(TEXT("the folded one turned"), FMantleGarmentOutfit::TurnedTriangles(Before, Mesh), 1);
+	return true;
+}
+
+namespace MantleGarmentOutfitTrimTestPrivate
+{
+	/** A flat square of Cells x Cells cells, Size cm across, at height Z, one primitive of material Material. */
+	FMantleGlbMesh Sheet(const int32 Cells, const float Size, const float Z, const int32 Material = 0)
+	{
+		FMantleGlbMesh Mesh;
+		for (int32 Y = 0; Y <= Cells; ++Y)
+		{
+			for (int32 X = 0; X <= Cells; ++X)
+			{
+				Mesh.Positions.Add(FVector3f(Size * X / Cells, Size * Y / Cells, Z));
+				Mesh.Normals.Add(FVector3f(0, 0, 1));
+				Mesh.UVs.Add(FVector2f(static_cast<float>(X) / Cells, static_cast<float>(Y) / Cells));
+			}
+		}
+		FMantleGlbPrimitive& Primitive = Mesh.Primitives.AddDefaulted_GetRef();
+		Primitive.MaterialIndex = Material;
+		Primitive.NumVertices = Mesh.Positions.Num();
+		for (int32 Y = 0; Y < Cells; ++Y)
+		{
+			for (int32 X = 0; X < Cells; ++X)
+			{
+				const uint32 A = Y * (Cells + 1) + X;
+				Primitive.Indices.Append({ A, A + 1, A + Cells + 1, A + 1, A + Cells + 2, A + Cells + 1 });
+			}
+		}
+		Mesh.MaterialNames.SetNum(Material + 1);
+		return Mesh;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitTrimTest,
+	"Mantle.Editor.GarmentOutfit.Trim",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitTrimTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleGarmentOutfitTrimTestPrivate;
+	// A corset (20 x 20 cells) and a small lace strip on it: trim. The same strip 3 cm off it, or a piece as big as the
+	// corset lying on it (a jacket over a shirt), is not.
+	const FMantleGlbMesh Corset = Sheet(20, 20.0f, 0.0f);
+	TestTrue(TEXT("a small piece 0.4 cm off it is its trim"), FMantleGarmentOutfit::IsTrimOn(Sheet(4, 5.0f, 0.4f), Corset));
+	TestFalse(TEXT("3 cm off it is not"), FMantleGarmentOutfit::IsTrimOn(Sheet(4, 5.0f, 3.0f), Corset));
+	// An edging standing up from the rim: half of it on the corset, half up to 1.5 cm past its edge.
+	FMantleGlbMesh Edging = Sheet(4, 4.0f, 0.3f);
+	for (FVector3f& Position : Edging.Positions)
+	{
+		Position.X += 17.5f;
+	}
+	TestTrue(TEXT("an edging over the rim is its trim"), FMantleGarmentOutfit::IsTrimOn(Edging, Corset));
+	TestFalse(TEXT("a whole garment on it is not trim"), FMantleGarmentOutfit::IsTrimOn(Sheet(20, 20.0f, 0.4f), Corset));
+
+	// Appended: its vertices after the garment's, its primitive drawn with its own material after the garment's.
+	FMantleGlbMesh Garment = Sheet(2, 1.0f, 0.0f);
+	const FMantleGlbMesh Trim = Sheet(1, 1.0f, 0.1f);
+	FMantleGarmentOutfit::AppendTrim(Garment, Trim);
+	TestEqual(TEXT("vertices added"), Garment.Positions.Num(), 9 + 4);
+	TestEqual(TEXT("normals kept in step"), Garment.Normals.Num(), Garment.Positions.Num());
+	TestEqual(TEXT("UVs kept in step"), Garment.UVs.Num(), Garment.Positions.Num());
+	TestEqual(TEXT("a primitive added"), Garment.Primitives.Num(), 2);
+	TestEqual(TEXT("its first vertex after the garment's"), Garment.Primitives[1].FirstVertex, 9);
+	TestEqual(TEXT("its material after the garment's"), Garment.Primitives[1].MaterialIndex, 1);
+	TestEqual(TEXT("material names appended"), Garment.MaterialNames.Num(), 2);
 	return true;
 }

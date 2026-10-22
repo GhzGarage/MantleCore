@@ -8,7 +8,8 @@ namespace MantleOutfitSectionsPrivate
 	const TCHAR* const TopWords[] = {
 		TEXT("shirt"), TEXT("shirts"), TEXT("tshirt"), TEXT("top"), TEXT("tops"), TEXT("vest"), TEXT("jacket"), TEXT("coat"), TEXT("hoodie"),
 		TEXT("sweater"), TEXT("jumper"), TEXT("blouse"), TEXT("lapel"), TEXT("lapels"), TEXT("shawl"), TEXT("collar"), TEXT("cardigan"),
-		TEXT("tunic"), TEXT("cape"), TEXT("cloak"), TEXT("sleeve"), TEXT("sleeves"), TEXT("blazer"),
+		TEXT("tunic"), TEXT("cape"), TEXT("cloak"), TEXT("sleeve"), TEXT("sleeves"), TEXT("blazer"), TEXT("corset"), TEXT("corsets"),
+		TEXT("bustier"), TEXT("bodice"), TEXT("camisole"),
 	};
 	const TCHAR* const BottomWords[] = {
 		TEXT("pants"), TEXT("pant"), TEXT("trousers"), TEXT("trouser"), TEXT("short"), TEXT("shorts"), TEXT("skirt"), TEXT("jeans"),

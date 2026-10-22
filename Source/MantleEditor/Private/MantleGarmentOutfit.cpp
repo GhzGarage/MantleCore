@@ -924,7 +924,8 @@ FString FMantleGarmentOutfit::DescribeShapeChange(TConstArrayView<FVector3f> Bef
 }
 
 bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletalMesh*> Garments, const FString& TurnOff, const FString& Confirm,
-	FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal)
+	FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal,
+	TConstArrayView<TArray<USkeletalMesh*>> Trims)
 {
 	using namespace MantleGarmentOutfitPrivate;
 	OutResult = FMantleGarmentOutfitResult();
@@ -1034,11 +1035,12 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 			: FString(TEXT("The body could not be made a MetaHuman: Strip, the A-pose or the conform did not run (see the fix list in \"convert\")."));
 		return false;
 	}
-	return MakeFromWork(*Work, InBody.GetName(), Folder, Garments, OutResult, OutRefusalCode, OutRefusal);
+	return MakeFromWork(*Work, InBody.GetName(), Folder, Garments, OutResult, OutRefusalCode, OutRefusal, /*bCutFromOwnMesh*/ false, Trims);
 }
 
 bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work, const FString& BodyName, const FString& Folder,
-	TConstArrayView<USkeletalMesh*> Garments, FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal, const bool bCutFromOwnMesh)
+	TConstArrayView<USkeletalMesh*> Garments, FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal, const bool bCutFromOwnMesh,
+	TConstArrayView<TArray<USkeletalMesh*>> Trims)
 {
 	using namespace MantleGarmentOutfitPrivate;
 	if (!Work.Character.IsValid() || !Work.APoseClip.IsValid() || !Work.SkinOnly.IsValid() || !Work.PosedMesh.IsValid())
@@ -1271,6 +1273,26 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		if (!PoseMesh(*Geometry, Posed, Work.InputScale, PoseError))
 		{
 			continue;
+		}
+		// Its trims (a corset's lace), posed alike and made into its Outfit with it.
+		const int32 GarmentIndex = PosedGarments.Num() - 1;
+		for (USkeletalMesh* Trim : Trims.IsValidIndex(GarmentIndex) ? Trims[GarmentIndex] : TArray<USkeletalMesh*>())
+		{
+			FMantleGlbMesh TrimGeometry;
+			TArray<UMaterialInterface*> TrimMaterials;
+			FString TrimError;
+			int32 TrimTriangles = 0;
+			int32 TrimMatched = 0;
+			if (!Trim || !FMantleCosmeticExport::ReadSkeletalMesh(Trim, 0, TrimGeometry, TrimMaterials, TrimTriangles, TrimError)
+				|| !PoseMesh(TrimGeometry, GarmentPosedJoints(TrimGeometry.Joints, ClipBones, TrimMatched), Work.InputScale, TrimError) || TrimMatched == 0)
+			{
+				UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT trim %s left out of %s: %s"), Trim ? *Trim->GetName() : TEXT("?"), *Garment->GetName(),
+					TrimError.IsEmpty() ? TEXT("it shares no bones with the body") : *TrimError);
+				continue;
+			}
+			AppendTrim(*Geometry, TrimGeometry);
+			Materials.Append(TrimMaterials);
+			UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT trim %s goes into %s's Outfit"), *Trim->GetName(), *Garment->GetName());
 		}
 		for (FVector3f& Position : Geometry->Positions)
 		{
@@ -1575,7 +1597,8 @@ FString FMantleGarmentOutfit::GarmentSlot(const FString& MeshName, TConstArrayVi
 	return FMantleOutfitSections::PieceSlot(SectionPieces[0]);
 }
 
-void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered)
+void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered,
+	TArray<FString>* OutPaired)
 {
 	OutGarments.Reset();
 	OutNotOffered.Reset();
@@ -1656,6 +1679,78 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 		Garment.Name = Name;
 		Garment.Why = Why;
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT found %s slot=%s why=%s"), *Mesh->GetPathName(), *Slot, *Why);
+	}
+	// A thin piece lying on another of the same slot (a corset's lace edging) goes with it, as one item.
+	{
+		TArray<FMantleGlbMesh> Read;
+		Read.SetNum(OutGarments.Num());
+		TBitArray<> bRead(false, OutGarments.Num());
+		const auto Geometry = [&](const int32 Index) -> const FMantleGlbMesh*
+		{
+			if (!bRead[Index])
+			{
+				bRead[Index] = true;
+				TArray<UMaterialInterface*> Materials;
+				int32 Triangles = 0;
+				FString Error;
+				if (!OutGarments[Index].Mesh.IsValid() || !FMantleCosmeticExport::ReadSkeletalMesh(OutGarments[Index].Mesh.Get(), 0, Read[Index], Materials, Triangles, Error))
+				{
+					Read[Index] = FMantleGlbMesh();
+				}
+			}
+			return Read[Index].Positions.Num() > 0 ? &Read[Index] : nullptr;
+		};
+		TArray<int32> Paired;
+		for (int32 Trim = 0; Trim < OutGarments.Num(); ++Trim)
+		{
+			// The piece of the same slot it lies on most closely, if it lies on one.
+			const FMantleConvertGarment& A = OutGarments[Trim];
+			if (A.Trims.Num() > 0)
+			{
+				continue;
+			}
+			int32 Best = INDEX_NONE;
+			double BestNear = TrimNearShare;
+			for (int32 Other = 0; Other < OutGarments.Num(); ++Other)
+			{
+				const FMantleConvertGarment& B = OutGarments[Other];
+				if (Other == Trim || Paired.Contains(Other) || A.Slot.IsEmpty() || A.Slot != B.Slot || !A.Why.IsEmpty() || !B.Why.IsEmpty())
+				{
+					continue;
+				}
+				const FMantleGlbMesh* TrimMesh = Geometry(Trim);
+				const FMantleGlbMesh* OtherMesh = TrimMesh ? Geometry(Other) : nullptr;
+				int32 TrimTriangles = 0;
+				int32 OtherTriangles = 0;
+				const double Near = OtherMesh ? TrimNear(*TrimMesh, *OtherMesh, TrimNearCm, &TrimTriangles, &OtherTriangles) : 0.0;
+				// The closeness at a few distances too, so the rule can be set from the numbers rather than a guess.
+				const double Near1 = OtherMesh ? TrimNear(*TrimMesh, *OtherMesh, 1.0f) : 0.0;
+				const double Near3 = OtherMesh ? TrimNear(*TrimMesh, *OtherMesh, 3.0f) : 0.0;
+				UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT trim check %s on %s: %.0f%% within %.0f cm (%.0f%% within 1 cm, %.0f%% within 3 cm; %d of %d triangles, at most %.0f%% to be trim)"),
+					*A.Name, *B.Name, 100.0 * Near, TrimNearCm, 100.0 * Near1, 100.0 * Near3, TrimTriangles, OtherTriangles, 100.0 * TrimMaxTriangleShare);
+				if (Near >= BestNear)
+				{
+					Best = Other;
+					BestNear = Near;
+				}
+			}
+			if (Best != INDEX_NONE)
+			{
+				OutGarments[Best].Trims.Add(A.Mesh);
+				Paired.Add(Trim);
+				UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT %s is trim on %s (%.0f%% within %.0f cm): one item"), *A.Name, *OutGarments[Best].Name,
+					100.0 * BestNear, TrimNearCm);
+				if (OutPaired)
+				{
+					OutPaired->Add(FString::Printf(TEXT("%s goes with %s"), *A.Name, *OutGarments[Best].Name));
+				}
+			}
+		}
+		Paired.Sort(TGreater<int32>());
+		for (const int32 Index : Paired)
+		{
+			OutGarments.RemoveAt(Index);
+		}
 	}
 	// The clothing was made for a bare body, not one that wears clothing (Convert would make the MetaHuman of what Strip leaves).
 	if (!Worn.IsEmpty())
@@ -1799,6 +1894,76 @@ FString FMantleGarmentOutfit::WornClothing(const USkeletalMesh& Body)
 	return FString::Join(Worn, TEXT(", "));
 }
 
+bool FMantleGarmentOutfit::IsTrimOn(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment)
+{
+	return TrimNear(Trim, Garment) >= TrimNearShare;
+}
+
+double FMantleGarmentOutfit::TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment, float WithinCm, int32* OutTrimTriangles, int32* OutGarmentTriangles)
+{
+	int32 TrimTriangles = 0;
+	int32 GarmentTriangles = 0;
+	for (const FMantleGlbPrimitive& Primitive : Trim.Primitives) { TrimTriangles += Primitive.Indices.Num() / 3; }
+	for (const FMantleGlbPrimitive& Primitive : Garment.Primitives) { GarmentTriangles += Primitive.Indices.Num() / 3; }
+	if (OutTrimTriangles) { *OutTrimTriangles = TrimTriangles; }
+	if (OutGarmentTriangles) { *OutGarmentTriangles = GarmentTriangles; }
+	if (TrimTriangles == 0 || GarmentTriangles == 0 || TrimTriangles > TrimMaxTriangleShare * GarmentTriangles)
+	{
+		return 0.0;
+	}
+	FMantleSkinnedMeshLOD Surface;
+	TArray<int32> PointOf;
+	WeldedSurface(Garment, Surface, PointOf);
+	FMantleGarmentClearance Near;
+	if (!FMantleGarmentClearance::Compute(Trim.Positions, Surface, Near, FMantleGarmentClearance::DefaultSearchCm))
+	{
+		return 0.0;
+	}
+	int32 Close = 0;
+	for (int32 Point = 0; Point < Trim.Positions.Num(); ++Point)
+	{
+		Close += Near.IsTracked(Point) && FMath::Abs(Near.ClearanceCm[Point]) <= WithinCm ? 1 : 0;
+	}
+	return Trim.Positions.IsEmpty() ? 0.0 : static_cast<double>(Close) / Trim.Positions.Num();
+}
+
+void FMantleGarmentOutfit::AppendTrim(FMantleGlbMesh& Garment, const FMantleGlbMesh& Trim)
+{
+	const int32 First = Garment.Positions.Num();
+	const int32 FirstMaterial = Garment.MaterialNames.Num();
+	const int32 Count = Trim.Positions.Num();
+	Garment.Positions.Append(Trim.Positions);
+	// Per-vertex streams the garment has: the trim's, or a neutral value when it lacks one.
+	const auto Fill = [Count](auto& To, const auto& From, const auto& Neutral, const int32 Before)
+	{
+		if (To.Num() != Before)
+		{
+			return;
+		}
+		for (int32 Vertex = 0; Vertex < Count; ++Vertex)
+		{
+			To.Add(From.IsValidIndex(Vertex) ? From[Vertex] : Neutral);
+		}
+	};
+	Fill(Garment.Normals, Trim.Normals, FVector3f(0, 0, 1), First);
+	Fill(Garment.Tangents, Trim.Tangents, FVector4f(1, 0, 0, 1), First);
+	Fill(Garment.UVs, Trim.UVs, FVector2f::ZeroVector, First);
+	Fill(Garment.UV1s, Trim.UV1s, FVector2f::ZeroVector, First);
+	Fill(Garment.Colors, Trim.Colors, FColor::White, First);
+	if (Garment.NumInfluences > 0)
+	{
+		Garment.InfluenceJoints.AddZeroed(Count * Garment.NumInfluences);
+		Garment.InfluenceWeights.AddZeroed(Count * Garment.NumInfluences);
+	}
+	Garment.MaterialNames.Append(Trim.MaterialNames);
+	for (const FMantleGlbPrimitive& Primitive : Trim.Primitives)
+	{
+		FMantleGlbPrimitive& Added = Garment.Primitives.Add_GetRef(Primitive);
+		Added.FirstVertex = First + Primitive.FirstVertex;
+		Added.MaterialIndex = FirstMaterial + Primitive.MaterialIndex;
+	}
+}
+
 bool FMantleGarmentOutfit::SplitsCleanly(const int32 Turned, const int32 Triangles)
 {
 	return Triangles > 0 && Turned <= MaxFoldShare * Triangles;
@@ -1826,20 +1991,33 @@ int32 FMantleGarmentOutfit::TurnedTriangles(TConstArrayView<FVector3f> Before, c
 	return Turned;
 }
 
-int32 FMantleGarmentOutfit::BareBodyRank(const FString& MeshName, const int32 WornSlots, const double HeightShare)
+bool FMantleGarmentOutfit::IsUnderwearName(const FString& Name)
+{
+	const TArray<FString> Words = FMantleOutfitSections::Words(Name);
+	for (const TCHAR* Word : { TEXT("underwear"), TEXT("lingerie"), TEXT("bra"), TEXT("panties"), TEXT("briefs"), TEXT("knickers"), TEXT("thong"), TEXT("bikini") })
+	{
+		if (Words.Contains(Word))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+int32 FMantleGarmentOutfit::BareBodyRank(const FString& MeshName, const int32 CoveredSlots, const double HeightShare)
 {
 	if (HeightShare < BareHeightShare)
 	{
 		return -1;
 	}
 	const TArray<FString> Words = FMantleOutfitSections::Words(MeshName);
-	const bool bNude = Words.Contains(TEXT("nude")) || Words.Contains(TEXT("naked"));
-	const bool bUnderwear = Words.Contains(TEXT("underwear")) || Words.Contains(TEXT("lingerie")) || Words.Contains(TEXT("bare"));
-	if (WornSlots > 0 && !bNude && !bUnderwear)
+	const bool bNude = Words.Contains(TEXT("nude")) || Words.Contains(TEXT("naked")) || Words.Contains(TEXT("bare"));
+	if (CoveredSlots == 0)
 	{
-		return -1;
+		return 100 + (bNude ? 1 : 0);
 	}
-	return (WornSlots == 0 ? 100 : 0) + (bNude ? 20 : 0) + (bUnderwear ? 10 : 0) - FMath::Min(WornSlots, 9);
+	// Something on it that isn't skin: still the bare body when its name says it is (nude, or underwear Convert takes off).
+	return bNude || IsUnderwearName(MeshName) ? 10 - FMath::Min(CoveredSlots, 9) : -1;
 }
 
 USkeletalMesh* FMantleGarmentOutfit::FindBareBody(const USkeletalMesh& Body, FString& OutWhy)
@@ -1880,22 +2058,32 @@ USkeletalMesh* FMantleGarmentOutfit::FindBareBody(const USkeletalMesh& Body, FSt
 		{
 			continue;
 		}
-		TArray<FString> WornSlots;
-		WornClothing(*Mesh).ParseIntoArray(WornSlots, TEXT(", "), true);
-		const int32 Rank = BareBodyRank(Mesh->GetName(), WornSlots.Num(), 2.0 * Mesh->GetBounds().BoxExtent.Z / Height);
+		// Strip's own skin check, section by section: skin, or a face detail (eyes, mouth, lashes, hair), is the body;
+		// anything else covers it (clothing, underwear, armour).
+		TArray<FString> Covering;
+		TArray<int32> SlotIndices;
+		for (const FMantleOutfitSection& Section : FMantleCosmeticExport::ReadOutfitSections(Mesh, 0, SlotIndices))
+		{
+			if (!FMantleAvatarStrip::LooksLikeSkin(Section.SlotName, Section.MaterialName, Section.BaseMaterialName)
+				&& !FMantleAvatarStrip::NamesFaceDetail(Section.SlotName, Section.MaterialName))
+			{
+				Covering.Add(Section.SlotName);
+			}
+		}
+		const int32 Rank = BareBodyRank(Mesh->GetName(), Covering.Num(), 2.0 * Mesh->GetBounds().BoxExtent.Z / Height);
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_SPLIT bare body candidate %s: rank %d (covered by: %s)"), *Mesh->GetName(), Rank,
+			Covering.IsEmpty() ? TEXT("nothing") : *FString::Join(Covering, TEXT(", ")));
 		if (Rank > BestRank)
 		{
 			Best = Mesh;
 			BestRank = Rank;
-			BestWorn = WornSlots.Num();
+			BestWorn = Covering.Num();
 		}
 	}
 	if (Best)
 	{
-		const TArray<FString> Words = FMantleOutfitSections::Words(Best->GetName());
-		const bool bUnderwear = BestWorn > 0 || Words.Contains(TEXT("underwear")) || Words.Contains(TEXT("lingerie"));
-		OutWhy = !bUnderwear ? FString::Printf(TEXT("%s is %s's whole body with nothing on"), *Best->GetName(), *Body.GetName())
-			: FString::Printf(TEXT("%s is %s's whole body in underwear, which Convert takes off"), *Best->GetName(), *Body.GetName());
+		OutWhy = BestWorn == 0 ? FString::Printf(TEXT("%s is %s's whole body, every part of it skin"), *Best->GetName(), *Body.GetName())
+			: FString::Printf(TEXT("%s is %s's whole body with %d piece%s on it that Convert takes off"), *Best->GetName(), *Body.GetName(), BestWorn, BestWorn == 1 ? TEXT("") : TEXT("s"));
 	}
 	return Best;
 }

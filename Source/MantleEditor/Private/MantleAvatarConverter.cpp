@@ -442,7 +442,13 @@ bool FMantleAvatarConverter::MakeContext(UObject* Selection, const FMantleConver
 		&& Options.OnlyFixers.Num() == 0)
 	{
 		TArray<FString> NotOffered;
-		FMantleGarmentOutfit::FindGarments(*Mesh, OutContext.Garments, NotOffered);
+		TArray<FString> Paired;
+		FMantleGarmentOutfit::FindGarments(*Mesh, OutContext.Garments, NotOffered, &Paired);
+		if (Paired.Num() > 0)
+		{
+			OutContext.Notes.Add(FString::Printf(TEXT("Trim worn on another piece goes into its item, as one: %s (a much smaller piece lying on the other, most of it within %.0f cm of it)."),
+				*FString::Join(Paired, TEXT("; ")), FMantleGarmentOutfit::TrimNearCm));
+		}
 		// #55: the clothing in the character's own sections, cut into pieces when the Outfits are made.
 		FString SplitNote;
 		FMantleGarmentOutfit::FindSectionGarments(*Mesh, OutContext.Garments, &SplitNote);

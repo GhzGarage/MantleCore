@@ -194,7 +194,8 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * and a sentence) when the body could not be made a MetaHuman; a garment that fails is reported in its piece.
 	 */
 	static bool Make(USkeletalMesh& Body, TConstArrayView<USkeletalMesh*> Garments, const FString& TurnOff, const FString& Confirm,
-		FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal);
+		FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal,
+		TConstArrayView<TArray<USkeletalMesh*>> Trims = {});
 
 	/**
 	 * A saved copy of Source as Folder/<Name> (made unique), for meshes MetaHuman Creator makes in memory: a transient
@@ -235,9 +236,12 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * be posed as it was.
 	 * bCutFromOwnMesh: the garments were cut from the character's own mesh (#55); refused ("not_splittable") when its skin
 	 * doesn't shape cleanly (SplitsCleanly): the clothing isn't offered as items.
+	 * Trims: per garment (by index, when given), the thin pieces worn on it (FMantleConvertGarment::Trims), posed with it and
+	 * made into its Outfit.
 	 */
 	static bool MakeFromWork(const FMantleConvertMetaHumanWork& Work, const FString& BodyName, const FString& Folder, TConstArrayView<USkeletalMesh*> Garments,
-		FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal, bool bCutFromOwnMesh = false);
+		FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal, bool bCutFromOwnMesh = false,
+		TConstArrayView<TArray<USkeletalMesh*>> Trims = {});
 
 	/**
 	 * Pure (tested): the garment slot a mesh beside a body is ("top", "bottom", "footwear"), from its name's words, else
@@ -255,7 +259,38 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * clothing (WornClothing), naming a bare body beside it to convert instead. OutNotOffered: the display names of the
 	 * others that aren't a body (hair, gloves, a belt ...).
 	 */
-	static void FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered);
+	static void FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered,
+		TArray<FString>* OutPaired = nullptr);
+
+	/**
+	 * A piece is trim on another (IsTrimOn) when it has at most TrimMaxTriangleShare of the other's triangles and at least
+	 * TrimNearShare of its points are within TrimNearCm of the other's surface, both as made (bind pose). An edging stands
+	 * up from the garment's rim, so not all of it lies on it: Vampire's corset lace (152 of the corset's 2650 triangles)
+	 * measured 66% within 1 cm and 100% within 2 cm, which is why 80% within 1 cm missed it. Two real garments (a shirt and
+	 * the jacket over it) are each too big to pass; the lace against the pack's other top measured 85% within 2 cm, and the
+	 * closest garment wins.
+	 */
+	static constexpr double TrimMaxTriangleShare = 0.2;
+	static constexpr double TrimNearShare = 0.6;
+	static constexpr float TrimNearCm = 2.0f;
+
+	/** Pure (tested): whether Trim is a thin piece lying on Garment (a corset's lace edging), by TrimMaxTriangleShare, TrimNearShare and TrimNearCm. */
+	static bool IsTrimOn(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment);
+
+	/**
+	 * Pure (tested): the share of Trim's points within WithinCm (TrimNearCm) of Garment's surface, or 0 when Trim is too big to be its
+	 * trim (TrimMaxTriangleShare). OutTrimTriangles and OutGarmentTriangles, when given, get the two triangle counts, so a 0 can be
+	 * told apart: too big, or not lying on it.
+	 */
+	static double TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment, float WithinCm = TrimNearCm, int32* OutTrimTriangles = nullptr,
+		int32* OutGarmentTriangles = nullptr);
+
+	/**
+	 * Pure (tested): Trim's geometry added to Garment as more primitives (its materials after Garment's: OutMaterials gets
+	 * TrimMaterials appended). Joints and skin weights are Garment's; the trim's vertices get none, so this is for a garment
+	 * whose weights are transferred afterwards (TransferWeights), both posed alike first.
+	 */
+	static void AppendTrim(FMantleGlbMesh& Garment, const FMantleGlbMesh& Trim);
 
 	/**
 	 * #55: the pieces of clothing in Body's own mesh (its material sections), when the character splits into a bare body and
@@ -286,8 +321,8 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 
 	/**
 	 * #55: the character's bare body beside Body (its folder and below; Convert's output never), when the pack has one: a whole
-	 * body (at least BareHeightShare of Body's height, on Body's bones) that wears nothing, or whose name says it is nude or in
-	 * underwear (Convert's Strip takes that off). The best by BareBodyRank; null when none. OutWhy says which and why, plainly.
+	 * body (at least BareHeightShare of Body's height, on Body's bones) that is all skin by Strip's check, or whose name says
+	 * it is nude or in underwear (Convert's Strip takes that off). The best by BareBodyRank; null when none. OutWhy says which and why, plainly.
 	 * When there is one, its clothing in separate meshes is used, and Body's own sections are not cut (the owner's rule: a
 	 * bare body and separate garments first, the merged mesh only when there is nothing separate).
 	 */
@@ -297,11 +332,15 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	static constexpr double BareHeightShare = 0.9;
 
 	/**
-	 * Pure (tested): how good a bare body MeshName is (higher is better), or -1 when it is not one: WornSlots of its material
-	 * slots are clothing, HeightShare its height over the character's. Wearing nothing is best, then a name saying nude or
-	 * naked, then underwear (or lingerie, or bare); a mesh that wears clothing and isn't named so is not a bare body.
+	 * Pure (tested): how good a bare body MeshName is (higher is better), or -1 when it is not one: CoveredSlots of its
+	 * material slots are neither skin nor a face detail (Strip's own check, FMantleAvatarStrip::LooksLikeSkin and
+	 * NamesFaceDetail), HeightShare its height over the character's. All skin is best, whatever the names say; a body with
+	 * something on it is a bare body only when its name says nude, naked, bare or underwear (Convert takes it off).
 	 */
-	static int32 BareBodyRank(const FString& MeshName, int32 WornSlots, double HeightShare);
+	static int32 BareBodyRank(const FString& MeshName, int32 CoveredSlots, double HeightShare);
+
+	/** Pure (tested): whether a mesh, slot or material name says underwear (underwear, lingerie, bra, panties ...). */
+	static bool IsUnderwearName(const FString& Name);
 
 	/** The toolset's MakeOutfitFromGarment: Make for asset paths (Garments comma-separated), as one JSON object. */
 	static FString RunForAgent(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff, const FString& Confirm);

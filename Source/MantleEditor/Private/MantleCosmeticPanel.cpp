@@ -4191,6 +4191,7 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 		// Every piece that can be an Outfit and isn't yet, at once: they share one copy of the MetaHuman as their authored body.
 		TArray<int32> Indices;
 		TArray<USkeletalMesh*> Meshes;
+		TArray<TArray<USkeletalMesh*>> Trims;
 		for (int32 Index = 0; Index < ConvertContext->Garments.Num(); ++Index)
 		{
 			const FMantleConvertGarment& Garment = ConvertContext->Garments[Index];
@@ -4198,6 +4199,11 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 			{
 				Indices.Add(Index);
 				Meshes.Add(Garment.Mesh.Get());
+				TArray<USkeletalMesh*>& Its = Trims.AddDefaulted_GetRef();
+				for (const TWeakObjectPtr<USkeletalMesh>& Trim : Garment.Trims)
+				{
+					Its.Add(Trim.Get());
+				}
 			}
 		}
 		const FMantleConvertPart& Avatar = ConvertContext->Parts[0];
@@ -4212,7 +4218,7 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 			Progress.MakeDialog();
 			Progress.EnterProgressFrame(1.0f);
 			const bool bCut = Indices.ContainsByPredicate([this](const int32 Index) { return ConvertContext->Garments[Index].Sections.Num() > 0; });
-			bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Result, RefusalCode, Refusal, bCut);
+			bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Result, RefusalCode, Refusal, bCut, Trims);
 		}
 		// Its own mesh can't be split cleanly: Convert's note says its clothing isn't offered.
 		if (RefusalCode == TEXT("not_splittable"))
