@@ -1,11 +1,15 @@
 // Copyright Joshua Eger. All Rights Reserved.
 //
-// Maintainer command: Mantle.Dev.RenderOutfitFits <Outfit> <Directory> [female|male|auto] [slot] [size]
+// Maintainer command: Mantle.Dev.RenderOutfitFits <Outfit> <Directory> [female|male|auto] [slot] [size] [anim=<AnimSequence>...]
 // Fits an Outfit onto the standard bodies exactly as CheckCosmetic does (FMantleEditorActions::MakeCosmeticDraft, then
 // FMantleParametricOutfit::Prepare per fit body) and renders each fit as the catalog thumbnail does (FMantleCosmeticThumbnail,
 // GarmentSubject: the engine's thumbnail scene, reference pose, framed on the garment, on that size's own body and face), from
 // the front, a quarter turn, the side and the back, into <Directory>/<Outfit>_<size id>_{front,quarter,side,back}.png. Nothing is saved or uploaded. Logs
 // MANTLE_RENDER_FITS lines.
+// Each anim= (a UEFN mannequin clip, such as M_Neutral_Stand_Idle_Loop) also renders every fit moving as players see it
+// (FMantleEmoteCheck::GarmentPoser), one sheet per fit and clip, <Outfit>_<size id>_<clip>.png: two moments, front and side, the
+// garment as fitted on the top row and, for one skinned to root alone, with the body's skin the upload gives it below
+// (FMantleGarmentOutfit::FollowsRootOnly, TransferWeights).
 // With an accessory slot it makes the rigid piece as CheckCosmetic does (FMantleParametricOutfit::PrepareRigid) and renders
 // the catalog thumbnail itself (AccessorySubject, <Outfit>_<slot>_thumbnail.png, and from behind, _thumbnail_back.png) and the piece worn on the body it was made on,
 // hung from that body's slot socket as an avatar wears it (<Outfit>_<slot>_worn_{front,back}.png).
@@ -13,10 +17,12 @@
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticThumbnail.h"
 #include "MantleEditorActions.h"
+#include "MantleEmoteCheck.h"
 #include "MantleGarmentOutfit.h"
 #include "MantleParametricOutfit.h"
 #include "MantlePng.h"
 
+#include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
 #include "ChaosOutfitAsset/OutfitAsset.h"
 #include "Engine/SkeletalMesh.h"
@@ -49,6 +55,78 @@ namespace MantleDevRenderOutfitFitsPrivate
 	{
 		TArray<FColor> Pixels;
 		return FMantleCosmeticThumbnail::Capture(Shot, Size, Pixels, OutError) && FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Size, Size, Pixels), *File);
+	}
+
+	/**
+	 * Garment with its authoring body's skin when it is skinned to root alone, as the upload gives it (MantleCosmeticExport's
+	 * garment export); null when it follows the body already. OutNote says which.
+	 */
+	USkeletalMesh* WithBodySkin(USkeletalMesh* Garment, USkeletalMesh* Body, const FMantleAvatarContract& Contract, TArray<TStrongObjectPtr<UObject>>& KeepAlive,
+		FString& OutNote)
+	{
+		FMantleGlbMesh Mesh, Skin;
+		TArray<UMaterialInterface*> Materials, SkinMaterials;
+		int32 Triangles = 0;
+		FString Error;
+		if (!FMantleCosmeticExport::ReadSkeletalMesh(Garment, 0, Mesh, Materials, Triangles, Error))
+		{
+			OutNote = FString::Printf(TEXT("cannot be read (%s)"), *Error);
+			return nullptr;
+		}
+		if (!FMantleGarmentOutfit::FollowsRootOnly(Mesh))
+		{
+			OutNote = FString::Printf(TEXT("follows the body already (%d bones)"), Mesh.Joints.Num());
+			return nullptr;
+		}
+		int32 Far = 0;
+		double MeanCm = 0.0;
+		USkeletalMesh* Fixed = FMantleCosmeticExport::ReadSkeletalMesh(Body, FMantleCosmeticExport::FindReferenceLOD(Body, Contract), Skin, SkinMaterials, Triangles, Error)
+			&& FMantleGarmentOutfit::TransferWeights(Mesh, Skin, Far, MeanCm, Error) ? FMantleParametricOutfit::MakeMesh(Mesh, Materials, KeepAlive, Error) : nullptr;
+		OutNote = Fixed ? FString::Printf(TEXT("skinned to root alone; took the body's skin (%d bones, mean %.2f cm from it)"), Mesh.Joints.Num(), MeanCm)
+			: FString::Printf(TEXT("skinned to root alone, and the body's skin could not be taken (%s)"), *Error);
+		return Fixed;
+	}
+
+	/** One fit moving: Clip's sheet of the garment as fitted, and below it Fixed (when set), each at two moments, front and side. */
+	void RenderMoving(UAnimSequence* Clip, USkeletalMesh* Garment, USkeletalMesh* Fixed, const FMantleOutfitAuthoringTarget& Target, const FString& File, int32 Size)
+	{
+		TFunction<void(FMantleThumbnailSubject&, float)> PoseAt;
+		float Duration = 0.0f;
+		FString Error;
+		if (!FMantleEmoteCheck::GarmentPoser(Clip, Target.Body.Get(), PoseAt, Duration, Error))
+		{
+			UE_LOG(LogMantleRenderOutfitFits, Error, TEXT("MANTLE_RENDER_FITS %s %s FAILED: %s"), *Target.Id, *Clip->GetName(), *Error);
+			return;
+		}
+		const TArray<float> Times = { Duration * 0.25f, Duration * 0.75f };
+		TArray<TArray<FColor>> Tiles;
+		for (USkeletalMesh* Shown : { Garment, Fixed })
+		{
+			if (!Shown)
+			{
+				continue;
+			}
+			for (const float Time : Times)
+			{
+				for (const float Turn : { 0.0f, 90.0f })
+				{
+					FMantleThumbnailSubject Shot = FMantleCosmeticThumbnail::GarmentSubject(Shown, Target.Body.Get(), Target.Face.Get());
+					PoseAt(Shot, Time);
+					Shot.View.Yaw += Turn;
+					TArray<FColor>& Pixels = Tiles.AddDefaulted_GetRef();
+					if (!FMantleCosmeticThumbnail::Capture(Shot, Size, Pixels, Error))
+					{
+						UE_LOG(LogMantleRenderOutfitFits, Error, TEXT("MANTLE_RENDER_FITS %s %s FAILED at %.2f s: %s"), *Target.Id, *Clip->GetName(), Time, *Error);
+						return;
+					}
+				}
+			}
+		}
+		int32 Width = 0, Height = 0;
+		const TArray<FColor> Sheet = FMantleEmoteCheck::Tile(Tiles, Size, 4, Width, Height);
+		const bool bWritten = FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Width, Height, Sheet), *File);
+		UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s %s (%.2f s and %.2f s, front and side; %s)"), *Target.Id, *Clip->GetName(),
+			bWritten ? *File : TEXT("FAILED"), Times[0], Times[1], Fixed ? TEXT("top as fitted, below with the body's skin") : TEXT("as fitted"));
 	}
 
 	void RunAccessory(UObject* Outfit, const FMantleAvatarContract& Contract, const FString& Slot, EMantleFitSex Sex, const FString& Directory, int32 Size)
@@ -147,6 +225,26 @@ namespace MantleDevRenderOutfitFitsPrivate
 		const FString Directory = Args[1];
 		const FString Slot = Args.Num() > 3 ? Args[3] : FString(TEXT("top"));
 		const int32 Size = Args.Num() > 4 ? FMath::Clamp(FCString::Atoi(*Args[4]), 128, 2048) : 1024;
+		TArray<UAnimSequence*> Clips;
+		for (int32 Index = 5; Index < Args.Num(); ++Index)
+		{
+			FString ClipPath;
+			if (!Args[Index].Split(TEXT("anim="), nullptr, &ClipPath) || ClipPath.IsEmpty())
+			{
+				continue;
+			}
+			if (!FPackageName::GetShortName(ClipPath).Contains(TEXT(".")))
+			{
+				ClipPath += TEXT(".") + FPackageName::GetShortName(ClipPath);
+			}
+			UAnimSequence* Clip = LoadObject<UAnimSequence>(nullptr, *ClipPath);
+			if (!Clip)
+			{
+				UE_LOG(LogMantleRenderOutfitFits, Error, TEXT("MANTLE_RENDER_FITS failed: %s is not an animation sequence"), *ClipPath);
+				return;
+			}
+			Clips.Add(Clip);
+		}
 		const FMantleContractSlot* SlotEntry = Contract->FindSlot(Slot);
 		if (SlotEntry && SlotEntry->ItemClass == TEXT("rigid_accessory"))
 		{
@@ -249,13 +347,25 @@ namespace MantleDevRenderOutfitFitsPrivate
 					&& FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Size, Size, Pixels), *File);
 				UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s %s %s"), *Target.Id, View, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Error);
 			}
+			if (Clips.IsEmpty())
+			{
+				continue;
+			}
+			FString SkinNote;
+			USkeletalMesh* Fixed = WithBodySkin(Garment, Target.Body.Get(), *Contract, KeepAlive, SkinNote);
+			UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s"), *Target.Id, *SkinNote);
+			for (UAnimSequence* Clip : Clips)
+			{
+				RenderMoving(Clip, Garment, Fixed, Target, FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s_%s.png"), *Outfit->GetName(), *Target.Id, *Clip->GetName())),
+					FMath::Min(Size, 512));
+			}
 		}
 		UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS done"));
 	}
 
 	FAutoConsoleCommand GMantleDevRenderOutfitFitsCommand(
 		TEXT("Mantle.Dev.RenderOutfitFits"),
-		TEXT("Mantle.Dev.RenderOutfitFits <Outfit> <Directory> [female|male|auto] [slot] [size] -- fits the Outfit onto the standard bodies as CheckCosmetic does and renders ")
-		TEXT("each as the catalog thumbnail does, front and back, into Directory; with an accessory slot, its catalog thumbnail and the piece worn on its body. Saves and uploads nothing."),
+		TEXT("Mantle.Dev.RenderOutfitFits <Outfit> <Directory> [female|male|auto] [slot] [size] [anim=<AnimSequence>...] -- fits the Outfit onto the standard bodies as CheckCosmetic does and renders ")
+		TEXT("each as the catalog thumbnail does, front and back, into Directory (and moving through each anim=, as fitted and with the body's skin); with an accessory slot, its catalog thumbnail and the piece worn on its body. Saves and uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&Run));
 }

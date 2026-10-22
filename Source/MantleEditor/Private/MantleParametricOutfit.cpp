@@ -778,6 +778,17 @@ namespace MantleParametricOutfitPrivate
 	}
 }
 
+USkeletalMesh* FMantleParametricOutfit::MakeMesh(const FMantleGlbMesh& Mesh, const TArray<UMaterialInterface*>& Materials,
+	TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutError)
+{
+	TArray<int32> Primitives;
+	for (int32 Index = 0; Index < Mesh.Primitives.Num(); ++Index)
+	{
+		Primitives.Add(Index);
+	}
+	return MantleParametricOutfitPrivate::MakePart(Mesh, Materials, Primitives, KeepAlive, OutError);
+}
+
 bool FMantleParametricOutfit::IsSource(const UObject* Source)
 {
 	return Source && Source->IsA<UChaosOutfitAsset>();
