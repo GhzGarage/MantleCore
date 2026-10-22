@@ -72,6 +72,12 @@ struct MANTLERUNTIME_API FMantleGarmentCoverage
 	/** Diagnostic: a covered vertex whose nearest hit faces away with no second layer within this distance behind it counts in CoveredAcrossGap. */
 	static constexpr float LayerGapCm = 1.0f;
 
+	/**
+	 * #877: the barycentric edge tolerance of the skin-mask rule's rays (MantleGarmentGeometry::RayHitsTriangle), so a ray
+	 * through a corner several garment triangles share never slips between them. About a micrometre on a 1 cm triangle.
+	 */
+	static constexpr float SkinMaskEdgeTolerance = 1.0e-4f;
+
 	/** Two hits closer than this along a ray are the same surface (a triangle edge shared by two cells' lists). */
 	static constexpr float SameSurfaceCm = 0.01f;
 
@@ -118,10 +124,12 @@ struct MANTLERUNTIME_API FMantleGarmentCoverage
 	 * the skin covers the vertex only when it lies less than NearShare of the body's thickness deep, the thickness being
 	 * where the ray, going back from the vertex, first meets the body's surface. A sandal's footbed under a toe 1.5 cm
 	 * thick is the far side's garment, not this skin's; P16's shirt 3.5 cm inside a shoulder still covers it.
+	 *
+	 * EdgeTolerance: RayHitsTriangle's, for the garment hits (0, the default, is the exact test the rule before #877 uses).
 	 */
 	static bool Compute(const FMantleGarmentSurface& Garment, TConstArrayView<FVector3f> BodyPositions, TConstArrayView<FVector3f> BodyNormals,
 		FMantleGarmentCoverage& Out, float ReachCm = DefaultMaxDistanceCm, FString* OutError = nullptr,
-		TConstArrayView<uint32> BodyIndices = TConstArrayView<uint32>(), float NearShare = 0.0f);
+		TConstArrayView<uint32> BodyIndices = TConstArrayView<uint32>(), float NearShare = 0.0f, float EdgeTolerance = 0.0f);
 
 	/** "covered 1486 of 8568 (under 120, facing away 300, across a gap 12), not hit 7082 (tight 40), mean hit 1.23 cm, 18822 tris, 3.10 ms". */
 	FString ToString() const;
@@ -313,11 +321,15 @@ struct FMantleDressedBodyParams
 	 */
 	bool bSkinMask = false;
 
+	/** The coverage rays' edge tolerance (FMantleGarmentCoverage::Compute's; the skin-mask rule's is SkinMaskEdgeTolerance). */
+	float EdgeTolerance = 0.0f;
+
 	/** The skin-mask rule with its tuning (DESIGN.md section 6): no seam shrink; a sink to 0.5 cm under the cloth, at most 1 cm. */
 	static FMantleDressedBodyParams SkinMaskDefaults()
 	{
 		FMantleDressedBodyParams Params;
 		Params.bSkinMask = true;
+		Params.EdgeTolerance = FMantleGarmentCoverage::SkinMaskEdgeTolerance;
 		Params.SeamShrinkCm = 0.0f;
 		Params.Sink.UnderCm = 0.5f;
 		Params.Sink.MaxSinkCm = 1.0f;

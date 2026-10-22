@@ -121,7 +121,8 @@ namespace MantleSkinMaskPrivate
 			{
 				float T = 0.0f;
 				const FRayTriangle& Triangle = Triangles[Index];
-				bHit = bHit || (Accept(Triangle) && MantleGarmentGeometry::RayHitsTriangle(From, Dir, Triangle.A, Triangle.B, Triangle.C, Length, T));
+				bHit = bHit || (Accept(Triangle) && MantleGarmentGeometry::RayHitsTriangle(From, Dir, Triangle.A, Triangle.B, Triangle.C, Length, T,
+					FMantleGarmentCoverage::SkinMaskEdgeTolerance));
 			});
 			return bHit;
 		});
@@ -209,7 +210,8 @@ bool FMantleSkinMask::Derive(const FMantleGarmentSurface& Garment, TConstArrayVi
 	// 1a. The normal ray: today's per-vertex coverage, on the source body (P16 and the near-half rule included).
 	FMantleGarmentCoverage Coverage;
 	FString CoverageError;
-	if (!FMantleGarmentCoverage::Compute(Garment, SourcePositions, Normals, Coverage, Params.NormalReachCm, &CoverageError, TopologyIndices, Params.NearShare))
+	if (!FMantleGarmentCoverage::Compute(Garment, SourcePositions, Normals, Coverage, Params.NormalReachCm, &CoverageError, TopologyIndices, Params.NearShare,
+			FMantleGarmentCoverage::SkinMaskEdgeTolerance))
 	{
 		return RefuseMask(TEXT("skin mask"), FString::Printf(TEXT("the normal-ray coverage: %s"), *CoverageError), OutError);
 	}

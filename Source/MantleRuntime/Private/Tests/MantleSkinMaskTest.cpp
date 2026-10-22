@@ -23,11 +23,11 @@ namespace MantleSkinMaskTestPrivate
 	constexpr float WindowHalfCm = 2.0f;
 
 	/**
-	 * A tube around Z of Radius from Z0 to Z1 in Rings rings of Around vertices, normals and winding outward. A quad
-	 * whose centre Skip(theta, z) takes is left out.
+	 * A tube around Z of Radius from Z0 to Z1 in Rings rings of Around vertices, normals and winding outward, turned by
+	 * Phase steps around. A quad whose centre Skip(theta, z) takes is left out.
 	 */
 	void AddTube(TArray<FVector3f>& Positions, TArray<FVector3f>& Normals, TArray<uint32>& Indices, const float Radius, const float Z0, const float Z1,
-		const int32 Rings, const int32 InAround, TFunctionRef<bool(float, float)> Skip)
+		const int32 Rings, const int32 InAround, TFunctionRef<bool(float, float)> Skip, const float Phase = 0.0f)
 	{
 		const uint32 Base = Positions.Num();
 		for (int32 Ring = 0; Ring < Rings; ++Ring)
@@ -35,7 +35,7 @@ namespace MantleSkinMaskTestPrivate
 			const float Z = Z0 + (Z1 - Z0) * Ring / (Rings - 1);
 			for (int32 Step = 0; Step < InAround; ++Step)
 			{
-				const float Theta = 2.0f * PI * Step / InAround;
+				const float Theta = 2.0f * PI * (Step + Phase) / InAround;
 				Positions.Add(FVector3f(Radius * FMath::Cos(Theta), Radius * FMath::Sin(Theta), Z));
 				Normals.Add(FVector3f(FMath::Cos(Theta), FMath::Sin(Theta), 0.0f));
 			}
@@ -44,7 +44,7 @@ namespace MantleSkinMaskTestPrivate
 		{
 			for (int32 Step = 0; Step < InAround; ++Step)
 			{
-				const float Theta = FMath::UnwindRadians(2.0f * PI * (Step + 0.5f) / InAround);
+				const float Theta = FMath::UnwindRadians(2.0f * PI * (Step + Phase + 0.5f) / InAround);
 				const float Z = Z0 + (Z1 - Z0) * (Ring + 0.5f) / (Rings - 1);
 				if (Skip(Theta, Z))
 				{
@@ -92,21 +92,25 @@ namespace MantleSkinMaskTestPrivate
 		return Body;
 	}
 
-	/** A sleeve GapCm off the arm over |z| <= SleeveHalfLength, open at both ends; bWindow cuts the window. */
+	/**
+	 * A sleeve GapCm off the arm over |z| <= SleeveHalfLength, open at both ends; bWindow cuts the window. Phase 0 puts a
+	 * sleeve vertex straight out from every arm vertex (a garment made by pushing the body out along its normals: each
+	 * normal ray goes exactly through a corner six sleeve triangles share); 0.5 turns it half a step.
+	 */
 	struct FSleeve
 	{
 		TArray<FVector3f> Positions;
 		TArray<FVector3f> Normals;
 		TArray<uint32> Indices;
 
-		FSleeve(const float GapCm, const bool bWindow)
+		FSleeve(const float GapCm, const bool bWindow, const float Phase = 0.0f)
 		{
 			const float Radius = ArmRadius + GapCm;
 			const float HalfAngle = WindowHalfCm / Radius;
 			AddTube(Positions, Normals, Indices, Radius, -SleeveHalfLength, SleeveHalfLength, 41, Around, [bWindow, HalfAngle](const float Theta, const float Z)
 			{
 				return bWindow && FMath::Abs(Theta) < HalfAngle && FMath::Abs(Z) < WindowHalfCm;
-			});
+			}, Phase);
 		}
 
 		FMantleGarmentSurface Surface() const { return FMantleGarmentSurface(Positions, Normals, Indices); }
@@ -150,30 +154,35 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FMantleSkinMaskEnclosedTest::RunTest(const FString& Parameters)
 {
 	using namespace MantleSkinMaskTestPrivate;
-	// A sleeve 0.5 cm off the arm: the skin deep inside it hides, the skin near its open ends and past them stays.
+	// A sleeve 0.5 cm off the arm: the skin deep inside it hides, the skin near its open ends and past them stays. Lined
+	// up with the arm's vertices, then turned half a step.
 	const FMantleSkinnedMeshLOD Body = Arm();
-	const FSleeve Sleeve(0.5f, false);
-	FMantleSkinMask Mask;
-	if (!TestTrue(TEXT("the mask derives"), DeriveOn(Body, Sleeve.Surface(), Mask)))
+	for (const float Phase : { 0.0f, 0.5f })
 	{
-		return false;
+		const FSleeve Sleeve(0.5f, false, Phase);
+		AddInfo(FString::Printf(TEXT("sleeve turned %.1f steps"), Phase));
+		FMantleSkinMask Mask;
+		if (!TestTrue(TEXT("the mask derives"), DeriveOn(Body, Sleeve.Surface(), Mask)))
+		{
+			return false;
+		}
+		AddInfo(Mask.ToString());
+		int32 DeepKept = 0;
+		int32 OutsideHidden = 0;
+		for (int32 Vertex = 0; Vertex < Body.NumVertices(); ++Vertex)
+		{
+			const float Z = FMath::Abs(Body.Positions[Vertex].Z);
+			DeepKept += Z <= 12.0f && !Mask.Hidden[Vertex] ? 1 : 0;
+			OutsideHidden += Z >= SleeveHalfLength + FMantleSkinMask::DefaultBorderCm && Mask.Hidden[Vertex] ? 1 : 0;
+		}
+		TestEqual(TEXT("every vertex 8 cm or more inside the sleeve hides"), DeepKept, 0);
+		TestEqual(TEXT("nothing hides within the border of the sleeve's ends or past them"), OutsideHidden, 0);
+		TestTrue(TEXT("the mask hides something"), Mask.NumHidden > 0);
+		const float Nearest = NearestHiddenToVisible(Body.Positions, Mask.Hidden, [&Mask](const int32 Other) { return !Mask.Enclosed[Other]; });
+		// The nearest-visible search over the surface may land on a vertex a little farther than the nearest: 2 mm of slack.
+		TestTrue(FString::Printf(TEXT("every hidden vertex is about 2.5 cm or more from skin that can be seen (nearest %.2f cm)"), Nearest),
+			Nearest >= FMantleSkinMask::DefaultBorderCm - 0.2f);
 	}
-	AddInfo(Mask.ToString());
-	int32 DeepKept = 0;
-	int32 OutsideHidden = 0;
-	for (int32 Vertex = 0; Vertex < Body.NumVertices(); ++Vertex)
-	{
-		const float Z = FMath::Abs(Body.Positions[Vertex].Z);
-		DeepKept += Z <= 12.0f && !Mask.Hidden[Vertex] ? 1 : 0;
-		OutsideHidden += Z >= SleeveHalfLength + FMantleSkinMask::DefaultBorderCm && Mask.Hidden[Vertex] ? 1 : 0;
-	}
-	TestEqual(TEXT("every vertex 8 cm or more inside the sleeve hides"), DeepKept, 0);
-	TestEqual(TEXT("nothing hides within the border of the sleeve's ends or past them"), OutsideHidden, 0);
-	TestTrue(TEXT("the mask hides something"), Mask.NumHidden > 0);
-	const float Nearest = NearestHiddenToVisible(Body.Positions, Mask.Hidden, [&Mask](const int32 Other) { return !Mask.Enclosed[Other]; });
-	// The nearest-visible search over the surface may land on a vertex a little farther than the nearest: 2 mm of slack.
-	TestTrue(FString::Printf(TEXT("every hidden vertex is about 2.5 cm or more from skin that can be seen (nearest %.2f cm)"), Nearest),
-		Nearest >= FMantleSkinMask::DefaultBorderCm - 0.2f);
 	return true;
 }
 
@@ -185,35 +194,40 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FMantleSkinMaskCutoutTest::RunTest(const FString& Parameters)
 {
 	using namespace MantleSkinMaskTestPrivate;
-	// A 4 cm window in the sleeve: the skin under it stays, with 2.5 cm more all round; the far side still hides.
+	// A 4 cm window in the sleeve: the skin under it stays, with 2.5 cm more all round; the far side still hides. Lined up
+	// with the arm's vertices, then turned half a step.
 	const FMantleSkinnedMeshLOD Body = Arm();
-	const FSleeve Sleeve(0.5f, true);
-	FMantleSkinMask Mask;
-	if (!TestTrue(TEXT("the mask derives"), DeriveOn(Body, Sleeve.Surface(), Mask)))
+	for (const float Phase : { 0.0f, 0.5f })
 	{
-		return false;
-	}
-	AddInfo(Mask.ToString());
-	int32 WindowHidden = 0;
-	int32 FarKept = 0;
-	for (int32 Vertex = 0; Vertex < Body.NumVertices(); ++Vertex)
-	{
-		const FVector3f& P = Body.Positions[Vertex];
-		WindowHidden += UnderWindow(P) && Mask.Hidden[Vertex] ? 1 : 0;
-		FarKept += FMath::Abs(FMath::Atan2(P.Y, P.X)) > 2.5f && FMath::Abs(P.Z) <= 12.0f && !Mask.Hidden[Vertex] ? 1 : 0;
-	}
-	TestEqual(TEXT("no skin under the window hides"), WindowHidden, 0);
-	TestEqual(TEXT("the far side of the sleeve still hides"), FarKept, 0);
-	// The nearest-visible search over the surface may land on a vertex a little farther than the nearest: 2 mm of slack.
-	const float Nearest = NearestHiddenToVisible(Body.Positions, Mask.Hidden, [&Body](const int32 Other) { return UnderWindow(Body.Positions[Other]); });
-	TestTrue(FString::Printf(TEXT("every hidden vertex is about 2.5 cm or more from the window (nearest %.2f cm)"), Nearest),
-		Nearest >= FMantleSkinMask::DefaultBorderCm - 0.2f);
+		const FSleeve Sleeve(0.5f, true, Phase);
+		AddInfo(FString::Printf(TEXT("sleeve turned %.1f steps"), Phase));
+		FMantleSkinMask Mask;
+		if (!TestTrue(TEXT("the mask derives"), DeriveOn(Body, Sleeve.Surface(), Mask)))
+		{
+			return false;
+		}
+		AddInfo(Mask.ToString());
+		int32 WindowHidden = 0;
+		int32 FarKept = 0;
+		for (int32 Vertex = 0; Vertex < Body.NumVertices(); ++Vertex)
+		{
+			const FVector3f& P = Body.Positions[Vertex];
+			WindowHidden += UnderWindow(P) && Mask.Hidden[Vertex] ? 1 : 0;
+			FarKept += FMath::Abs(FMath::Atan2(P.Y, P.X)) > 2.5f && FMath::Abs(P.Z) <= 12.0f && !Mask.Hidden[Vertex] ? 1 : 0;
+		}
+		TestEqual(TEXT("no skin under the window hides"), WindowHidden, 0);
+		TestEqual(TEXT("the far side of the sleeve still hides"), FarKept, 0);
+		// The nearest-visible search over the surface may land on a vertex a little farther than the nearest: 2 mm of slack.
+		const float Nearest = NearestHiddenToVisible(Body.Positions, Mask.Hidden, [&Body](const int32 Other) { return UnderWindow(Body.Positions[Other]); });
+		TestTrue(FString::Printf(TEXT("every hidden vertex is about 2.5 cm or more from the window (nearest %.2f cm)"), Nearest),
+			Nearest >= FMantleSkinMask::DefaultBorderCm - 0.2f);
 
-	// The rule before #877 removes skin right at the window's edge.
-	FMantleGarmentCoverage Old;
-	TestTrue(TEXT("the old coverage runs"), FMantleGarmentCoverage::Compute(Sleeve.Surface(), Body.Positions, Body.Normals, Old));
-	const float OldNearest = NearestHiddenToVisible(Body.Positions, Old.Covered, [&Body](const int32 Other) { return UnderWindow(Body.Positions[Other]); });
-	TestTrue(FString::Printf(TEXT("the old rule hid skin within 1.5 cm of the window (nearest %.2f cm)"), OldNearest), OldNearest < 1.5f);
+		// The rule before #877 removes skin right at the window's edge.
+		FMantleGarmentCoverage Old;
+		TestTrue(TEXT("the old coverage runs"), FMantleGarmentCoverage::Compute(Sleeve.Surface(), Body.Positions, Body.Normals, Old));
+		const float OldNearest = NearestHiddenToVisible(Body.Positions, Old.Covered, [&Body](const int32 Other) { return UnderWindow(Body.Positions[Other]); });
+		TestTrue(FString::Printf(TEXT("the old rule hid skin within 1.5 cm of the window (nearest %.2f cm)"), OldNearest), OldNearest < 1.5f);
+	}
 	return true;
 }
 

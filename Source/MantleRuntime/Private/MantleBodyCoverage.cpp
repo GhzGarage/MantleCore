@@ -160,7 +160,7 @@ namespace MantleBodyCoveragePrivate
 // ---------------------------------------------------------------------------------------------------------------
 
 bool FMantleGarmentCoverage::Compute(const FMantleGarmentSurface& Garment, TConstArrayView<FVector3f> BodyPositions, TConstArrayView<FVector3f> BodyNormals,
-	FMantleGarmentCoverage& Out, const float ReachCm, FString* OutError, TConstArrayView<uint32> BodyIndices, const float NearShare)
+	FMantleGarmentCoverage& Out, const float ReachCm, FString* OutError, TConstArrayView<uint32> BodyIndices, const float NearShare, const float EdgeTolerance)
 {
 	using namespace MantleGarmentGeometry;
 	using namespace MantleBodyCoveragePrivate;
@@ -242,7 +242,7 @@ bool FMantleGarmentCoverage::Compute(const FMantleGarmentSurface& Garment, TCons
 						float HitT = 0.0f;
 						// A triangle listed in several of the walked cells is kept once.
 						if (RayHitsTriangle(From, Normal, Garment.Positions[Garment.Indices[Triangle * 3]], Garment.Positions[Garment.Indices[Triangle * 3 + 1]],
-								Garment.Positions[Garment.Indices[Triangle * 3 + 2]], WalkT, HitT)
+								Garment.Positions[Garment.Indices[Triangle * 3 + 2]], WalkT, HitT, EdgeTolerance)
 							&& !Hits.ContainsByPredicate([Triangle](const FHit& Hit) { return Hit.Triangle == Triangle; }))
 						{
 							Hits.Add({ HitT, Triangle });
@@ -878,7 +878,7 @@ bool FMantleDressedBody::Compute(const FMantleSkinnedMeshLOD& Body, TConstArrayV
 		FString Error;
 		const FMantleGarmentCoverage& Coverage = Out.Coverage[GarmentIndex];
 		if (!FMantleGarmentCoverage::Compute(Garments[GarmentIndex], Body.Positions, Body.Normals, Out.Coverage[GarmentIndex], Params.CoverageReachCm, &Error,
-				Body.Indices, Params.NearShare))
+				Body.Indices, Params.NearShare, Params.EdgeTolerance))
 		{
 			return RefuseBody(TEXT("dressed body"), FString::Printf(TEXT("garment %d's coverage: %s"), GarmentIndex, *Error), OutError);
 		}
