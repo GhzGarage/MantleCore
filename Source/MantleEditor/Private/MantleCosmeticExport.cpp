@@ -6556,6 +6556,12 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 					TEXT("Emotes are made on the UEFN mannequin, a MetaHuman, the UE5 Mannequin or the UE4 Mannequin. Retarget the animation onto SK_UEFN_Mannequin in Unreal (right-click it > Retarget Animations) and upload the retargeted copy.")));
 				return Package;
 			}
+			// The creator's Loop choice: loop until the player moves (from a loop_start notify, else the whole clip), or play once.
+			if (FMantleAnimClipWriter::ApplyLoopChoice(Clip, Draft.bEmoteLoop))
+			{
+				Package.Notes.Add(Draft.bEmoteLoop ? FString(TEXT("Emote: loops whole until the player moves (no loop_start notify)"))
+					: FString(TEXT("Emote: plays once (Loop is off, so its loop_start notify was left out)")));
+			}
 			AddEmoteSamplingNotes(Clip, Contract, Package, Issues);
 			FMantleAnimClipWriter::Validate(Clip, Contract, Issues);
 			if (FMantleCosmeticChecks::HasErrors(Issues))

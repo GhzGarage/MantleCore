@@ -566,6 +566,25 @@ void FMantleAnimClipWriter::CloseLoopSeam(FMantleAnimClipData& Clip, const float
 	}
 }
 
+bool FMantleAnimClipWriter::ApplyLoopChoice(FMantleAnimClipData& Clip, const bool bLoop)
+{
+	const auto IsLoopStart = [](const FMantleAnimClipEventData& Event) { return Event.Name == TEXT("loop_start"); };
+	if (!bLoop)
+	{
+		return Clip.Events.RemoveAll(IsLoopStart) > 0;
+	}
+	if (Clip.Events.ContainsByPredicate(IsLoopStart))
+	{
+		return false;
+	}
+	FMantleAnimClipEventData& Event = Clip.Events.AddDefaulted_GetRef();
+	Event.Name = TEXT("loop_start");
+	Event.TimeSeconds = 0.0f;
+	Clip.Events.StableSort([](const FMantleAnimClipEventData& A, const FMantleAnimClipEventData& B) { return A.TimeSeconds < B.TimeSeconds; });
+	CloseLoopSeam(Clip, 0.0f, MantleAnimClipWriterPrivate::LoopSeamBlendSeconds);
+	return true;
+}
+
 bool FMantleAnimClipWriter::SampleOnMesh(const UAnimSequence* Sequence, const USkeletalMesh* Mesh, const float FrameRate, FMantleAnimClipData& OutClip,
 	FString& OutError)
 {

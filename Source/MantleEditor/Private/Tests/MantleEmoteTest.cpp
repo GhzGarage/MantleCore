@@ -640,6 +640,16 @@ bool FMantleEmoteLoopSeamTest::RunTest(const FString& Parameters)
 	FMantleAnimClipWriter::CloseLoopSeam(AtEnd, 2.0f, 0.25f);
 	TestEqual(TEXT("a loop_start at the end changes nothing"), AtEnd.Tracks[0].Rotations, Before.Tracks[0].Rotations);
 	TestEqual(TEXT("and has no seam"), AtEnd.LoopSeamDegrees, 0.0);
+
+	// The Loop choice: on, a clip with no loop_start loops whole (an event at 0, its end joined to its first frame).
+	FMantleAnimClipData Whole = Make();
+	TestTrue(TEXT("Loop on adds a loop_start"), FMantleAnimClipWriter::ApplyLoopChoice(Whole, true));
+	TestTrue(TEXT("at 0"), Whole.Events.Num() == 1 && Whole.Events[0].Name == TEXT("loop_start") && Whole.Events[0].TimeSeconds == 0.0f);
+	TestTrue(TEXT("the last frame is the first frame's pose"), FMath::Abs(Whole.Tracks[0].Rotations.Last() | Whole.Tracks[0].Rotations[0]) > 1.0f - 1e-6f);
+	TestFalse(TEXT("a second time changes nothing"), FMantleAnimClipWriter::ApplyLoopChoice(Whole, true));
+	// Off, the loop_start goes and the clip plays once.
+	TestTrue(TEXT("Loop off removes it"), FMantleAnimClipWriter::ApplyLoopChoice(Whole, false));
+	TestEqual(TEXT("no events left"), Whole.Events.Num(), 0);
 	return true;
 }
 
