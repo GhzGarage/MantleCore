@@ -190,8 +190,17 @@ bool FMantleWeaponPublishPartsTest::RunTest(const FString& Parameters)
 		FMantleThumbnailChoice Choice;
 		Choice.Mode = EMantleThumbnailMode::Custom;
 		Choice.ImageFile.FilePath = PictureFile;
+		// The choice lives in the project's Config ini: put it back as it was (no file at all when there was none).
+		const bool bHadStore = IFileManager::Get().FileExists(*FMantleThumbnailStore::DefaultConfigFile());
 		FMantleThumbnailStore::Save(Weapon.Name, TEXT("weapon"), Choice, FMantleThumbnailStore::DefaultConfigFile());
-		ON_SCOPE_EXIT { FMantleThumbnailStore::Save(Weapon.Name, TEXT("weapon"), FMantleThumbnailChoice(), FMantleThumbnailStore::DefaultConfigFile()); };
+		ON_SCOPE_EXIT
+		{
+			FMantleThumbnailStore::Save(Weapon.Name, TEXT("weapon"), FMantleThumbnailChoice(), FMantleThumbnailStore::DefaultConfigFile());
+			if (!bHadStore)
+			{
+				IFileManager::Get().Delete(*FMantleThumbnailStore::DefaultConfigFile());
+			}
+		};
 		FMantlePlaceAssetConverter PictureConverter;
 		FMantlePlaceAssetSet PictureSet;
 		if (TestTrue(TEXT("it converts with a custom thumbnail"), PictureConverter.ConvertWeapon(Dependencies.Weapons[0], PictureSet)))
