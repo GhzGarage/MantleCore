@@ -194,7 +194,8 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * and a sentence) when the body could not be made a MetaHuman; a garment that fails is reported in its piece.
 	 */
 	static bool Make(USkeletalMesh& Body, TConstArrayView<USkeletalMesh*> Garments, const FString& TurnOff, const FString& Confirm,
-		FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal);
+		FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal,
+		TConstArrayView<TArray<USkeletalMesh*>> Trims = {});
 
 	/**
 	 * A saved copy of Source as Folder/<Name> (made unique), for meshes MetaHuman Creator makes in memory: a transient

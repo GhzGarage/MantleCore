@@ -924,7 +924,8 @@ FString FMantleGarmentOutfit::DescribeShapeChange(TConstArrayView<FVector3f> Bef
 }
 
 bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletalMesh*> Garments, const FString& TurnOff, const FString& Confirm,
-	FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal)
+	FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal,
+	TConstArrayView<TArray<USkeletalMesh*>> Trims)
 {
 	using namespace MantleGarmentOutfitPrivate;
 	OutResult = FMantleGarmentOutfitResult();
@@ -1034,7 +1035,7 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 			: FString(TEXT("The body could not be made a MetaHuman: Strip, the A-pose or the conform did not run (see the fix list in \"convert\")."));
 		return false;
 	}
-	return MakeFromWork(*Work, InBody.GetName(), Folder, Garments, OutResult, OutRefusalCode, OutRefusal);
+	return MakeFromWork(*Work, InBody.GetName(), Folder, Garments, OutResult, OutRefusalCode, OutRefusal, /*bCutFromOwnMesh*/ false, Trims);
 }
 
 bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work, const FString& BodyName, const FString& Folder,

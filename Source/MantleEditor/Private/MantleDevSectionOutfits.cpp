@@ -76,7 +76,7 @@ namespace MantleDevSectionOutfitsPrivate
 	}
 
 	/**
-	 * Mantle.Dev.GarmentOutfits <Body|bare-of:Mesh> <Directory> <Garment,Garment,...>: the separate-mesh route (#102, "Make Outfit from garment")
+	 * Mantle.Dev.GarmentOutfits <Body|bare-of:Mesh> <Directory> <Garment,Garment,...|found>: the separate-mesh route (#102, "Make Outfit from garment")
 	 * for Body and its garments, drawn as SectionOutfits draws its pieces (piece_<garment>_on_body_*, made_<garment>_*), then as the
 	 * catalog thumbnail does (Mantle.Dev.RenderOutfitFits). Logs MANTLE_SECTION_OUTFITS lines.
 	 */
@@ -99,6 +99,29 @@ namespace MantleDevSectionOutfitsPrivate
 		TArray<FString> Paths;
 		Args[2].ParseIntoArray(Paths, TEXT(","), true);
 		TArray<USkeletalMesh*> Garments;
+		TArray<TArray<USkeletalMesh*>> Trims;
+		// "found": the clothing Convert finds beside the body, its trims paired, as the Cosmetics panel offers it.
+		if (Body && Args[2] == TEXT("found"))
+		{
+			TArray<FMantleConvertGarment> Found;
+			TArray<FString> NotOffered, Paired;
+			FMantleGarmentOutfit::FindGarments(*Body, Found, NotOffered, &Paired);
+			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS paired: %s; not offered: %s"), *FString::Join(Paired, TEXT("; ")), *FString::Join(NotOffered, TEXT(", ")));
+			for (const FMantleConvertGarment& Garment : Found)
+			{
+				UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS found %s slot=%s trims=%d why=%s"), *Garment.Name, *Garment.Slot, Garment.Trims.Num(), *Garment.Why);
+				if (Garment.Why.IsEmpty() && Garment.Mesh.IsValid())
+				{
+					Garments.Add(Garment.Mesh.Get());
+					TArray<USkeletalMesh*>& Its = Trims.AddDefaulted_GetRef();
+					for (const TWeakObjectPtr<USkeletalMesh>& Trim : Garment.Trims)
+					{
+						Its.Add(Trim.Get());
+					}
+				}
+			}
+			Paths.Reset();
+		}
 		for (const FString& Path : Paths)
 		{
 			if (USkeletalMesh* Garment = LoadObject<USkeletalMesh>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet))
@@ -122,7 +145,7 @@ namespace MantleDevSectionOutfitsPrivate
 		}
 		FMantleGarmentOutfitResult Made;
 		FString ConvertJson, Code, Refusal;
-		const bool bMade = FMantleGarmentOutfit::Make(*Body, Garments, FString(), TEXT("Strip.0.BareSkin"), Made, ConvertJson, Code, Refusal);
+		const bool bMade = FMantleGarmentOutfit::Make(*Body, Garments, FString(), TEXT("Strip.0.BareSkin"), Made, ConvertJson, Code, Refusal, Trims);
 		UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS Outfits on %s: %s (body gap %.2f cm)"), *Made.Character, bMade ? TEXT("made") : *Refusal, Made.BodyGapCm);
 		for (int32 Index = 0; Index < Made.Pieces.Num() && Index < Garments.Num(); ++Index)
 		{
