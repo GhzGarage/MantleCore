@@ -75,7 +75,7 @@ namespace MantleDevRenderHairFitPrivate
 			return;
 		}
 
-		UE_LOG(LogMantleRenderHairFit, Display, TEXT("MANTLE_RENDER_HAIRFIT frame=%s"), *FMantleHairFitPictures::FrameOf(Meshes).ToString());
+		UE_LOG(LogMantleRenderHairFit, Display, TEXT("MANTLE_RENDER_HAIRFIT frame=%s"), *FMantleHairFitPictures::FrameOf(Meshes, true).ToString());
 
 		struct FView { const TCHAR* Name; float Yaw; };
 		const FView Views[] = { {TEXT("front"), FMantleHairFitPictures::FrontYaw}, {TEXT("angled"), FMantleHairFitPictures::AngledYaw},

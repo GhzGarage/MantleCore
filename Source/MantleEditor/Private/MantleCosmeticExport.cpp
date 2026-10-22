@@ -3195,7 +3195,12 @@ namespace MantleCosmeticExportPrivate
 		for (const FString& Warning : Fit.Warnings) Package.Issues.Add(FMantleCosmeticChecks::Warning(Warning));
 		Package.Notes.Append(Fit.Notes);
 		if (!Fit.bFitted) return;
+		// The hair as authored, turned upright when the file was Y-up (the fit's positions are turned too).
 		Package.HairHeadFitMeshes.BeforePositions = Cards.Glb.Positions;
+		if (Fit.QuarterTurns != 0)
+		{
+			for (FVector3f& P : Package.HairHeadFitMeshes.BeforePositions) P = FMantleHairCardsFit::RotateUpright(P, Fit.QuarterTurns);
+		}
 		Package.HairHeadFitMeshes.AfterPositions = Fit.Positions;
 		Package.HairHeadFitMeshes.HairTriangles = HairIndices;
 		Package.HairHeadFitMeshes.HeadPositions = Face.Glb.Positions;

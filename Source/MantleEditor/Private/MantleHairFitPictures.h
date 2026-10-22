@@ -18,8 +18,8 @@ public:
 	static constexpr float SideYaw = 180.f;
 	static constexpr float BackYaw = 90.f;
 
-	/** One frame for every picture of the same fit: the head and the fitted hair. */
-	static FBox FrameOf(const FMantleHairFitMeshes& Meshes);
+	/** The frame of a picture: the head and the fitted hair, or (before) the head as the authored hair sees it and the authored hair. */
+	static FBox FrameOf(const FMantleHairFitMeshes& Meshes, bool bAfter);
 
 	/** Renders the hair as authored (bAfter false) or as fitted from Yaw into Pixels (Size x Size, BGRA). False, with Error, when nothing can render here. */
 	static bool Render(const FMantleHairFitMeshes& Meshes, bool bAfter, float Yaw, int32 Size, TArray<FColor>& OutPixels, FString& OutError);

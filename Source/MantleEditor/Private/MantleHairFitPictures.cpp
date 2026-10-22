@@ -53,11 +53,19 @@ namespace MantleHairFitPicturesPrivate
 	}
 }
 
-FBox FMantleHairFitPictures::FrameOf(const FMantleHairFitMeshes& Meshes)
+FBox FMantleHairFitPictures::FrameOf(const FMantleHairFitMeshes& Meshes, bool bAfter)
 {
 	FBox Frame(ForceInit);
-	for (const FVector3f& P : Meshes.HeadPositions) Frame += FVector(P);
-	for (const FVector3f& P : Meshes.AfterPositions) Frame += FVector(P);
+	if (bAfter)
+	{
+		for (const FVector3f& P : Meshes.HeadPositions) Frame += FVector(P);
+		for (const FVector3f& P : Meshes.AfterPositions) Frame += FVector(P);
+	}
+	else
+	{
+		for (const FVector3f& P : Meshes.HeadInHairFrame()) Frame += FVector(P);
+		for (const FVector3f& P : Meshes.BeforePositions) Frame += FVector(P);
+	}
 	return Frame;
 }
 
@@ -65,9 +73,12 @@ bool FMantleHairFitPictures::Render(const FMantleHairFitMeshes& Meshes, bool bAf
 {
 	if (!Meshes.IsValid()) { OutError = TEXT("there is no fit to draw"); return false; }
 	if (!FMantleCosmeticThumbnail::CanCapture(&OutError)) return false;
-	TStrongObjectPtr<UStaticMesh> Shown(MantleHairFitPicturesPrivate::BuildHeadAndHair(Meshes, bAfter ? Meshes.AfterPositions : Meshes.BeforePositions));
-	FMantleThumbnailSubject Shot = FMantleCosmeticThumbnail::AccessorySubject(Shown.Get(), FQuat::Identity, true);
-	Shot.Frame = FrameOf(Meshes);
+	// The hair as authored sits on the head as that hair sees it (the fitted head scaled back), so it is a head wearing hair, not hair far from a head.
+	FMantleHairFitMeshes Shown = Meshes;
+	if (!bAfter) Shown.HeadPositions = Meshes.HeadInHairFrame();
+	TStrongObjectPtr<UStaticMesh> Mesh(MantleHairFitPicturesPrivate::BuildHeadAndHair(Shown, bAfter ? Shown.AfterPositions : Shown.BeforePositions));
+	FMantleThumbnailSubject Shot = FMantleCosmeticThumbnail::AccessorySubject(Mesh.Get(), FQuat::Identity, true);
+	Shot.Frame = FrameOf(Meshes, bAfter);
 	Shot.View = FRotator(0.0f, Yaw, 0.0f);
 	return FMantleCosmeticThumbnail::Capture(Shot, Size, OutPixels, OutError);
 }

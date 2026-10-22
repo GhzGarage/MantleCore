@@ -18,6 +18,14 @@ struct MANTLEEDITOR_API FMantleHairFitMeshes
 	TArray<FVector3f> HeadPositions;
 	TArray<uint32> HeadTriangles;
 	bool IsValid() const { return AfterPositions.Num() > 0 && BeforePositions.Num() == AfterPositions.Num() && HeadPositions.Num() > 0; }
+
+	/**
+	 * The head as the hair as authored sees it: the head moved by the size and shift that took the hair from BeforePositions to AfterPositions
+	 * (a uniform scale about the centroids; the scalp fit's small moves average out). Drawn with BeforePositions it shows the hair on a head
+	 * it was made for, so the "before" picture shows hair on a head, not a bald head with the hair far away. BeforePositions must be upright
+	 * (turned if the file was Y-up): this does not rotate.
+	 */
+	TArray<FVector3f> HeadInHairFrame() const;
 };
 
 struct MANTLEEDITOR_API FMantleHairFitReport
