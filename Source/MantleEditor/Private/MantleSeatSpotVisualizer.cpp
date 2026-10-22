@@ -108,6 +108,7 @@ void FMantleSeatSpotVisualizer::DrawVisualizationHUD(const UActorComponent* Comp
 	FVector2D Pixel;
 	if (View->WorldToPixel(Seat->GetComponentLocation() + FVector(0.0, 0.0, 40.0), Pixel))
 	{
-		Canvas->DrawItem(FCanvasTextItem(Pixel, FText::FromString(Text), GEngine->GetSmallFont(), MantleGizmoStyle::Outline));
+		FCanvasTextItem Label(Pixel, FText::FromString(Text), GEngine->GetSmallFont(), MantleGizmoStyle::Outline);
+		Canvas->DrawItem(Label);
 	}
 }
