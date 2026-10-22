@@ -278,6 +278,20 @@ namespace MantleOverlayWornDevCommands
 			|| !MantleOverlayPlaceMath::DefaultPlacement(Triangles, Mesh->GetBounds().GetBox(), FVector(FCString::Atof(*Args[3]), 0.0, FCString::Atof(*Args[4])), Spot))
 		{
 			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED no spot on the skin: %s"), *Error);
+			if (Mesh)
+			{
+				// Where the skin is along the row the offset asked for, so the next try can aim.
+				const FBox Box = Mesh->GetBounds().GetBox();
+				const double Z = Box.Min.Z + Box.GetSize().Z * 0.72 + FCString::Atof(*Args[4]);
+				for (double X = -60.0; X <= 60.0; X += 4.0)
+				{
+					FVector Point, Normal;
+					if (MantleOverlayPlaceMath::RayOnTriangles(Triangles, FVector(X, 500.0, Z), FVector(0.0, -1.0, 0.0), Point, Normal))
+					{
+						UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED row z=%.0f x=%.0f hit y=%.1f normal=(%.2f,%.2f,%.2f)"), Z, X, Point.Y, Normal.X, Normal.Y, Normal.Z);
+					}
+				}
+			}
 			return;
 		}
 		Draft.OverlayPlacement.Transform = Spot;
