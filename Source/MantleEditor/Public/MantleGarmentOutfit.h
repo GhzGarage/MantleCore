@@ -326,10 +326,14 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 
 	/**
 	 * Pure (tested): how good a bare body MeshName is (higher is better), or -1 when it is not one: WornSlots of its material
-	 * slots are clothing, HeightShare its height over the character's. Wearing nothing is best, then a name saying nude or
-	 * naked, then underwear (or lingerie, or bare); a mesh that wears clothing and isn't named so is not a bare body.
+	 * slots are clothing, UnderwearSlots underwear (IsUnderwearName), HeightShare its height over the character's. Wearing
+	 * nothing is best, whatever the names say; then a name saying nude, naked or bare; then underwear (by its name or its
+	 * slots), which Convert takes off. A mesh that wears clothing and isn't named so is not a bare body.
 	 */
-	static int32 BareBodyRank(const FString& MeshName, int32 WornSlots, double HeightShare);
+	static int32 BareBodyRank(const FString& MeshName, int32 WornSlots, int32 UnderwearSlots, double HeightShare);
+
+	/** Pure (tested): whether a mesh, slot or material name says underwear (underwear, lingerie, bra, panties ...). */
+	static bool IsUnderwearName(const FString& Name);
 
 	/** The toolset's MakeOutfitFromGarment: Make for asset paths (Garments comma-separated), as one JSON object. */
 	static FString RunForAgent(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff, const FString& Confirm);

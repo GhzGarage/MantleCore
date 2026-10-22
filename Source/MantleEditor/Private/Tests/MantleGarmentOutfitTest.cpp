@@ -383,13 +383,19 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FMantleGarmentOutfitBareBodyRankTest::RunTest(const FString& Parameters)
 {
 	// A whole body wearing nothing beats one in underwear; a part, or a dressed body not named bare, is no bare body.
-	const int32 Bare = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Girl_Body"), 0, 1.0);
-	const int32 Underwear = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 2, 0.99);
+	const int32 Bare = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Girl_Body"), 0, 0, 1.0);
+	const int32 Underwear = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 0, 1, 0.99);
 	TestTrue(TEXT("nothing on is best"), Bare > Underwear);
 	TestTrue(TEXT("underwear is a bare body"), Underwear >= 0);
-	TestTrue(TEXT("a nude name beats underwear"), FMantleGarmentOutfit::BareBodyRank(TEXT("Nude"), 1, 1.0) > Underwear);
-	TestEqual(TEXT("a torso alone is a part"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Torso"), 0, 0.45), -1);
-	TestEqual(TEXT("a dressed body is not bare"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Nightwear"), 3, 1.0), -1);
+	TestTrue(TEXT("a nude name beats underwear"), FMantleGarmentOutfit::BareBodyRank(TEXT("Nude"), 1, 0, 1.0) > Underwear);
+	TestEqual(TEXT("a torso alone is a part"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Torso"), 0, 0, 0.45), -1);
+	TestEqual(TEXT("a dressed body is not bare"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Nightwear"), 3, 0, 1.0), -1);
+	// Vampire's pack: her body with nothing on (SK_VampireGirl) beats the one in underwear, even when nothing reads its
+	// underwear as clothing (its name alone says it).
+	TestTrue(TEXT("nothing on beats an underwear name"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl"), 0, 0, 0.96)
+		> FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 0, 0, 1.0));
+	TestTrue(TEXT("an underwear material is underwear"), FMantleGarmentOutfit::IsUnderwearName(TEXT("M_VG_Underwear")));
+	TestFalse(TEXT("a corset is not underwear"), FMantleGarmentOutfit::IsUnderwearName(TEXT("M_VG_Corset")));
 	return true;
 }
 
