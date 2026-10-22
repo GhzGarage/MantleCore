@@ -361,6 +361,11 @@ void FMantleMetaHumanUnriggedFixer::Analyze(const FMantleConvertContext& Context
 		{
 			continue;
 		}
+		// #50: a model that keeps only its face has no body to fit: its head is cut and conformed alone.
+		if (const FMantleConvertMetaHumanWork* Work = Context.MetaHuman.Find(PartIndex); Work && Work->bFaceOnly)
+		{
+			continue;
+		}
 		FMantleConvertFix& Fix = OutFixes.AddDefaulted_GetRef();
 		Fix.FixerId = GetId();
 		Fix.PartIndex = PartIndex;

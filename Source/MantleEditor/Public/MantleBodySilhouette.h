@@ -51,6 +51,12 @@ public:
 	static constexpr double SeedLimit = 0.5;
 
 	/**
+	 * The run of Vertices (Z up) within HalfSlabCm of Z that holds the middle one across X, ending at the first gap wider than GapCm
+	 * (an arm apart from the torso): its width, its depth (Y) and its middle. False with fewer than 3 vertices in the slab. Pure.
+	 */
+	static bool CentralRun(TConstArrayView<FVector3f> Vertices, double Z, double HalfSlabCm, double GapCm, double& OutWidth, double& OutDepth, FVector2d& OutMiddle);
+
+	/**
 	 * The silhouette of Vertices (Z up, Y front to back, X side to side, cm) standing FeetZ at its lowest and HeightCm tall.
 	 * Out.bBand says which bands had a torso (at least MinTorsoWidthShare wide); false when none did (an empty mesh, no bare skin on
 	 * the torso, or a height that is not positive). Pass only vertices that are bare or skin-tight: clothing would measure as body.

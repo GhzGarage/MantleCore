@@ -117,4 +117,42 @@ bool FMantleMetaHumanHeadOnlyHeadBoneTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleMetaHumanHeadOnlyNeckTest,
+	"Mantle.Editor.MetaHumanHeadOnly.Neck",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleMetaHumanHeadOnlyNeckTest::RunTest(const FString& Parameters)
+{
+	// A 170 cm figure of rings: a torso 34 cm wide to 140 cm, a neck 9 cm wide to 150 cm, a head 18 cm wide above, T-pose arms at 140 cm.
+	TArray<FVector3f> Vertices;
+	auto Ring = [&Vertices](const double Z, const double Radius, const double MiddleX)
+	{
+		for (int32 Step = 0; Step < 48; ++Step)
+		{
+			const double Angle = Step * UE_TWO_PI / 48.0;
+			Vertices.Add(FVector3f(MiddleX + Radius * FMath::Cos(Angle), 0.6 * Radius * FMath::Sin(Angle), Z));
+		}
+	};
+	for (double Z = 0.0; Z <= 170.0; Z += 1.0)
+	{
+		Ring(Z, Z <= 140.0 ? 17.0 : Z <= 150.0 ? 4.5 : 9.0, 0.0);
+		if (Z >= 136.0 && Z <= 140.0)
+		{
+			for (double X = 20.0; X <= 70.0; X += 1.0)
+			{
+				Vertices.Add(FVector3f(X, 0.0, Z));
+				Vertices.Add(FVector3f(-X, 0.0, Z));
+			}
+		}
+	}
+	FVector Neck;
+	double Top = 0.0;
+	TestTrue(TEXT("a neck is found"), FMantleMetaHumanHeadOnly::FindNeck(Vertices, Neck, Top));
+	TestTrue(TEXT("it is in the neck's height, not the shoulders' or the head's"), Neck.Z > 140.0 && Neck.Z < 151.0);
+	TestTrue(TEXT("and the top is the head's"), FMath::IsNearlyEqual(Top, 170.0, 0.01));
+	TestFalse(TEXT("no vertices, no neck"), FMantleMetaHumanHeadOnly::FindNeck(TArray<FVector3f>(), Neck, Top));
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
