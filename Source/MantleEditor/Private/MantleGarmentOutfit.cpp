@@ -364,7 +364,6 @@ const FName FMantleGarmentOutfit::MadeFromGarmentKey(TEXT("MantleMadeFromGarment
 const FName FMantleGarmentOutfit::MadeVersionKey(TEXT("MantleMadeFromGarmentVersion"));
 // 3: the garment is carried with the skin onto the MetaHuman (CarryWithSkin), and skin coming through it between its vertices is covered (CoverSkin); 4: CoverSkin only answers skin a little through it.
 const TCHAR* const FMantleGarmentOutfit::MadeVersion = TEXT("5");
-const FName FMantleGarmentOutfit::HeelKey(TEXT("MantleHeelCm"));
 
 const TArray<TPair<FName, FName>>& FMantleGarmentOutfit::Limbs()
 {
@@ -1391,6 +1390,12 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 			Piece.HeelCm = FMath::Max(0.0, static_cast<double>(SoleZ - LowestZ));
 			UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT %s reaches %.2f cm below the MetaHuman's sole"), *Garment->GetName(), Piece.HeelCm);
 		}
+		if (Piece.HeelCm >= HeelMinCm)
+		{
+			Piece.Error = FString::Printf(TEXT("%s is a high heel: made for a foot on tiptoe, it reaches %.1f cm below a flat foot, and MetaHuman bodies stand on flat feet. ")
+				TEXT("Heeled shoes aren't offered until the game lifts the foot when they are worn (GhzGarage/mantle#1051)."), *Garment->GetName(), Piece.HeelCm);
+			continue;
+		}
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT push out %s: %s"), *Garment->GetName(), *Piece.PushOut);
 		Piece.Vertices = Geometry->Positions.Num();
 		FMantleOutfitAuthoredSource Source;
@@ -1411,10 +1416,6 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		FAssetRegistryModule::AssetCreated(Outfit);
 		Package->GetMetaData().SetValue(Outfit, MadeFromGarmentKey, *Garment->GetPathName());
 		Package->GetMetaData().SetValue(Outfit, MadeVersionKey, MadeVersion);
-		if (Piece.HeelCm >= HeelMinCm)
-		{
-			Package->GetMetaData().SetValue(Outfit, HeelKey, *FString::Printf(TEXT("%.1f"), Piece.HeelCm));
-		}
 		if (!GarmentSave(Outfit))
 		{
 			Piece.Error = FString::Printf(TEXT("the Outfit was made but %s could not be saved"), *PackageName);

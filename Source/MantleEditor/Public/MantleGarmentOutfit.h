@@ -31,8 +31,8 @@ struct MANTLEEDITOR_API FMantleGarmentOutfitPiece
 	FString PushOut;
 
 	/**
-	 * How far it reaches below the MetaHuman's sole (cm, 0 when it doesn't): a high heel, made for a foot on tiptoe, once its
-	 * foot is turned flat. Worn as made, the heel goes into the ground by this much; it is kept on the Outfit (HeelKey).
+	 * How far it reaches below the MetaHuman's sole (cm, 0 when it doesn't): a shoe's sole, or a high heel, made for a foot on
+	 * tiptoe, once its foot is turned flat (HeelMinCm or more: no Outfit, Error says why).
 	 */
 	double HeelCm = 0.0;
 };
@@ -95,15 +95,17 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 */
 	static const FName MadeVersionKey;
 
-	/** Package metadata key on an Outfit whose piece reaches below the MetaHuman's sole (FMantleGarmentOutfitPiece::HeelCm, "%.1f"). */
-	static const FName HeelKey;
 	static const TCHAR* const MadeVersion;
 
 	/** A garment vertex further than this from every MetaHuman skin vertex is counted as far (FarVertices). */
 	static constexpr double NearCm = 10.0;
 
-	/** A piece reaching this far below the MetaHuman's sole (cm) or further is a heel (HeelKey). */
-	static constexpr double HeelMinCm = 1.0;
+	/**
+	 * A piece reaching this far below the MetaHuman's sole (cm) or further is a high heel, and gets no Outfit: on a flat
+	 * foot its heel goes into the ground, and the resize crumples it (until the game lifts the foot, GhzGarage/mantle#1051).
+	 * A shoe's own sole reaches a centimetre or two below it.
+	 */
+	static constexpr double HeelMinCm = 4.0;
 
 	/** The posed body must land within this of the A-pose step's own posed copy (bounds, cm), or the garment's pose is not the body's. */
 	static constexpr double PoseCheckCm = 1.0;
