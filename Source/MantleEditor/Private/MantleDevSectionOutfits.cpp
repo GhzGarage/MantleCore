@@ -93,11 +93,18 @@ namespace MantleDevSectionOutfitsPrivate
 		TArray<USkeletalMesh*> Garments;
 		for (const FString& Path : Paths)
 		{
-			Garments.Add(LoadObject<USkeletalMesh>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet));
+			if (USkeletalMesh* Garment = LoadObject<USkeletalMesh>(nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet))
+			{
+				Garments.Add(Garment);
+			}
+			else
+			{
+				UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS %s is not a skeletal mesh; left out"), *Path);
+			}
 		}
-		if (!Body || Garments.Contains(nullptr))
+		if (!Body || Garments.IsEmpty())
 		{
-			UE_LOG(LogMantleSectionOutfits, Error, TEXT("MANTLE_SECTION_OUTFITS failed: the body or a garment is not a skeletal mesh"));
+			UE_LOG(LogMantleSectionOutfits, Error, TEXT("MANTLE_SECTION_OUTFITS failed: %s"), Body ? TEXT("no garment is a skeletal mesh") : TEXT("the body is not a skeletal mesh"));
 			return;
 		}
 		Draw(Body, nullptr, Args[1], TEXT("separated_body"));
