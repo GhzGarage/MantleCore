@@ -9,6 +9,7 @@
 #include "Editor.h"
 #include "EditorViewportClient.h"
 #include "Engine/Engine.h"
+#include "PrimitiveDrawingUtils.h"
 #include "SceneManagement.h"
 #include "SceneView.h"
 #include "UnrealEdGlobals.h"
@@ -45,10 +46,16 @@ void FMantleSeatSpotVisualizer::DrawVisualization(const UActorComponent* Compone
 	double HipHeight = 0.0;
 	if (FMantleSeatExport::FloorBelow(Seat, HipHeight))
 	{
-		// Yellow while the height is one a place can hold; red-orange would clash with the arrow, so a bad one is dashed instead.
+		// Solid while the height is one a place can hold, dashed when Check this place would refuse it.
 		const FVector Floor = Hip - Up * HipHeight;
-		const bool bSensible = FMantleSeatExport::HeightProblem(true, HipHeight).IsEmpty();
-		PDI->DrawLine(Hip, Floor, MantleGizmoStyle::Outline, SDPG_Foreground, bSensible ? 0.f : 3.f);
+		if (FMantleSeatExport::HeightProblem(true, HipHeight).IsEmpty())
+		{
+			PDI->DrawLine(Hip, Floor, MantleGizmoStyle::Outline, SDPG_Foreground, 0.f);
+		}
+		else
+		{
+			DrawDashedLine(PDI, Hip, Floor, MantleGizmoStyle::Outline, 6.0, SDPG_Foreground);
+		}
 		DrawWireDiamond(PDI, FTranslationMatrix(Floor), 6.f, MantleGizmoStyle::Outline, SDPG_Foreground);
 	}
 }

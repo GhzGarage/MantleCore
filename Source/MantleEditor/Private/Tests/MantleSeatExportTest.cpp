@@ -7,9 +7,11 @@
 #include "MantleSeatSpot.h"
 
 #include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "Dom/JsonObject.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
+#include "Engine/TextRenderActor.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Serialization/JsonReader.h"
@@ -233,20 +235,93 @@ bool FMantleSeatRoundTripTest::RunTest(const FString& Parameters)
 		Exported.Place.Entities.ContainsByPredicate([&Exported](const FMantleEntity& Entity) { return Entity.Id == Exported.Place.Seats[0].Entity; })
 		&& Exported.Place.Seats[1].Entity == Exported.Place.Seats[0].Entity);
 
-	// The file the exporter writes parses, and its seats are the ones exported.
-	const FMantleParseResult Parsed = FMantlePlaceParser::ParseFromString(FMantlePlaceExporter::ToJson(Exported.Place));
-	TestTrue(TEXT("the place parses"), Parsed.bSuccess);
-	if (!Parsed.bSuccess)
-	{
-		AddError(Parsed.ErrorSummary());
-		return false;
-	}
-	TestEqual(TEXT("the parsed place has both seats"), Parsed.Place.Seats.Num(), 2);
-
 	// A level with no seats writes no seats key.
 	FMantlePlace NoSeats = Exported.Place;
 	NoSeats.Seats.Reset();
 	TestFalse(TEXT("no seats, no key"), FMantlePlaceExporter::ToJson(NoSeats).Contains(TEXT("\"seats\"")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleSeatAttachedTest,
+	"Mantle.Editor.Seat.Export.AttachedPropKeepsItsOwnSpace",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleSeatAttachedTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleSeatExportTestPrivate;
+	FSeatWorld Fixture;
+	if (!TestNotNull(TEXT("world"), Fixture.World))
+	{
+		return false;
+	}
+	// A bench attached to a platform: Export writes the bench relative to the platform, but its seat is still in the
+	// bench's own space.
+	AStaticMeshActor* Platform = SpawnProp(Fixture.World, TEXT("Platform"), FVector(1000.0, 0.0, 200.0), 30.0);
+	AStaticMeshActor* Bench = SpawnProp(Fixture.World, TEXT("Bench"), FVector(1200.0, 0.0, 250.0), 75.0);
+	if (!TestNotNull(TEXT("platform"), Platform) || !TestNotNull(TEXT("bench"), Bench))
+	{
+		return false;
+	}
+	Bench->AttachToActor(Platform, FAttachmentTransformRules::KeepWorldTransform);
+	AddSeat(Bench, FVector(10.0, 20.0, 45.0))->SetRelativeRotation(FRotator(0.0, 15.0, 0.0));
+
+	const FMantleExportResult Exported = FMantlePlaceExporter::Export(Fixture.World, FMantleExportOptions());
+	if (!TestEqual(TEXT("one seat"), Exported.Place.Seats.Num(), 1))
+	{
+		return false;
+	}
+	const FMantleEntity* BenchEntity = Exported.Place.Entities.FindByPredicate([](const FMantleEntity& Entity) { return Entity.Name == TEXT("Bench"); });
+	if (TestNotNull(TEXT("the bench is an entity"), BenchEntity))
+	{
+		TestFalse(TEXT("the bench has the platform as its parent"), BenchEntity->Parent.IsEmpty());
+		TestEqual(TEXT("the seat rides on the bench"), Exported.Place.Seats[0].Entity, BenchEntity->Id);
+	}
+	TestTrue(TEXT("the hip is in the bench's own space"), Exported.Place.Seats[0].Position.Equals(FVector(10.0, 20.0, 45.0), 0.11));
+	TestEqual(TEXT("the heading is against the bench's"), Exported.Place.Seats[0].Yaw, 15.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleSeatParsesBackTest,
+	"Mantle.Editor.Seat.Export.FileParsesBack",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleSeatParsesBackTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleSeatExportTestPrivate;
+	FSeatWorld Fixture;
+	if (!TestNotNull(TEXT("world"), Fixture.World))
+	{
+		return false;
+	}
+	// A text sign stands in for the prop: it exports with nothing to upload, so the file is complete without a publish.
+	ATextRenderActor* Sign = Fixture.World->SpawnActor<ATextRenderActor>(FVector(0.0, 300.0, 0.0), FRotator(0.0, 45.0, 0.0));
+	if (!TestNotNull(TEXT("sign"), Sign))
+	{
+		return false;
+	}
+	Sign->SetActorLabel(TEXT("Sign"));
+	Sign->GetTextRender()->SetText(FText::FromString(TEXT("Rest here")));
+	AddSeat(Sign, FVector(30.0, 0.0, 45.0));
+
+	const FMantleExportResult Exported = FMantlePlaceExporter::Export(Fixture.World, FMantleExportOptions());
+	const FString Json = FMantlePlaceExporter::ToJson(Exported.Place);
+	TestTrue(TEXT("the file has a seats key"), Json.Contains(TEXT("\"seats\"")));
+	const FMantleParseResult Parsed = FMantlePlaceParser::ParseFromString(Json);
+	if (!TestTrue(TEXT("the file parses as a place"), Parsed.bSuccess))
+	{
+		AddError(Parsed.ErrorSummary());
+		return false;
+	}
+	if (TestEqual(TEXT("one seat reads back"), Parsed.Place.Seats.Num(), 1))
+	{
+		const FMantleSeat& Seat = Parsed.Place.Seats[0];
+		TestEqual(TEXT("on the sign's entity"), Seat.Entity, Exported.Place.Seats[0].Entity);
+		TestTrue(TEXT("at the hip it was given"), Seat.Position.Equals(FVector(30.0, 0.0, 45.0), 0.11));
+		TestEqual(TEXT("facing as the sign does"), Seat.Yaw, 0.0);
+		TestTrue(TEXT("as a bench"), Seat.Style == EMantleSeatStyle::Bench);
+	}
 	return true;
 }
 

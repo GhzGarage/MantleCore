@@ -15,4 +15,7 @@ private:
 	/** #434: loads MantleAgentTools once the engine is up, in an editor with Toolset Registry enabled. */
 	static void LoadAgentTools();
 	FDelegateHandle AgentToolsHandle;
+	/** GhzGarage/MantleCore#142: registers the Mantle Seat's viewport marker once the editor engine exists. */
+	static void RegisterSeatVisualizer();
+	FDelegateHandle SeatVisualizerHandle;
 };

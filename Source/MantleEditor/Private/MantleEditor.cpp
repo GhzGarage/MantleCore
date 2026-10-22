@@ -637,10 +637,14 @@ void FMantleEditorModule::StartupModule()
 	SMantlePublishPanel::RegisterTab();
 	// #838: a Script Point's Details panel: its package from the place's storage and Packages/, its parameters with the package's hints.
 	FMantleScriptPointDetails::Register();
-	// GhzGarage/MantleCore#142: a Mantle Seat's hip marker.
+	// GhzGarage/MantleCore#142: a Mantle Seat's hip marker. GUnrealEd does not exist yet while modules start up.
 	if (GUnrealEd)
 	{
-		GUnrealEd->RegisterComponentVisualizer(UMantleSeatSpotComponent::StaticClass()->GetFName(), MakeShareable(new FMantleSeatSpotVisualizer));
+		RegisterSeatVisualizer();
+	}
+	else
+	{
+		SeatVisualizerHandle = FCoreDelegates::GetOnPostEngineInit().AddStatic(&FMantleEditorModule::RegisterSeatVisualizer);
 	}
 	// #1011: Place Settings > Secrets.
 	FMantlePlaceSecretsDetails::Register();
@@ -686,6 +690,14 @@ void FMantleEditorModule::StartupModule()
 	}
 }
 
+void FMantleEditorModule::RegisterSeatVisualizer()
+{
+	if (GUnrealEd)
+	{
+		GUnrealEd->RegisterComponentVisualizer(UMantleSeatSpotComponent::StaticClass()->GetFName(), MakeShareable(new FMantleSeatSpotVisualizer));
+	}
+}
+
 void FMantleEditorModule::LoadAgentTools()
 {
 	const TCHAR* const AgentToolsModule = TEXT("MantleAgentTools");
@@ -701,6 +713,7 @@ void FMantleEditorModule::ShutdownModule()
 	MantlePreviewClient::Stop();
 	FMantleTestLocally::Get().Stop();
 	FCoreDelegates::GetOnPostEngineInit().Remove(AgentToolsHandle);
+	FCoreDelegates::GetOnPostEngineInit().Remove(SeatVisualizerHandle);
 	SMantleCosmeticPanel::UnregisterTab();
 	SMantleVehicleBuilder::UnregisterTab();
 	SMantleLibraryPanel::UnregisterTab();

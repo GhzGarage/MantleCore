@@ -70,8 +70,13 @@ FString FMantleSeatExport::OwnerProblem(const AActor* Actor)
 			return TEXT("the prop simulates physics, so the seat would move.");
 		}
 	}
+	// Movable as Export reads it (its bDynamic): a prefab only when something could move it, since a new Blueprint's
+	// root is Movable by default; any other actor when its root is Movable.
+	TArray<FMantlePrefabPart> Parts;
+	FMantlePlaceExporter::CollectPrefabParts(Actor, Parts);
 	const USceneComponent* Root = Actor->GetRootComponent();
-	if (Root && Root->Mobility == EComponentMobility::Movable)
+	const bool bDynamic = Parts.Num() > 0 ? FMantlePlaceExporter::IsPrefabDynamic(Actor) : (Root && Root->Mobility == EComponentMobility::Movable);
+	if (bDynamic)
 	{
 		return TEXT("the prop is Movable, so the seat could move.");
 	}
@@ -220,7 +225,8 @@ void FMantleSeatExport::Export(const TArray<const AActor*>& Exportable, const TM
 			{
 				continue;
 			}
-			OutSeats.Add(ToPlaceSeat(*Id, FMantlePlaceExporter::PublishedTransform(Actor), Seat->GetComponentTransform(), StyleOf(Seat)));
+			// The entity's frame in the world is the actor's, whether Export writes it relative to a parent or not.
+			OutSeats.Add(ToPlaceSeat(*Id, Actor->GetActorTransform(), Seat->GetComponentTransform(), StyleOf(Seat)));
 		}
 	}
 }
