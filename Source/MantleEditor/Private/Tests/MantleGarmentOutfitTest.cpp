@@ -464,6 +464,13 @@ bool FMantleGarmentOutfitTrimTest::RunTest(const FString& Parameters)
 	const FMantleGlbMesh Corset = Sheet(20, 20.0f, 0.0f);
 	TestTrue(TEXT("a small piece 0.4 cm off it is its trim"), FMantleGarmentOutfit::IsTrimOn(Sheet(4, 5.0f, 0.4f), Corset));
 	TestFalse(TEXT("3 cm off it is not"), FMantleGarmentOutfit::IsTrimOn(Sheet(4, 5.0f, 3.0f), Corset));
+	// An edging standing up from the rim: half of it on the corset, half up to 1.5 cm past its edge.
+	FMantleGlbMesh Edging = Sheet(4, 4.0f, 0.3f);
+	for (FVector3f& Position : Edging.Positions)
+	{
+		Position.X += 17.5f;
+	}
+	TestTrue(TEXT("an edging over the rim is its trim"), FMantleGarmentOutfit::IsTrimOn(Edging, Corset));
 	TestFalse(TEXT("a whole garment on it is not trim"), FMantleGarmentOutfit::IsTrimOn(Sheet(20, 20.0f, 0.4f), Corset));
 
 	// Appended: its vertices after the garment's, its primitive drawn with its own material after the garment's.

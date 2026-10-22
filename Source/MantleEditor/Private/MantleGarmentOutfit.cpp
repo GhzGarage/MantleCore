@@ -1721,6 +1721,7 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 				const FMantleGlbMesh* TrimMesh = Geometry(Trim);
 				const FMantleGlbMesh* OtherMesh = TrimMesh ? Geometry(Other) : nullptr;
 				const double Near = OtherMesh ? TrimNear(*TrimMesh, *OtherMesh) : 0.0;
+				UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT trim check %s on %s: %.0f%% within %.0f cm"), *A.Name, *B.Name, 100.0 * Near, TrimNearCm);
 				if (Near >= BestNear)
 				{
 					Best = Other;

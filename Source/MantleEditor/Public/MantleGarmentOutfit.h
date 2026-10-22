@@ -264,12 +264,13 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 
 	/**
 	 * A piece is trim on another (IsTrimOn) when it has at most TrimMaxTriangleShare of the other's triangles and at least
-	 * TrimNearShare of its points are within TrimNearCm of the other's surface, both as made (bind pose). Two real garments
-	 * (a shirt and the jacket over it) are each too big, or too far apart, to pass.
+	 * TrimNearShare of its points are within TrimNearCm of the other's surface, both as made (bind pose). An edging stands
+	 * up from the garment's rim (Vampire's corset lace), so not all of it lies on it. Two real garments (a shirt and the
+	 * jacket over it) are each too big to pass.
 	 */
 	static constexpr double TrimMaxTriangleShare = 0.2;
-	static constexpr double TrimNearShare = 0.8;
-	static constexpr float TrimNearCm = 1.0f;
+	static constexpr double TrimNearShare = 0.6;
+	static constexpr float TrimNearCm = 2.0f;
 
 	/** Pure (tested): whether Trim is a thin piece lying on Garment (a corset's lace edging), by TrimMaxTriangleShare, TrimNearShare and TrimNearCm. */
 	static bool IsTrimOn(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment);
