@@ -1695,8 +1695,8 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakeTuningStep()
 		[this] { return Working->Charge.bEnabled || HoldInfo(Working->Hold).Charge == EMantleWeaponDocChargeRule::Required; },
 		[this](bool V) { Working->Charge.bEnabled = V; }, HasCharge,
 		[this] { return HoldInfo(Working->Hold).Charge != EMantleWeaponDocChargeRule::Required; });
-	AddFloatWhen(LOCTEXT("ChargeSeconds", "Time to charge (seconds)"), LOCTEXT("ChargeSecondsTip", "How long a full charge takes."), 0.01f, 30.f, 0.1f,
-		[this] { return Working->Charge.Seconds; }, [this](float V) { Working->Charge.Seconds = FMath::Clamp(V, 0.01f, 30.f); }, ActiveCharge);
+	AddFloatWhen(LOCTEXT("ChargeSeconds", "Time to charge (seconds)"), LOCTEXT("ChargeSecondsTip", "How long a full charge takes."), 0.1f, 10.f, 0.1f,
+		[this] { return Working->Charge.Seconds; }, [this](float V) { Working->Charge.Seconds = FMath::Clamp(V, 0.1f, 10.f); }, ActiveCharge);
 	AddToggleWhen(LOCTEXT("ChargeRequired", "Require a full charge before attacking"), LOCTEXT("ChargeRequiredTip", "When on, a tap does not attack. Bows always need a draw before release."),
 		[this] { return Working->Charge.bRequired || HoldInfo(Working->Hold).Charge == EMantleWeaponDocChargeRule::Required; },
 		[this](bool V)

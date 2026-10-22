@@ -683,7 +683,7 @@ bool MantlePreviewClient::Find(FMantlePreviewClientInfo& OutClient, FString& Out
 		else
 		{
 			// The creator chose this client: say it is gone rather than quietly use another one.
-			OutError = FString::Printf(TEXT("The Preview Client Executable chosen in Project Settings > Plugins > Mantle does not exist: %s. Choose another, or clear the setting to use the Steam or Epic install."),
+			OutError = FString::Printf(TEXT("The Preview Client Executable chosen in Editor Preferences > Plugins > Mantle does not exist: %s. Choose another, or clear the setting to use the Steam or Epic install."),
 				*MantlePreviewShared::PlatformPath(Full));
 			return false;
 		}
@@ -727,11 +727,11 @@ bool MantlePreviewClient::Find(FMantlePreviewClientInfo& OutClient, FString& Out
 			// The creator's own choice failed: report why instead of falling back to Steam or Epic.
 			if (!ProjectChoice.IsEmpty())
 			{
-				OutError = Error + FString::Printf(TEXT(" (This is the Preview Client Project %s, from Project Settings > Plugins > Mantle or -MantlePreviewProject. It must be a Mantle client project that answers -MantlePreviewCapabilities, such as mantle/client/Mantle.uproject; choose another, or clear it.)"),
+				OutError = Error + FString::Printf(TEXT(" (This is the Preview Client Project %s, from Editor Preferences > Plugins > Mantle or -MantlePreviewProject. It must be a Mantle client project that answers -MantlePreviewCapabilities, such as mantle/client/Mantle.uproject; choose another, or clear it.)"),
 					*MantlePreviewShared::PlatformPath(ProjectChoice));
 				return false;
 			}
-			OutError = Error + TEXT(" (This is the Preview Client Executable chosen in Project Settings > Plugins > Mantle; choose another, or clear it to use the Steam or Epic install.)");
+			OutError = Error + TEXT(" (This is the Preview Client Executable chosen in Editor Preferences > Plugins > Mantle; choose another, or clear it to use the Steam or Epic install.)");
 			return false;
 		}
 		Failures.Add(Error);
@@ -741,7 +741,7 @@ bool MantlePreviewClient::Find(FMantlePreviewClientInfo& OutClient, FString& Out
 		OutError = FString::Join(Failures, TEXT("\n"));
 		return false;
 	}
-	OutError = FString::Printf(TEXT("Mantle's client was not found. Looked in: %s. Install Mantle from Steam or the Epic Games Store, or pick Mantle-Win64-Shipping.exe (in the install's Mantle\\Binaries\\Win64 folder) as the Preview Client Executable in Project Settings > Plugins > Mantle."),
+	OutError = FString::Printf(TEXT("Mantle's client was not found. Looked in: %s. Install Mantle from Steam or the Epic Games Store, or pick Mantle-Win64-Shipping.exe (in the install's Mantle\\Binaries\\Win64 folder) as the Preview Client Executable in Editor Preferences > Plugins > Mantle."),
 		*FString::Join(Looked, TEXT("; ")));
 	return false;
 }

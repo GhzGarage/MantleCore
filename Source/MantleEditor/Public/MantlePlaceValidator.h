@@ -32,6 +32,9 @@ struct FMantleValidationIssue
 	/** What to do about it. */
 	FString Remedy;
 
+	/** The place-wide "too many instanced meshes" error: the one thinning can fix (Publish makes the offer). */
+	bool bInstanceBudget = false;
+
 	FString ToString() const
 	{
 		const TCHAR* Prefix = Severity == EMantleIssueSeverity::Error ? TEXT("Error") : TEXT("Warning");
@@ -51,6 +54,24 @@ struct FMantleValidationResult
 	{
 		return Issues.ContainsByPredicate(
 			[](const FMantleValidationIssue& Issue) { return Issue.Severity == EMantleIssueSeverity::Error; });
+	}
+
+	/** True when there are errors and every one is the instanced-mesh budget, which thinning can fix. */
+	bool OnlyInstanceBudgetErrors() const
+	{
+		bool bAny = false;
+		for (const FMantleValidationIssue& Issue : Issues)
+		{
+			if (Issue.Severity == EMantleIssueSeverity::Error)
+			{
+				if (!Issue.bInstanceBudget)
+				{
+					return false;
+				}
+				bAny = true;
+			}
+		}
+		return bAny;
 	}
 
 	int32 NumErrors() const

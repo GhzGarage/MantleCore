@@ -850,7 +850,7 @@ void FillMantleSection(FToolMenuSection& Section)
 	Section.AddMenuEntry(
 		TEXT("MantleBuildWeapon"),
 		LOCTEXT("BuildWeaponLabel", "Build a weapon..."),
-		LOCTEXT("BuildWeaponTooltip", "Turn a 3D model of a gun into a weapon players can use."),
+		LOCTEXT("BuildWeaponTooltip", "Turn a 3D model into a weapon players can use: a gun, a bow, a blade or another weapon."),
 		FSlateIcon(),
 		FUIAction(FExecuteAction::CreateStatic(&FMantleWeaponBuilderPanel::TryInvokeTab)));
 

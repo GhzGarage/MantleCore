@@ -341,6 +341,38 @@ bool FMantleTextExportCustomFontTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleTextExportMirroredTest,
+	"Mantle.Editor.WorldText.Export.NegativeScaleIsAWarningNotAnError",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleTextExportMirroredTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleTextExportTestPrivate;
+	FTextExportWorld Fixture;
+	if (!TestNotNull(TEXT("a world"), Fixture.World))
+	{
+		return false;
+	}
+	ATextRenderActor* Sign = SpawnText(Fixture.World, TEXT("Mirrored sign"), TEXT("Hello"));
+	if (!TestNotNull(TEXT("a sign"), Sign))
+	{
+		return false;
+	}
+	Sign->SetActorScale3D(FVector(1.0, -1.0, 1.0));
+
+	const FMantleValidationResult Validation = FMantlePlaceValidator::Validate(Fixture.World);
+	TestFalse(TEXT("Check does not refuse the sign"), Validation.Issues.ContainsByPredicate([](const FMantleValidationIssue& Issue)
+	{
+		return Issue.Actor == TEXT("Mirrored sign") && Issue.Severity == EMantleIssueSeverity::Error;
+	}));
+	TestTrue(TEXT("it says the text is drawn unmirrored"), Validation.Issues.ContainsByPredicate([](const FMantleValidationIssue& Issue)
+	{
+		return Issue.Actor == TEXT("Mirrored sign") && Issue.Severity == EMantleIssueSeverity::Warning && Issue.Problem.Contains(TEXT("unmirrored"));
+	}));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMantleTextExportLimitsTest,
 	"Mantle.Editor.WorldText.Export.LimitsAreRefused",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

@@ -107,7 +107,7 @@ namespace MantleCosmeticPanelPrivate
 		case EMantleCosmeticClass::Hair:
 			return LOCTEXT("HairHelp", "Hair, eyebrows, eyelashes or facial hair, each its own slot and worn together: a groom (its cards are converted), a hair cards static mesh, or one section of a mesh such as a MetaHuman face's eyelashes. It binds to the head of the body it was made on.");
 		case EMantleCosmeticClass::Garment:
-			return LOCTEXT("GarmentHelp", "Choose a skeletal garment or a parametric Outfit. Create an Outfit from the garment and its original body/head, then add converted fit sources to publish one clothing item.");
+			return LOCTEXT("GarmentHelp", "Choose a skeletal garment or a parametric Outfit. Create an Outfit from the garment and its original body/head, then publish one clothing item. Sizes are made for you from a MetaHuman Outfit, a garment made on a MetaHuman, or a garment with its character's bare body beside it.");
 		case EMantleCosmeticClass::Accessory:
 			return LOCTEXT("AccessoryHelp", "A static mesh with one material. Its pivot is where it attaches to the socket.");
 		case EMantleCosmeticClass::Avatar:

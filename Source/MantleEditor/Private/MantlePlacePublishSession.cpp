@@ -1329,7 +1329,9 @@ void FMantlePlacePublishSession::TickChecking()
 	}
 	Result.Validation = MoveTemp(Validation);
 	SetIssuesCopied = 0;
-	if (Result.Validation.HasErrors())
+	// Too many instanced meshes is the one error thinning can fix, so it goes on to the size check below, which makes the offer.
+	const bool bBudgetOnly = !bSizeChecked && Result.Validation.OnlyInstanceBudgetErrors();
+	if (Result.Validation.HasErrors() && !bBudgetOnly)
 	{
 		Fail(FString::Printf(TEXT("This place has %d problem(s) to fix first."), Result.Validation.NumErrors()));
 		return;
@@ -1341,6 +1343,7 @@ void FMantlePlacePublishSession::TickChecking()
 		FMantlePlaceSizeCheck Size;
 		if (!Source->CheckPlaceSize(Size))
 		{
+			Result.Validation.Issues.RemoveAll([](const FMantleValidationIssue& Issue) { return Issue.bInstanceBudget; });
 			Result.Validation.Issues.Append(Size.Issues);
 			Result.ThinOffer = Size.ThinOffer;
 			AddLog(FString::Printf(TEXT("The place file would be %s with %lld instanced meshes"), *FMantlePlaceInstancing::DescribeBytes(Size.Bytes), Size.Instances));
@@ -1350,6 +1353,11 @@ void FMantlePlacePublishSession::TickChecking()
 			return;
 		}
 		AddLog(FString::Printf(TEXT("Place file size checked: %s, %lld instanced meshes"), *FMantlePlaceInstancing::DescribeBytes(Size.Bytes), Size.Instances));
+	}
+	if (Result.Validation.HasErrors())
+	{
+		Fail(FString::Printf(TEXT("This place has %d problem(s) to fix first."), Result.Validation.NumErrors()));
+		return;
 	}
 	ConversionTotal = Source->NumConversionSteps();
 	ConversionDone = 0;

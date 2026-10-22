@@ -86,7 +86,7 @@ FString FMantleAssetUploadQueue::DescribeRunFailure(const FMantleApiResult& Resu
 	}
 	if ((Result.StatusCode == 404 || Result.StatusCode == 405) && Result.Code.IsEmpty())
 	{
-		return FString::Printf(TEXT("The Mantle address %s did not answer like the Mantle API while %s. Check Project Settings > Plugins > Mantle."),
+		return FString::Printf(TEXT("The Mantle address %s did not answer like the Mantle API while %s. Check Editor Preferences > Plugins > Mantle."),
 			*FMantleApiClient::BaseUrlResolver(), *While);
 	}
 	if (Result.StatusCode >= 500)
@@ -610,7 +610,7 @@ void FMantleAssetUploadQueue::HandleDiff(ERequestKind Kind, const TArray<int32>&
 	TArray<FString> Unknown;
 	if (!FMantleApiClient::ParseDiffAssets(Result.Body, Known, Unknown))
 	{
-		Fail(TEXT("Mantle's answer about which files it has could not be read. Is the API address right (Project Settings > Plugins > Mantle)?"));
+		Fail(TEXT("Mantle's answer about which files it has could not be read. Is the API address right (Editor Preferences > Plugins > Mantle)?"));
 		return;
 	}
 	if (bPoll)
@@ -866,7 +866,7 @@ void FMantleAssetUploadQueue::HandleUpload(int32 Index, const FMantleApiResult& 
 	FMantleUploadedAsset Asset;
 	if (!FMantleApiClient::ParseUploadedAsset(Result.Body, Asset))
 	{
-		Fail(FString::Printf(TEXT("Mantle stored '%s' but its answer could not be read. Is the API address right (Project Settings > Plugins > Mantle)?"),
+		Fail(FString::Printf(TEXT("Mantle stored '%s' but its answer could not be read. Is the API address right (Editor Preferences > Plugins > Mantle)?"),
 			*Item.Upload.Name));
 		return;
 	}

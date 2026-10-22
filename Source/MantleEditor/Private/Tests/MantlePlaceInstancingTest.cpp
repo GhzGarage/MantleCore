@@ -479,12 +479,18 @@ namespace MantlePlaceInstancingTestPrivate
 	{
 	public:
 		bool bOver = true;
+		/** Findings Prepare hands the session, as the level's check would. */
+		TArray<FMantleValidationIssue> PrepareIssues;
 		int32 SizeChecks = 0;
 		int32 ConvertCalls = 0;
 		int32 ExportCalls = 0;
 
 		virtual FString GetLevelName() const override { return TEXT("BigLevel"); }
-		virtual bool Prepare(FMantleValidationResult& OutValidation, FString& OutMessage) override { return true; }
+		virtual bool Prepare(FMantleValidationResult& OutValidation, FString& OutMessage) override
+		{
+			OutValidation.Issues.Append(PrepareIssues);
+			return true;
+		}
 
 		virtual bool CheckPlaceSize(FMantlePlaceSizeCheck& OutCheck) override
 		{
@@ -558,6 +564,41 @@ bool FMantlePlaceInstancingRefusedBeforeUploadTest::RunTest(const FString& Param
 	TestEqual(TEXT("it is checked as well"), Fitting->SizeChecks, 1);
 	TestFalse(TEXT("and is not refused for its size"), Next->GetResult().Message.Contains(TEXT("too big")));
 	TestTrue(TEXT("with no thinning offered"), Next->GetResult().ThinOffer.IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantlePlaceInstancingOfferWithBudgetErrorTest,
+	"Mantle.Editor.PlaceInstancing.ThinOfferIsMadeWhenInstancesAreTheOnlyError",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantlePlaceInstancingOfferWithBudgetErrorTest::RunTest(const FString& Parameters)
+{
+	using namespace MantlePlaceInstancingTestPrivate;
+	double Now = 1000.0;
+	FMantleValidationIssue Budget{ EMantleIssueSeverity::Error, FString(), TEXT("This level has 106,964 instanced meshes."), FString(), true };
+
+	// The check's own instance-count error is the only one: the size check runs and the offer is made.
+	const TSharedRef<FSizedSource> Only = MakeShared<FSizedSource>();
+	Only->PrepareIssues.Add(Budget);
+	const TSharedRef<FMantlePlacePublishSession> OnlySession = MakeShared<FMantlePlacePublishSession>(
+		Only, MakeShared<FCountingTransport>(), /*bGoLive*/ true, FString(), [&Now] { return Now; });
+	OnlySession->Start();
+	TestEqual(TEXT("the size was checked"), Only->SizeChecks, 1);
+	TestEqual(TEXT("the publish stopped"), static_cast<int32>(OnlySession->GetPhase()), static_cast<int32>(EMantlePublishPhase::Failed));
+	TestFalse(TEXT("thinning is on offer"), OnlySession->GetResult().ThinOffer.IsEmpty());
+	TestEqual(TEXT("and the instance error is listed once, not twice"), OnlySession->GetResult().Validation.NumErrors(), 1);
+
+	// Another error beside it: no offer, since thinning would not make the place publishable.
+	const TSharedRef<FSizedSource> Both = MakeShared<FSizedSource>();
+	Both->PrepareIssues.Add(Budget);
+	Both->PrepareIssues.Add({ EMantleIssueSeverity::Error, TEXT("Lamp"), TEXT("has a scale of 0."), FString() });
+	const TSharedRef<FMantlePlacePublishSession> BothSession = MakeShared<FMantlePlacePublishSession>(
+		Both, MakeShared<FCountingTransport>(), /*bGoLive*/ true, FString(), [&Now] { return Now; });
+	BothSession->Start();
+	TestEqual(TEXT("the size was not checked"), Both->SizeChecks, 0);
+	TestEqual(TEXT("the publish stopped"), static_cast<int32>(BothSession->GetPhase()), static_cast<int32>(EMantlePublishPhase::Failed));
+	TestTrue(TEXT("with no thinning offered"), BothSession->GetResult().ThinOffer.IsEmpty());
 	return true;
 }
 

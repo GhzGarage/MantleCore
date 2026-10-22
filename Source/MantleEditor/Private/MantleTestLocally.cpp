@@ -725,7 +725,7 @@ bool FMantleTestLocally::ChooseClient(FString& OutMessage)
 	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
 	if (!DesktopPlatform)
 	{
-		OutMessage = TEXT("This editor cannot open a file picker; set Preview Client Executable in Project Settings > Plugins > Mantle instead.");
+		OutMessage = TEXT("This editor cannot open a file picker; set Preview Client Executable in Editor Preferences > Plugins > Mantle instead.");
 		return false;
 	}
 
