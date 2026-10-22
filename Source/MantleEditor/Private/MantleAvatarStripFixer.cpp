@@ -9,6 +9,7 @@
 #include "MetaHumanCharacter.h"
 #include "MantleMetaHumanHeadOnly.h"
 #include "MantleOutfitSections.h"
+#include "MantleUnriggedBody.h"
 #include "MantleRuntime.h"
 
 #include "AssetToolsModule.h"
@@ -701,6 +702,42 @@ void FMantleAvatarStripFixer::Analyze(const FMantleConvertContext& Context, TArr
 					Line.Action = bCantFit
 						? TEXT("Keeps the face and puts it on MetaHuman's own body at Mantle's default height; players shape that body with the Weight, Muscle, Chest and Hips sliders. The body mesh and the clothing merged into it are left out. Untick it and the conversion stops: a MetaHuman is never uploaded as it is.")
 						: TEXT("Keeps the face and puts it on MetaHuman's own body at Mantle's default height instead of its own body; players shape that body with the Weight, Muscle, Chest and Hips sliders.");
+				}
+				else
+				{
+					Line.bEnabled = false;
+					Line.Problem = TEXT("With the face kept: which body does it go on? Tick one");
+					Line.Action = Kind == KindFeminineBody ? TEXT("Feminine body.") : TEXT("Masculine body.");
+				}
+			}
+			continue;
+		}
+		// #50: a model with no skeleton has no body to strip, but it can keep its face too: the same three lines, the face line ticked
+		// when its body is covered (no bare skin, or clothing built into it). Its head is cut by height (MakeCleanHeadUnrigged).
+		if (FMantleUnriggedBody::IsUnriggedBody(Context, PartIndex))
+		{
+			const FMantleConvertPart& Unrigged = Context.Parts[PartIndex];
+			FMantleStripPlan UnriggedPlan;
+			FString PlanError;
+			UStaticMesh* StaticSource = Unrigged.StaticSource.Get();
+			USkeletalMesh* SkeletalSource = Unrigged.Original.Get();
+			const bool bRead = StaticSource ? FMantleAvatarStrip::PlanStatic(*StaticSource, UnriggedPlan, PlanError)
+				: SkeletalSource ? FMantleAvatarStrip::Plan(*SkeletalSource, nullptr, UnriggedPlan, PlanError) : false;
+			FString CoveredWhy;
+			const bool bCovered = bRead && FMantleMetaHumanHeadOnly::IsCovered(UnriggedPlan, CoveredWhy);
+			for (const FName Kind : { KindFaceOnly, KindMasculineBody, KindFeminineBody })
+			{
+				FMantleConvertFix& Line = OutFixes.AddDefaulted_GetRef();
+				Line.FixerId = GetId();
+				Line.PartIndex = PartIndex;
+				Line.Kind = Kind;
+				if (Kind == KindFaceOnly)
+				{
+					Line.bEnabled = bCovered;
+					Line.Problem = bCovered
+						? FString::Printf(TEXT("This model's body is covered (%s), so the body underneath can't be seen"), *CoveredWhy)
+						: FString(TEXT("Optional: keep only this model's face"));
+					Line.Action = TEXT("Keeps the face and puts it on MetaHuman's own body at Mantle's default height; players shape that body with the Weight, Muscle, Chest and Hips sliders. Everything below the face (clothing, armour, hair) is left out. Untick it to fit the whole model to a MetaHuman body instead, which needs bare skin from head to feet.");
 				}
 				else
 				{

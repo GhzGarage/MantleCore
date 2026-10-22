@@ -55,6 +55,11 @@ public:
 	static constexpr double HairBoneShare = 0.5;
 	/** Without eye slots, the eyes are taken this share of the way from the head joint to the top of the head. */
 	static constexpr double EyeShareAboveHeadJoint = 0.35;
+	/** Without a skeleton, the eyes are taken this share of the way from the neck to the top of the head. */
+	static constexpr double EyeShareAboveNeck = 0.55;
+	/** Without a skeleton, the neck is the narrowest cross-section between these shares of the standing height (above the feet). */
+	static constexpr double NeckSearchLowShare = 0.70;
+	static constexpr double NeckSearchHighShare = 0.93;
 	/** Skin slots must span at least this share of the mesh's height. */
 	static constexpr double CoveredSpanShare = 0.6;
 	/** Skin may start no higher than this share of the height above the lowest point. */
@@ -88,10 +93,26 @@ public:
 	static bool MakeCleanHead(USkeletalMesh& Source, double TargetHeightCm, const FString& Folder, const FString& Name, FMantleCleanHead& Out,
 		TArray<TWeakObjectPtr<UObject>>& Created, FString& OutError);
 	/**
-	 * Source's build (#50): its LOD 0 (bind pose) torso widths and depths at the chest, waist and hips, as shares of StandingHeightCm
+	 * A model with no skeleton (#50, unrigged input): where its neck is, for MakeCleanHeadUnrigged. Vertices Z up, facing +Y. The neck is the
+	 * narrowest cross-section (the run of vertices across the slab that holds the middle one) between NeckSearchLowShare and
+	 * NeckSearchHighShare of the height above the lowest vertex. OutJoint is the middle of that slice at its height (the head's pivot,
+	 * as a head joint stands in a skeleton), OutTop the highest vertex. False without vertices or a measurable slice. Pure (tested).
+	 */
+	static bool FindNeck(TConstArrayView<FVector3f> Vertices, FVector& OutJoint, double& OutTop);
+
+	/**
+	 * MakeCleanHead for a model with no skeleton: a static mesh (StaticSource) or a skeletal mesh with one bone (SkeletalSource). With no
+	 * head bone or skin weights the head is what is above FindNeck's neck; the eyes come from the eye slots, else EyeShareAboveNeck of the
+	 * way from the neck to the top; the rest (face slots, position cut, size, the static mesh made) is MakeCleanHead's.
+	 */
+	static bool MakeCleanHeadUnrigged(UStaticMesh* StaticSource, USkeletalMesh* SkeletalSource, double TargetHeightCm, const FString& Folder, const FString& Name,
+		FMantleCleanHead& Out, TArray<TWeakObjectPtr<UObject>>& Created, FString& OutError);
+
+	/**
+	 * Source's build (#50; a skeletal or static mesh): its LOD 0 (bind pose) torso widths and depths at the chest, waist and hips, as shares of StandingHeightCm
 	 * (a clean head's SourceHeightCm). Only bare skin is measured: the slots that read as skin and have no clothing built into them
 	 * (FMantleAvatarStrip::Plan, FMantleFusedClothing). A band with no bare torso (under a robe, armour or a jacket) stays unmeasured and
 	 * seeds nothing. False with why when the geometry can't be read or no band has bare skin to measure.
 	 */
-	static bool MeasureBuild(USkeletalMesh& Source, double StandingHeightCm, FMantleSilhouette& Out, FString& OutError);
+	static bool MeasureBuild(UObject& Source, double StandingHeightCm, FMantleSilhouette& Out, FString& OutError);
 };

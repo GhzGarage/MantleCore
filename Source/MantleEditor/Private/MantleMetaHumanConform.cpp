@@ -355,7 +355,9 @@ namespace MantleMetaHumanConformPrivate
 	{
 		FMantleConvertPart& Part = Context.Parts[Fix.PartIndex];
 		USkeletalMesh* Source = Part.Original.IsValid() ? Part.Original.Get() : Part.Mesh.Get();
-		if (!Source)
+		// A model with no skeleton (a static mesh, or a skeletal mesh with one bone) has its head cut by height, not by bone weights.
+		UStaticMesh* StaticSource = Part.bUnrigged ? Part.StaticSource.Get() : nullptr;
+		if (!Source && !StaticSource)
 		{
 			OutError = TEXT("the character's mesh is gone");
 			return false;
@@ -368,14 +370,16 @@ namespace MantleMetaHumanConformPrivate
 		TArray<TWeakObjectPtr<UObject>> Made;
 		FMantleCleanHead Clean;
 		const double TargetCm = FMantleAvatarHeight::TargetCm();
-		bool bDone = FMantleMetaHumanHeadOnly::MakeCleanHead(*Source, TargetCm, WorkFolder, Name, Clean, Made, OutError);
+		bool bDone = Part.bUnrigged
+			? FMantleMetaHumanHeadOnly::MakeCleanHeadUnrigged(StaticSource, StaticSource ? nullptr : Source, TargetCm, WorkFolder, Name, Clean, Made, OutError)
+			: FMantleMetaHumanHeadOnly::MakeCleanHead(*Source, TargetCm, WorkFolder, Name, Clean, Made, OutError);
 		FMantleMetaHumanConformResult Result;
 		if (bDone)
 		{
 			// The source's build seeds the body sliders; a build that can't be read leaves them at the default (said in the log).
 			FMantleSilhouette Build;
 			FString BuildError;
-			if (!FMantleMetaHumanHeadOnly::MeasureBuild(*Source, Clean.SourceHeightCm, Build, BuildError))
+			if (!FMantleMetaHumanHeadOnly::MeasureBuild(StaticSource ? static_cast<UObject&>(*StaticSource) : static_cast<UObject&>(*Source), Clean.SourceHeightCm, Build, BuildError))
 			{
 				UE_LOG(LogMantle, Warning, TEXT("MANTLE_CONVERT_FACEONLY %s: its build was not read (%s); the body sliders keep their defaults"), *Name, *BuildError);
 				Context.Notes.Add(FString::Printf(TEXT("%s: its build couldn't be seen (%s), so the body sliders start at MetaHuman's default."), *Part.Name, *BuildError));
