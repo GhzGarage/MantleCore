@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 
 class USkeletalMesh;
+class FMantleAvatarContract;
 
 /**
  * #54: where a creator put a flat picture on the converted MetaHuman body or face. The picture is projected onto the
@@ -45,6 +46,12 @@ struct MANTLEEDITOR_API FMantleOverlayBake
 		FVector3f Normal[3];
 		FVector2f UV[3];
 	};
+
+	/**
+	 * The skin a picture is placed on when the creator picks none: MetaHuman Creator's template body or face (the layout the painting guide and the
+	 * shared skin material use; a built reference face's imported UVs are not that layout), else Mantle's reference body or face. Null when neither is in the project.
+	 */
+	static USkeletalMesh* DefaultMesh(bool bFace, const FMantleAvatarContract* Contract);
 
 	/** The picture's strength at 0..1 across it: alpha when the picture has transparency, else brightness (white shows). */
 	static TArray<uint8> PictureStrength(TConstArrayView<FColor> Pixels, int32 Width, int32 Height);

@@ -1,9 +1,31 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleOverlayBake.h"
 
+#include "MantleCosmeticExport.h"
+#include "MantleOverlayGuide.h"
+#include "MantleReferenceBodies.h"
+
 #include "Engine/SkeletalMesh.h"
 #include "Rendering/SkeletalMeshLODModel.h"
 #include "Rendering/SkeletalMeshModel.h"
+
+USkeletalMesh* FMantleOverlayBake::DefaultMesh(const bool bFace, const FMantleAvatarContract* Contract)
+{
+	if (USkeletalMesh* Template = LoadObject<USkeletalMesh>(nullptr, bFace ? FMantleOverlayGuide::TemplateFacePath : FMantleOverlayGuide::TemplateBodyPath))
+	{
+		return Template;
+	}
+	if (bFace)
+	{
+		return FMantleReferenceBodies::GetFace();
+	}
+	if (!Contract)
+	{
+		return nullptr;
+	}
+	const TArray<USkeletalMesh*> References = FMantleReferenceBodies::FindBodies(*Contract, nullptr);
+	return References.IsEmpty() ? nullptr : References[0];
+}
 
 TArray<uint8> FMantleOverlayBake::PictureStrength(TConstArrayView<FColor> Pixels, const int32 Width, const int32 Height)
 {
@@ -30,23 +52,44 @@ TArray<uint8> FMantleOverlayBake::PictureStrength(TConstArrayView<FColor> Pixels
 	return Out;
 }
 
-bool FMantleOverlayBake::ReadMesh(const USkeletalMesh& Mesh, TArray<FTriangle>& OutTriangles, FString& OutError)
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleOverlayBakePrivate
+{
+	bool ReadLod(const USkeletalMesh& Mesh, int32 LodIndex, TArray<FMantleOverlayBake::FTriangle>& OutTriangles, FString& OutError);
+}
+
+bool MantleOverlayBakePrivate::ReadLod(const USkeletalMesh& Mesh, const int32 LodIndex, TArray<FMantleOverlayBake::FTriangle>& OutTriangles, FString& OutError)
 {
 	OutTriangles.Reset();
 	const FSkeletalMeshModel* Imported = Mesh.GetImportedModel();
-	if (!Imported || !Imported->LODModels.IsValidIndex(0))
+	if (!Imported || !Imported->LODModels.IsValidIndex(LodIndex))
 	{
-		OutError = FString::Printf(TEXT("%s has no LOD0 to read."), *Mesh.GetName());
+		OutError = FString::Printf(TEXT("%s has no LOD%d to read."), *Mesh.GetName(), LodIndex);
 		return false;
 	}
-	const FSkeletalMeshLODModel& Model = Imported->LODModels[0];
-	// Only the skin sections, as the painting guide reads them: a face mesh also carries eyes and teeth on their own UV layouts.
+	const FSkeletalMeshLODModel& Model = Imported->LODModels[LodIndex];
+	// Only the skin sections: a face mesh also carries eyes, teeth and lashes on their own UV layouts. The role comes from the slot name as the
+	// export and the worn preview read it (a built face names its skin slot something the guide's name match would not catch).
+	TSet<FString> SkinSlots;
+	{
+		const TArray<FString> Names = FMantleCosmeticExport::SectionMaterialNames(&Mesh, LodIndex);
+		const TArray<FString> Roles = FMantleCosmeticExport::DefaultSectionRoles(&Mesh, LodIndex);
+		for (int32 Index = 0; Index < Names.Num(); ++Index)
+		{
+			if (Roles.IsValidIndex(Index) && Roles[Index] == TEXT("skin"))
+			{
+				SkinSlots.Add(Names[Index]);
+			}
+		}
+	}
 	const TArray<FSkeletalMaterial>& Slots = Mesh.GetMaterials();
-	const auto IsSkin = [&Slots](const FSkelMeshSection& Section)
+	const auto IsSkin = [&Slots, &SkinSlots](const FSkelMeshSection& Section)
 	{
 		if (!Slots.IsValidIndex(Section.MaterialIndex)) return false;
-		const FString Name = Slots[Section.MaterialIndex].MaterialSlotName.ToString().ToLower();
-		return Name.Contains(TEXT("head")) || Name.Contains(TEXT("body")) || Name.Contains(TEXT("skin"));
+		const FString Name = Slots[Section.MaterialIndex].MaterialSlotName.ToString();
+		if (!SkinSlots.IsEmpty()) return SkinSlots.Contains(Name);
+		const FString Lower = Name.ToLower();
+		return Lower.Contains(TEXT("head")) || Lower.Contains(TEXT("body")) || Lower.Contains(TEXT("skin"));
 	};
 	const bool bAnySkin = Model.Sections.ContainsByPredicate(IsSkin);
 	for (const FSkelMeshSection& Section : Model.Sections)
@@ -57,7 +100,7 @@ bool FMantleOverlayBake::ReadMesh(const USkeletalMesh& Mesh, TArray<FTriangle>& 
 		}
 		for (uint32 TriangleIndex = 0; TriangleIndex < Section.NumTriangles; ++TriangleIndex)
 		{
-			FTriangle Out;
+			FMantleOverlayBake::FTriangle Out;
 			bool bValid = true;
 			for (int32 Corner = 0; Corner < 3 && bValid; ++Corner)
 			{
@@ -94,7 +137,42 @@ bool FMantleOverlayBake::ReadMesh(const USkeletalMesh& Mesh, TArray<FTriangle>& 
 	}
 	if (OutTriangles.IsEmpty())
 	{
-		OutError = FString::Printf(TEXT("%s has no triangles in LOD0 the editor can read."), *Mesh.GetName());
+		OutError = FString::Printf(TEXT("%s has no skin triangles in LOD%d the editor can read."), *Mesh.GetName(), LodIndex);
+		return false;
+	}
+	return true;
+}
+
+bool FMantleOverlayBake::ReadMesh(const USkeletalMesh& Mesh, TArray<FTriangle>& OutTriangles, FString& OutError)
+{
+	// The LOD with the most skin: LOD0 for a body. A built face can carry its fine skin on a later LOD (its LOD0 holds only a low-detail strip),
+	// and every LOD shares the one UV layout.
+	OutTriangles.Reset();
+	const FSkeletalMeshModel* Imported = Mesh.GetImportedModel();
+	const int32 LodCount = Imported ? Imported->LODModels.Num() : 0;
+	if (LodCount == 0)
+	{
+		OutError = FString::Printf(TEXT("%s has no LOD0 to read."), *Mesh.GetName());
+		return false;
+	}
+	FString FirstError;
+	for (int32 LodIndex = 0; LodIndex < LodCount; ++LodIndex)
+	{
+		TArray<FTriangle> Lod;
+		FString Error;
+		if (!MantleOverlayBakePrivate::ReadLod(Mesh, LodIndex, Lod, Error))
+		{
+			if (FirstError.IsEmpty()) FirstError = Error;
+			continue;
+		}
+		if (Lod.Num() > OutTriangles.Num())
+		{
+			OutTriangles = MoveTemp(Lod);
+		}
+	}
+	if (OutTriangles.IsEmpty())
+	{
+		OutError = FirstError;
 		return false;
 	}
 	return true;
@@ -248,8 +326,9 @@ int32 FMantleOverlayBake::Bake(TConstArrayView<FTriangle> Triangles, TConstArray
 			for (int32 X = 0; X < Size; ++X)
 			{
 				const float DX = (Height01(X + 1, Y) - Height01(X - 1, Y)) * 0.5f;
+				// Unreal reads green as +V, which runs down the image: a raised edge tilts its normal toward the lower height, so green falls where the height rises downward.
 				const float DY = (Height01(X, Y + 1) - Height01(X, Y - 1)) * 0.5f;
-				const FVector3f N = FVector3f(-DX * Placement.Relief * 4.f, DY * Placement.Relief * 4.f, 1.f).GetSafeNormal();
+				const FVector3f N = FVector3f(-DX * Placement.Relief * 4.f, -DY * Placement.Relief * 4.f, 1.f).GetSafeNormal();
 				(*OutNormal)[Y * Size + X] = FColor(
 					static_cast<uint8>(FMath::RoundToInt((N.X * 0.5f + 0.5f) * 255.f)),
 					static_cast<uint8>(FMath::RoundToInt((N.Y * 0.5f + 0.5f) * 255.f)),
