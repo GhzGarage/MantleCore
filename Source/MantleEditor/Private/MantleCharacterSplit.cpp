@@ -1,7 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleCharacterSplit.h"
 
-#include "MantleAvatarAssemblyFixer.h"
+#include "MantleAvatarConverter.h"
 #include "MantleAvatarStripFixer.h"
 #include "MantleCosmeticExport.h"
 #include "MantleRuntime.h"
