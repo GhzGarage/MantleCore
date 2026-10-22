@@ -210,6 +210,14 @@ private:
 	 * face with private dynamic instances of the shared skin materials, exactly the bytes that would upload.
 	 */
 	TSharedRef<SWidget> MakeOverlaySection();
+	/** #54: place a flat picture on the body or face with a gizmo instead of painting the mask; baked at Preview and Upload. */
+	TSharedRef<SWidget> MakeOverlayPlaceSection();
+	void BrowseOverlayPicture();
+	/** After the picture, the slot or the preview body/face changed: the viewport's mesh and the picture's shape follow. */
+	void RefreshOverlayPlacement();
+	TSharedPtr<class SMantleOverlayPlaceViewport> OverlayPlaceViewport;
+	FString OverlayPlaceStatus;
+	bool bOverlayPlaceStarted = false;
 	void BrowseOverlayPng(bool bNormal);
 	/** Asks where to save the overlay painting guide for the selected slot, then writes it. */
 	void SaveOverlayGuide();
