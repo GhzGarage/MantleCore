@@ -681,7 +681,7 @@ void FMantleCosmeticUploadSession::HandleDiff(const FMantleApiResult& Result)
 	TArray<FString> Unknown;
 	if (!FMantleApiClient::ParseDiffAssets(Result.Body, Known, Unknown))
 	{
-		Fail(TEXT("Mantle's answer about which files it has could not be read. Is the API address right (Project Settings > Plugins > Mantle)?"));
+		Fail(TEXT("Mantle's answer about which files it has could not be read. Is the API address right (Editor Preferences > Plugins > Mantle)?"));
 		return;
 	}
 	Attempts = 0;

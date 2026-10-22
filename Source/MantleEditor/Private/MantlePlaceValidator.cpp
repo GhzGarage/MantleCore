@@ -1059,6 +1059,16 @@ namespace
 			}
 		}
 		// #818: a decal with a negative scale publishes at the positive scale, unmirrored; a warning, not an error.
+		if (Type == EMantleEntityType::Text && FMantleActorDecompose::HasNegativeAxis(PublishedScale))
+		{
+			// Mantle draws text unmirrored at the positive scale; the export's coverage report says so too.
+			Result.Issues.Add(FMantleValidationIssue{
+				EMantleIssueSeverity::Warning,
+				Label,
+				FString::Printf(TEXT("has a scale of %s; its negative scale mirrors the text, and Mantle draws it unmirrored."), *DescribeVector(PublishedScale)),
+				TEXT("Fine if the mirroring does not matter. Otherwise use a positive scale.") });
+			PublishedScale = PublishedScale.GetAbs();
+		}
 		if (Type == EMantleEntityType::Decal && FMantleActorDecompose::HasNegativeAxis(PublishedScale))
 		{
 			Result.Issues.Add(FMantleValidationIssue{
@@ -1857,7 +1867,8 @@ FMantleValidationResult FMantlePlaceValidator::Validate(UWorld* World, const boo
 				FString::Printf(TEXT("This level has %lld instanced meshes (foliage, PCG output, instanced components); a place holds at most %d."),
 					InstanceTotal, FMantlePlaceLimits::MaxInstancesPerPlace),
 				bThinInstances ? TEXT("They are thinned evenly when the place is exported, foliage first; the coverage report says how many.")
-					: TEXT("Publish can thin them evenly and shows how many go before you choose it (Mantle.Publish -Thin=auto does it without the window), or split the world into more than one place.") });
+					: TEXT("Publish can thin them evenly and shows how many go before you choose it (Mantle.Publish -Thin=auto does it without the window), or split the world into more than one place."),
+				true });
 		}
 	}
 
