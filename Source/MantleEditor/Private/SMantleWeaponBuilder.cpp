@@ -2408,6 +2408,7 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakePartsAndSoundStep()
 
 TSharedRef<SWidget> SMantleWeaponBuilder::MakeThumbnailStep()
 {
+	using namespace MantleWeaponBuilderPanelPrivate;
 	return SNew(SScrollBox)
 		+ SScrollBox::Slot()
 		[
