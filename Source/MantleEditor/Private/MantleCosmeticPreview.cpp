@@ -22,6 +22,7 @@
 #include "MantleGarmentFitter.h"
 #include "MantleHairHeadFit.h"
 #include "MantleRuntimeTextureBuilder.h"
+#include "MantleSkinMask.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "MantleNeckSamples.h"
@@ -1438,6 +1439,8 @@ void FMantleCosmeticPreviewSession::StartFit(const FString& FitKey, const TShare
 		{
 			Field = FMantleCatalogGarmentFit::ComputeField(*Weighted, *WearerBody, Error, WearerFaceLOD);
 		}
+		// #877: the skin the garment hides on its own source body, kept for the body below (null: the wearer fallback).
+		TSharedPtr<const FMantleSkinMask> SkinMask;
 		if (Field.IsValid())
 		{
 			FMantleGarmentAuthoredClearance Authored;
@@ -1450,6 +1453,10 @@ void FMantleCosmeticPreviewSession::StartFit(const FString& FitKey, const TShare
 				{
 					// The client does the same: without its clearance the garment warps.
 					Notes.Add(FString::Printf(TEXT("no authored clearance (%s), so the garment warps without the restore"), *AuthoredError));
+				}
+				else
+				{
+					SkinMask = Authored.SkinMask;
 				}
 			}
 			TSharedRef<FMantleSkinnedMesh> Out = MakeShared<FMantleSkinnedMesh>();
@@ -1476,7 +1483,12 @@ void FMantleCosmeticPreviewSession::StartFit(const FString& FitKey, const TShare
 			Surfaces.Add(FMantleGarmentSurface(Fitted->LODs[0]));
 			FMantleDressedBody Body;
 			FString DressedError;
-			if (FMantleDressedBody::Compute(WearerBody->LODs[0], Surfaces, FMantleDressedBodyParams(), Body, &DressedError))
+			// #877: the client's rule (MantleAvatarGarments), with this garment's skin mask.
+			FMantleDressedMask Mask;
+			Mask.Mask = SkinMask.Get();
+			Mask.BorderCm = Garment.Slot == TEXT("footwear") ? FMantleSkinMask::FootwearBorderCm : FMantleSkinMask::DefaultBorderCm;
+			const FMantleDressedMask Masks[] = { Mask };
+			if (FMantleDressedBody::Compute(WearerBody->LODs[0], Surfaces, FMantleDressedBodyParams::SkinMaskDefaults(), Body, &DressedError, Masks))
 			{
 				Dressed = MakeShared<FMantleSkinnedMesh>(FMantleDressedBody::MakeDressedMesh(*WearerBody, Body));
 				Hidden = Body.Hidden;

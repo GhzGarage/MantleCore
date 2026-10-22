@@ -93,6 +93,13 @@ struct MANTLERUNTIME_API FMantleGarmentAuthoredClearance
 	TArray<FMantleGarmentClearance> LowerBody;
 	TArray<FMantleGarmentClearance> LowerFace;
 
+	/**
+	 * #877: the skin the garment hides on its own source body (FMantleSkinMask::Derive, run by
+	 * FMantleCatalogGarmentFit::DeriveAuthoredClearance); null when it could not be derived. Shared by every wearer:
+	 * FMantleDressedBody ANDs it with each wearer's own coverage.
+	 */
+	TSharedPtr<const struct FMantleSkinMask> SkinMask;
+
 	bool HasFace() const { return Face.Triangle.Num() > 0; }
 
 	/** The garment LODs this clearance covers: 1 plus the lower ones. */
