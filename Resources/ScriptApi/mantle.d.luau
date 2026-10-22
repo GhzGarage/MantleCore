@@ -441,7 +441,7 @@ declare extern type UiNode with
 	function Destroy(self): ()
 	--- Stop floating this node: it goes back to the screen's layout, as a top-level node. Returns false if it was not attached. Destroy the node instead to remove it altogether. (client only)
 	function DetachFromWorld(self): boolean
-	--- Name the action this node fires on Activated when clicked, tapped or confirmed. (client only)
+	--- Name the action this node's Activated carries when it is clicked, tapped or confirmed. Optional on a Button or Toggle (Activated then carries ""); a Prompt needs one. (client only)
 	function SetAction(self, action: string): boolean
 	--- Attach caption text shown underneath this node when the player has captions on. (client only)
 	function SetCaption(self, caption: string): boolean
@@ -971,8 +971,10 @@ declare extern type UIService with
 	function FormatNumber(self, value: number): string
 	--- Open one of the place's UI documents (a .rml file in its UI/ folder) on this player's screen. Mode is "modal" (the default: gameplay input stops and Back closes it), "overlay" (play goes on; the mouse works on its controls) or "hud" (drawn only, never takes input). An unknown path or mode is an error, and so is opening on a server. Example: local shop = UI:OpenDocument("UI/shop.rml") (client only)
 	function OpenDocument(self, path: string, mode: string?): UiDocument
-	--- Force the mouse cursor on or off regardless of whether an interactive node is visible right now. Nil goes back to automatic: shown only while a Button/Toggle/Prompt is visible, enabled and has an action. A gamepad-only panel can call SetCursorVisible(false) to keep working through focus/Accept without ever drawing a cursor. (client only)
+	--- Force the mouse cursor on or off regardless of whether an interactive node is visible right now. Nil goes back to automatic: shown only while a Button, a Toggle, or a Prompt with an action is visible and enabled. A gamepad-only panel can call SetCursorVisible(false) to keep working through focus/Accept without ever drawing a cursor. (client only)
 	function SetCursorVisible(self, visible: boolean?): ()
+	--- Choose what an interactive node (a Button, a Toggle, or a Prompt with an action) does to gameplay input while it is on screen. The cursor shows either way. "overlay" (the default): the keyboard and gamepad stay with the game, so the player keeps moving, and clicks on the UI's controls never reach the game. "modal": the UI takes keyboard and gamepad focus, and movement, attack, look and gamepad input stop until the last interactive node is gone, then come back exactly as they were; Esc still opens the game menu. One setting for all of this place's retained UI on the player's screen; a place's scripts share it, and it resets when they all stop. Any other mode is an error. Example: UI:SetInputMode("modal") (client only)
+	function SetInputMode(self, mode: string): ()
 	--- Show text in a named HUD line (same slot replaces the previous text; empty text clears it). (client only)
 	function SetText(self, slot: string, text: string): ()
 	--- Pop up a short message. (client only)
