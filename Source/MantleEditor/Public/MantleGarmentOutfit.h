@@ -72,13 +72,13 @@ struct MANTLEEDITOR_API FMantleGarmentOutfitResult
  *      conformed to the body in MetaHuman's A-pose at the default height. A body with no USkeleton gets one first, on a copy.
  *   2. Each garment is posed the way the body was: its vertices skinned by the A-pose clip's bones (by name; a garment bone
  *      the body lacks follows its parent), scaled by the same k, and moved by the offset that puts the posed body on the
- *      MetaHuman's skin (PoseMesh, AlignTranslation); with the body's feet and toes turned to the MetaHuman's first (Feet,
- *      Toes), so a high heel turns with its foot rather than being pressed onto a flat one. Then it follows the skin from the
- *      original body onto the MetaHuman (CarryWithSkin).
- *   3. Its skin weights are taken from the MetaHuman's merged body and head (TransferWeights), so it is on MetaHuman's bones.
+ *      MetaHuman's skin (PoseMesh, AlignTranslation), with the body's feet turned to the MetaHuman's first (Feet). The garment
+ *      keeps its shape: instead, the MetaHuman's skin is moved onto the original body's (CarryWithSkin, skin onto skin), and
+ *      that shape is the body the Outfit is made on, so Epic's resize takes the garment from the body it was made for.
+ *   3. Its skin weights are taken from that reshaped MetaHuman (TransferWeights), so it is on MetaHuman's bones.
  *   4. The MetaHuman's arms and legs are turned onto MetaHuman's own A-pose (TurnToTemplate), body and garment alike, and
  *      the garment is pushed out of the skin where it sits under it (FMantleAvatarRefit::PushOutOfBody, as the refit does).
- *   5. FMantleParametricOutfitAuthoring::Create makes the Outfit, its source body that turned body (saved as a copy).
+ *   5. FMantleParametricOutfitAuthoring::Create makes the Outfit, its source body that reshaped, turned body (saved as a copy).
  * The creator's assets are never modified; everything is saved under the output folder.
  */
 struct MANTLEEDITOR_API FMantleGarmentOutfit
@@ -195,16 +195,9 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 
 	/**
 	 * The foot bones, each with the child it points at: a character in high heels stands on tiptoe, and the MetaHuman made
-	 * of it on flat feet. Its feet are turned to the MetaHuman's (TurnToTemplate with these) before its clothing is carried
-	 * onto it, so a shoe turns with its foot instead of being pressed flat onto the MetaHuman's.
+	 * of it on flat feet. Its feet are turned to the MetaHuman's (TurnToTemplate with these) before its clothing is posed.
 	 */
 	static const TArray<TPair<FName, FName>>& Feet();
-
-	/** The toe bones (MetaHuman's names), each turned so its toes point as the MetaHuman's do (BoneSkinDirection). */
-	static const TArray<FName>& Toes();
-
-	/** Pure (tested): the direction from Joint to the middle of Mesh's vertices whose heaviest bone is Bone or one below it (unit); zero when it has none. */
-	static FVector3f BoneSkinDirection(const FMantleGlbMesh& Mesh, FName Bone, const FVector3f& Joint);
 
 	/** Component-space transforms of Reference's raw bones in their reference pose. */
 	static TArray<FTransform> ComponentPose(const FReferenceSkeleton& Reference);

@@ -374,28 +374,3 @@ bool FMantleGarmentOutfitSlotTest::RunTest(const FString& Parameters)
 }
 
 #endif
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FMantleGarmentOutfitBoneSkinDirectionTest,
-	"Mantle.Editor.GarmentOutfit.BoneSkinDirection",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-bool FMantleGarmentOutfitBoneSkinDirectionTest::RunTest(const FString& Parameters)
-{
-	// A foot, its ball and a toe bone below the ball: the toes are the ball's skin and the toe bone's together.
-	FMantleGlbMesh Mesh;
-	Mesh.Joints.SetNum(3);
-	Mesh.Joints[0].Name = TEXT("foot_l");
-	Mesh.Joints[1].Name = TEXT("ball_l");
-	Mesh.Joints[1].Parent = 0;
-	Mesh.Joints[2].Name = TEXT("bigtoe_01_l");
-	Mesh.Joints[2].Parent = 1;
-	Mesh.NumInfluences = 1;
-	Mesh.Positions = { FVector3f(0, 0, 10), FVector3f(4, 0, 0), FVector3f(8, 0, 0) };
-	Mesh.InfluenceJoints = { 0, 1, 2 };
-	Mesh.InfluenceWeights = { 1.0f, 1.0f, 1.0f };
-	const FVector3f Toes = FMantleGarmentOutfit::BoneSkinDirection(Mesh, TEXT("ball_l"), FVector3f(0, 0, 0));
-	TestTrue(TEXT("the toes point forward, past the toe bone's skin too"), Toes.Equals(FVector3f(1, 0, 0), 1.e-4f));
-	TestTrue(TEXT("a bone with no skin has no direction"), FMantleGarmentOutfit::BoneSkinDirection(Mesh, TEXT("calf_l"), FVector3f::ZeroVector).IsZero());
-	return true;
-}

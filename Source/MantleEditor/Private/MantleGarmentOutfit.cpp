@@ -34,6 +34,7 @@
 #include "Misc/ScopeExit.h"
 #include "PreviewScene.h"
 #include "Rendering/SkeletalMeshModel.h"
+#include "SkeletalMeshAttributes.h"
 #include "Rendering/SkeletalMeshLODModel.h"
 #include "MeshDescription.h"
 #include "Serialization/JsonReader.h"
@@ -392,56 +393,6 @@ const TArray<TPair<FName, FName>>& FMantleGarmentOutfit::Feet()
 {
 	static const TArray<TPair<FName, FName>> Pairs = { { FName(TEXT("foot_l")), FName(TEXT("ball_l")) }, { FName(TEXT("foot_r")), FName(TEXT("ball_r")) } };
 	return Pairs;
-}
-
-const TArray<FName>& FMantleGarmentOutfit::Toes()
-{
-	static const TArray<FName> Bones = { FName(TEXT("ball_l")), FName(TEXT("ball_r")) };
-	return Bones;
-}
-
-FVector3f FMantleGarmentOutfit::BoneSkinDirection(const FMantleGlbMesh& Mesh, const FName Bone, const FVector3f& Joint)
-{
-	const int32 Wanted = Mesh.Joints.IndexOfByPredicate([Bone](const FMantleGlbJoint& Entry) { return Entry.Name == Bone; });
-	if (Wanted == INDEX_NONE || Mesh.NumInfluences <= 0)
-	{
-		return FVector3f::ZeroVector;
-	}
-	// Bone and every bone below it (a skeleton with toe bones has its toes on them).
-	TBitArray<> Below(false, Mesh.Joints.Num());
-	for (int32 Joint = 0; Joint < Mesh.Joints.Num(); ++Joint)
-	{
-		for (int32 Up = Joint, Steps = 0; Up != INDEX_NONE && Mesh.Joints.IsValidIndex(Up) && Steps <= Mesh.Joints.Num(); Up = Mesh.Joints[Up].Parent, ++Steps)
-		{
-			if (Up == Wanted)
-			{
-				Below[Joint] = true;
-				break;
-			}
-		}
-	}
-	FVector3d Sum(0.0);
-	int32 Count = 0;
-	for (int32 Vertex = 0; Vertex < Mesh.Positions.Num(); ++Vertex)
-	{
-		int32 Best = INDEX_NONE;
-		float BestWeight = 0.0f;
-		for (int32 Slot = 0; Slot < Mesh.NumInfluences; ++Slot)
-		{
-			const int32 Index = Vertex * Mesh.NumInfluences + Slot;
-			if (Mesh.InfluenceWeights.IsValidIndex(Index) && Mesh.InfluenceWeights[Index] > BestWeight)
-			{
-				BestWeight = Mesh.InfluenceWeights[Index];
-				Best = Mesh.InfluenceJoints[Index];
-			}
-		}
-		if (Mesh.Joints.IsValidIndex(Best) && Below[Best])
-		{
-			Sum += FVector3d(Mesh.Positions[Vertex]);
-			++Count;
-		}
-	}
-	return Count > 0 ? (FVector3f(Sum / Count) - Joint).GetSafeNormal() : FVector3f::ZeroVector;
 }
 
 TArray<FTransform> FMantleGarmentOutfit::TurnToTemplate(const FReferenceSkeleton& Reference, TConstArrayView<FTransform> Component,
@@ -1151,37 +1102,6 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 	const TArray<FTransform> APose = TurnToTemplate(ConformedReference, ConformedPose, Template->GetRefSkeleton(), ComponentPose(Template->GetRefSkeleton()), TurnLines);
 	OutResult.APoseTurns = FString::Join(TurnLines, TEXT(", "));
 	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT A-pose turns (degrees): %s"), *OutResult.APoseTurns);
-	USkeletalMesh* Authoring = FMantleGarmentOutfit::SaveCopy(*Conformed, Folder, TEXT("SKM_") + BodyTag + TEXT("_OutfitBody"), Error,
-		[&ConformedPose, &APose](FMeshDescription& Description, FReferenceSkeleton& Reference, FString& OutEditError)
-		{
-			TArray<FName> Names;
-			TArray<FTransform> Local;
-			Local.SetNum(APose.Num());
-			for (int32 Bone = 0; Bone < APose.Num(); ++Bone)
-			{
-				Names.Add(Reference.GetBoneName(Bone));
-				const int32 Parent = Reference.GetRawParentIndex(Bone);
-				Local[Bone] = Parent >= 0 ? APose[Bone].GetRelativeTransform(APose[Parent]) : APose[Bone];
-			}
-			if (!FMantleAvatarRepose::RebindMeshDescription(Description, Names, ConformedPose, APose, Local, OutEditError))
-			{
-				return false;
-			}
-			FReferenceSkeletonModifier Modifier(Reference, nullptr);
-			for (int32 Bone = 0; Bone < Local.Num(); ++Bone)
-			{
-				Modifier.UpdateRefPoseTransform(Bone, Local[Bone]);
-			}
-			return true;
-		});
-	FMantleSkinnedMeshLOD AuthoringSurface;
-	if (!Authoring || !FMantleNailSeating::ReadBodySurface(*Authoring, 0, AuthoringSurface, Error))
-	{
-		OutRefusalCode = TEXT("no_metahuman");
-		OutRefusal = FString::Printf(TEXT("The MetaHuman could not be turned onto MetaHuman's A-pose: %s."), *Error);
-		return false;
-	}
-	OutResult.AuthoringBody = Authoring->GetPathName();
 	FMantleGlbMesh MetaHumanSkin;
 	TArray<UMaterialInterface*> SkinMaterials;
 	int32 Triangles = 0;
@@ -1236,9 +1156,8 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT k=%.5f offset=%s body gap %.3f cm"), OutResult.InputScale, *OutResult.Offset.ToString(), OutResult.BodyGapCm);
 	OutResult.Notes.Add(FString::Printf(TEXT("The MetaHuman's skin is on average %.2f cm from the original body's (after the A-pose and the scale %.4f)."), OutResult.BodyGapCm, OutResult.InputScale));
 
-	// Its feet turned to the MetaHuman's (a character in heels stands on tiptoe, the MetaHuman on flat feet), then its toes
-	// to the MetaHuman's: its clothing is posed so, and a shoe turns with its foot instead of being pressed flat onto the
-	// MetaHuman's. What a heel then reaches below the MetaHuman's sole is measured per piece (HeelCm).
+	// Its feet turned to the MetaHuman's (a character in heels stands on tiptoe, the MetaHuman on flat feet): its clothing is
+	// posed so. What a heel then reaches below the MetaHuman's sole is measured per piece (HeelCm).
 	{
 		const FReferenceSkeleton& BodyReference = Work.SkinOnly->GetRefSkeleton();
 		TArray<FTransform> Clip;
@@ -1262,34 +1181,7 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 			return FMantleCosmeticExport::ReadSkeletalMesh(Work.SkinOnly.Get(), 0, PosedBody, BodyMaterials, Triangles, Error)
 				&& PoseMesh(PosedBody, GarmentPosedJoints(PosedBody.Joints, ClipBones, Matched), Work.InputScale, Error);
 		};
-		bool bPosed = Repose();
-		for (const FName Toe : Toes())
-		{
-			const int32 Bone = BodyReference.FindRawBoneIndex(Toe);
-			const int32 TemplateBone = ConformedReference.FindRawBoneIndex(Toe);
-			if (!bPosed || !Clip.IsValidIndex(Bone) || !ConformedPose.IsValidIndex(TemplateBone))
-			{
-				continue;
-			}
-			const FVector Joint = Clip[Bone].GetLocation();
-			const FVector3f Now = BoneSkinDirection(PosedBody, Toe, FVector3f(Joint * Work.InputScale));
-			const FVector3f Wanted = BoneSkinDirection(MetaHumanSkin, Toe, FVector3f(ConformedPose[TemplateBone].GetLocation()));
-			if (Now.IsNearlyZero() || Wanted.IsNearlyZero())
-			{
-				continue;
-			}
-			const FQuat Turn = FQuat::FindBetweenNormals(FVector(Now), FVector(Wanted));
-			FootLines.Add(FString::Printf(TEXT("%s %.1f"), *Toe.ToString(), FMath::RadiansToDegrees(Turn.GetAngle())));
-			for (int32 Other = 0; Other < Clip.Num(); ++Other)
-			{
-				if (Other == Bone || BodyReference.BoneIsChildOf(Other, Bone))
-				{
-					Clip[Other].SetRotation((Turn * Clip[Other].GetRotation()).GetNormalized());
-					Clip[Other].SetLocation(Joint + Turn.RotateVector(Clip[Other].GetLocation() - Joint));
-				}
-			}
-			bPosed = Repose();
-		}
+		const bool bPosed = Repose();
 		if (!bPosed)
 		{
 			OutRefusalCode = TEXT("pose_failed");
@@ -1351,6 +1243,89 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		}
 	}
 
+	// The MetaHuman's skin moved onto the original body (CarryWithSkin, skin onto skin), as the body the Outfit is made on: the
+	// clothing then stays as it was made, sitting on the body it was made for, and the resize that fits an Outfit onto another
+	// body (Epic's, smooth) takes it from that shape to theirs. Moving the clothing onto the MetaHuman's shape instead crushed
+	// it where the MetaHuman is smaller (a corset's cups on a flatter bust).
+	TArray<FVector3f> Wrapped = TwinSurface.Positions;
+	{
+		double WrapCm = 0.0;
+		if (!CarryWithSkin(Wrapped, TwinSurface, OriginalSurface, WrapCm, Error))
+		{
+			OutRefusalCode = TEXT("no_metahuman");
+			OutRefusal = FString::Printf(TEXT("The MetaHuman could not be shaped like the original body: %s."), *Error);
+			return false;
+		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT the MetaHuman shaped like the original body (%.2f cm on average): %s"), WrapCm,
+			*DescribeClearance(Wrapped, OriginalSurface));
+	}
+	FMantleGlbMesh WrappedSkin = MetaHumanSkin;
+	for (int32 Vertex = 0; Vertex < WrappedSkin.Positions.Num(); ++Vertex)
+	{
+		WrappedSkin.Positions[Vertex] = Wrapped[TwinPointOf[Vertex]];
+	}
+	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_SHAPE the MetaHuman shaped like the original body: %s"), *DescribeShapeChange(MetaHumanSkin.Positions, WrappedSkin));
+	FMantleSkinnedMeshLOD WrappedSurface = TwinSurface;
+	WrappedSurface.Positions = Wrapped;
+	int32 Unmatched = 0;
+	USkeletalMesh* Authoring = FMantleGarmentOutfit::SaveCopy(*Conformed, Folder, TEXT("SKM_") + BodyTag + TEXT("_OutfitBody"), Error,
+		[&ConformedPose, &APose, &TwinSurface, &Wrapped, &Unmatched](FMeshDescription& Description, FReferenceSkeleton& Reference, FString& OutEditError)
+		{
+			// The MetaHuman's skin on the original body's shape (Wrapped, by welded point), then turned onto the A-pose.
+			TMap<FVector3f, int32> PointAt;
+			for (int32 Point = 0; Point < TwinSurface.Positions.Num(); ++Point)
+			{
+				PointAt.Add(TwinSurface.Positions[Point], Point);
+			}
+			const FGarmentPointGrid Grid(TwinSurface.Positions, 1.0);
+			TArray<TPair<double, int32>> Found;
+			FSkeletalMeshAttributes Attributes(Description);
+			TVertexAttributesRef<FVector3f> Positions = Attributes.GetVertexPositions();
+			for (const FVertexID Vertex : Description.Vertices().GetElementIDs())
+			{
+				const FVector3f Position = Positions.Get(Vertex);
+				const int32* Point = PointAt.Find(Position);
+				if (!Point)
+				{
+					++Unmatched;
+					Grid.Nearest(Position, 1, 1.0, Found);
+				}
+				const int32 Index = Point ? *Point : (Found.Num() > 0 ? Found[0].Value : INDEX_NONE);
+				if (Wrapped.IsValidIndex(Index))
+				{
+					Positions.Set(Vertex, Position + Wrapped[Index] - TwinSurface.Positions[Index]);
+				}
+			}
+			TArray<FName> Names;
+			TArray<FTransform> Local;
+			Local.SetNum(APose.Num());
+			for (int32 Bone = 0; Bone < APose.Num(); ++Bone)
+			{
+				Names.Add(Reference.GetBoneName(Bone));
+				const int32 Parent = Reference.GetRawParentIndex(Bone);
+				Local[Bone] = Parent >= 0 ? APose[Bone].GetRelativeTransform(APose[Parent]) : APose[Bone];
+			}
+			if (!FMantleAvatarRepose::RebindMeshDescription(Description, Names, ConformedPose, APose, Local, OutEditError))
+			{
+				return false;
+			}
+			FReferenceSkeletonModifier Modifier(Reference, nullptr);
+			for (int32 Bone = 0; Bone < Local.Num(); ++Bone)
+			{
+				Modifier.UpdateRefPoseTransform(Bone, Local[Bone]);
+			}
+			return true;
+		});
+	FMantleSkinnedMeshLOD AuthoringSurface;
+	if (!Authoring || !FMantleNailSeating::ReadBodySurface(*Authoring, 0, AuthoringSurface, Error))
+	{
+		OutRefusalCode = TEXT("no_metahuman");
+		OutRefusal = FString::Printf(TEXT("The MetaHuman could not be turned onto MetaHuman's A-pose: %s."), *Error);
+		return false;
+	}
+	OutResult.AuthoringBody = Authoring->GetPathName();
+	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT Outfit body %s: %d vertices not found on the MetaHuman's skin"), *OutResult.AuthoringBody, Unmatched);
+
 	// 3 and 4, per garment.
 	for (USkeletalMesh* Garment : Garments)
 	{
@@ -1385,18 +1360,8 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		}
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the original body: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, OriginalSurface));
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman as posed: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, TwinSurface));
-		// The MetaHuman is the body's shape only roughly (a fuller bust, a rounder seat): the garment follows its skin onto it.
-		const TArray<FVector3f> AsPosed = Geometry->Positions;
-		double CarriedCm = 0.0;
-		if (!CarryWithSkin(Geometry->Positions, OriginalSurface, TwinSurface, CarriedCm, Error))
-		{
-			Piece.Error = Error;
-			continue;
-		}
-		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s carried with the skin (%.2f cm on average): %s"), *Garment->GetName(), CarriedCm,
-			*DescribeClearance(Geometry->Positions, TwinSurface));
-		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_SHAPE %s carried with the skin: %s"), *Garment->GetName(), *DescribeShapeChange(AsPosed, *Geometry));
-		if (!TransferWeights(*Geometry, MetaHumanSkin, Piece.FarVertices, Piece.MeanSkinCm, Error))
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman shaped like the original body: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, WrappedSurface));
+		if (!TransferWeights(*Geometry, WrappedSkin, Piece.FarVertices, Piece.MeanSkinCm, Error))
 		{
 			Piece.Error = Error;
 			continue;
