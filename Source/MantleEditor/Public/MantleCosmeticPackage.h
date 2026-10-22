@@ -5,6 +5,7 @@
 #include "MantleApiClient.h"
 #include "MantleCosmeticValidation.h"
 #include "MantleHairFitReport.h"
+#include "MantleHairRoute.h"
 #include "MantleNativeEye.h"
 #include "MantleNativeHair.h"
 #include "MantleClothingColor.h"
@@ -237,6 +238,9 @@ struct MANTLEEDITOR_API FMantleCosmeticPackage
 	bool bHairHeadFitted = false;
 	FMantleHairFitReport::FResult HairHeadFit;
 	FMantleHairFitMeshes HairHeadFitMeshes;
+	/** #52, local only: which route this hair took and the words for it; set for hair items. */
+	bool bHasHairRoute = false;
+	FMantleHairRoute::FResult HairRoute;
 
 	bool HasErrors() const { return FMantleCosmeticChecks::HasErrors(Issues); }
 
