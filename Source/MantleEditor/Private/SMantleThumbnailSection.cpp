@@ -2,6 +2,14 @@
 #include "SMantleThumbnailSection.h"
 
 #include "DesktopPlatformModule.h"
+#include "HAL/IConsoleManager.h"
+#include "MantlePng.h"
+#include "MantleRuntime.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Misc/FileHelper.h"
+#include "RenderingThread.h"
+#include "Slate/WidgetRenderer.h"
+#include "TextureResource.h"
 #include "Engine/Texture2D.h"
 #include "Framework/Application/SlateApplication.h"
 #include "IDesktopPlatform.h"
@@ -261,6 +269,93 @@ void SMantleThumbnailSection::Refresh()
 			FVector2f(Target.Width, Target.Height), Bytes);
 	}
 	Invalidate(EInvalidateWidgetReason::Layout | EInvalidateWidgetReason::Paint);
+}
+
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleThumbnailSectionDevShot
+{
+	/** Widget rendered offscreen at Width over the editor's panel grey, as a PNG (the same way as the Cosmetics panel's dev shots). */
+	bool Save(const TSharedRef<SWidget>& Widget, const FString& File, const float Width, const float MaxHeight)
+	{
+		FWidgetRenderer Renderer(true, false);
+		UTextureRenderTarget2D* Target = FWidgetRenderer::CreateTargetFor(FVector2D(Width, MaxHeight), TF_Bilinear, true);
+		Target->AddToRoot();
+		Renderer.DrawWidget(Target, Widget, FVector2D(Width, MaxHeight), 0.0f);
+		Widget->SlatePrepass(1.0f);
+		const float Height = FMath::Clamp(FMath::CeilToFloat(Widget->GetDesiredSize().Y) + 16.0f, 64.0f, MaxHeight);
+		Target->ResizeTarget(FMath::CeilToInt(Width), FMath::CeilToInt(Height));
+		Renderer.DrawWidget(Target, Widget, FVector2D(Width, Height), 0.0f);
+		FlushRenderingCommands();
+		TArray<FColor> Pixels;
+		FTextureRenderTargetResource* Resource = Target->GameThread_GetRenderTargetResource();
+		const bool bRead = Resource && Resource->ReadPixels(Pixels);
+		Target->RemoveFromRoot();
+		if (!bRead)
+		{
+			return false;
+		}
+		const FColor Back(26, 26, 26);
+		for (FColor& Pixel : Pixels)
+		{
+			const float Alpha = Pixel.A / 255.0f;
+			Pixel = FColor(FMath::RoundToInt(Pixel.R * Alpha + Back.R * (1 - Alpha)), FMath::RoundToInt(Pixel.G * Alpha + Back.G * (1 - Alpha)),
+				FMath::RoundToInt(Pixel.B * Alpha + Back.B * (1 - Alpha)), 255);
+		}
+		const bool bSaved = FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(Target->SizeX, Target->SizeY, Pixels), *File);
+		UE_LOG(LogMantle, Display, TEXT("MANTLE_THUMBNAIL_SHOT %s %dx%d %s"), *File, Target->SizeX, Target->SizeY, bSaved ? TEXT("saved") : TEXT("not saved"));
+		return bSaved;
+	}
+
+	void Run(const TArray<FString>& Args)
+	{
+		if (Args.Num() < 2)
+		{
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_THUMBNAIL_SHOT usage: Mantle.Dev.ThumbnailSectionShot <Directory> <Sample.png>"));
+			return;
+		}
+		// The sample stands in for the kind's own render in Automatic and Choose the angle; the catalog thumbnail capture draws the real ones.
+		FMantleThumbnailChoice Sample;
+		Sample.Mode = EMantleThumbnailMode::Custom;
+		Sample.ImageFile.FilePath = Args[1];
+		TArray<FColor> SamplePixels;
+		int32 SampleWidth = 0, SampleHeight = 0;
+		FString Error;
+		if (!FMantleThumbnailResolver::LoadCustom(Sample, SamplePixels, SampleWidth, SampleHeight, Error))
+		{
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_THUMBNAIL_SHOT sample: %s"), *Error);
+			return;
+		}
+		const FMantleThumbnailResolver::FRender Render = [&SamplePixels, SampleWidth, SampleHeight](const FMantleThumbnailChoice&, TArray<FColor>& Out, int32& W, int32& H, FString&)
+		{
+			Out = SamplePixels;
+			W = SampleWidth;
+			H = SampleHeight;
+			return true;
+		};
+		struct FShot { const TCHAR* Name; FMantleThumbnailTarget Target; EMantleThumbnailMode Mode; };
+		const FShot Shots[] = {
+			{ TEXT("square_automatic"), FMantleThumbnailTarget::Square(), EMantleThumbnailMode::Automatic },
+			{ TEXT("square_angle"), FMantleThumbnailTarget::Square(), EMantleThumbnailMode::Angle },
+			{ TEXT("square_custom"), FMantleThumbnailTarget::Square(), EMantleThumbnailMode::Custom },
+			{ TEXT("wide_custom"), FMantleThumbnailTarget::Wide(), EMantleThumbnailMode::Custom },
+		};
+		for (const FShot& Shot : Shots)
+		{
+			FMantleThumbnailChoice Choice = Sample;
+			Choice.Mode = Shot.Mode;
+			const TSharedRef<SMantleThumbnailSection> Section = SNew(SMantleThumbnailSection)
+				.Target(Shot.Target)
+				.Choice(Choice)
+				.Render(Render)
+				.OnUseView_Lambda([]() { return FText::GetEmpty(); });
+			Save(SNew(SBox).Padding(12.0f)[Section], FPaths::Combine(Args[0], FString::Printf(TEXT("thumbnail_section_%s.png"), Shot.Name)), 560.0f, 1400.0f);
+		}
+	}
+
+	FAutoConsoleCommand Command(
+		TEXT("Mantle.Dev.ThumbnailSectionShot"),
+		TEXT("Mantle.Dev.ThumbnailSectionShot <Directory> <Sample.png>: renders the shared Thumbnail section offscreen in each choice, square and wide, using the sample picture. Uploads nothing."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&Run));
 }
 
 #undef LOCTEXT_NAMESPACE
