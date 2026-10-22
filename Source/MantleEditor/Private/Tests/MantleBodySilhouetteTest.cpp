@@ -16,9 +16,9 @@ namespace MantleBodySilhouetteTestPrivate
 		TArray<FVector3f> Out;
 		for (double Z = 0.0; Z <= 170.0; Z += 1.0)
 		{
-			for (int32 Step = 0; Step < 64; ++Step)
+			for (int32 Step = 0; Step < 256; ++Step)
 			{
-				const double Angle = Step * UE_TWO_PI / 64.0;
+				const double Angle = Step * UE_TWO_PI / 256.0;
 				Out.Add(FVector3f(HalfX * FMath::Cos(Angle), HalfY * FMath::Sin(Angle), Z));
 				if (bArms)
 				{
