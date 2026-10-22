@@ -23,11 +23,11 @@ namespace MantleSkinMaskTestPrivate
 	constexpr float WindowHalfCm = 2.0f;
 
 	/**
-	 * A tube around Z of Radius from Z0 to Z1 in Rings rings of Around vertices, normals and winding outward, turned by
-	 * Phase steps around. A quad whose centre Skip(theta, z) takes is left out.
+	 * A tube around Z of Radius from Z0 to Z1 in Rings rings of Around vertices, normals and winding outward. A quad
+	 * whose centre Skip(theta, z) takes is left out.
 	 */
 	void AddTube(TArray<FVector3f>& Positions, TArray<FVector3f>& Normals, TArray<uint32>& Indices, const float Radius, const float Z0, const float Z1,
-		const int32 Rings, const int32 InAround, TFunctionRef<bool(float, float)> Skip, const float Phase = 0.0f)
+		const int32 Rings, const int32 InAround, TFunctionRef<bool(float, float)> Skip)
 	{
 		const uint32 Base = Positions.Num();
 		for (int32 Ring = 0; Ring < Rings; ++Ring)
@@ -35,7 +35,7 @@ namespace MantleSkinMaskTestPrivate
 			const float Z = Z0 + (Z1 - Z0) * Ring / (Rings - 1);
 			for (int32 Step = 0; Step < InAround; ++Step)
 			{
-				const float Theta = 2.0f * PI * (Step + Phase) / InAround;
+				const float Theta = 2.0f * PI * Step / InAround;
 				Positions.Add(FVector3f(Radius * FMath::Cos(Theta), Radius * FMath::Sin(Theta), Z));
 				Normals.Add(FVector3f(FMath::Cos(Theta), FMath::Sin(Theta), 0.0f));
 			}
@@ -44,7 +44,7 @@ namespace MantleSkinMaskTestPrivate
 		{
 			for (int32 Step = 0; Step < InAround; ++Step)
 			{
-				const float Theta = FMath::UnwindRadians(2.0f * PI * (Step + Phase + 0.5f) / InAround);
+				const float Theta = FMath::UnwindRadians(2.0f * PI * (Step + 0.5f) / InAround);
 				const float Z = Z0 + (Z1 - Z0) * (Ring + 0.5f) / (Rings - 1);
 				if (Skip(Theta, Z))
 				{
@@ -92,12 +92,7 @@ namespace MantleSkinMaskTestPrivate
 		return Body;
 	}
 
-	/**
-	 * A sleeve GapCm off the arm over |z| <= SleeveHalfLength, open at both ends; bWindow cuts the window. Turned half a
-	 * step around against the arm: with every arm vertex straight under a sleeve vertex, the one-ray coverage's normal
-	 * ray passes exactly through the corner six sleeve triangles share and slips between them to rounding at about 1
-	 * vertex in 40, which a modelled garment never lines up to do (each slip keeps a 2.5 cm patch of skin).
-	 */
+	/** A sleeve GapCm off the arm over |z| <= SleeveHalfLength, open at both ends; bWindow cuts the window. */
 	struct FSleeve
 	{
 		TArray<FVector3f> Positions;
@@ -111,7 +106,7 @@ namespace MantleSkinMaskTestPrivate
 			AddTube(Positions, Normals, Indices, Radius, -SleeveHalfLength, SleeveHalfLength, 41, Around, [bWindow, HalfAngle](const float Theta, const float Z)
 			{
 				return bWindow && FMath::Abs(Theta) < HalfAngle && FMath::Abs(Z) < WindowHalfCm;
-			}, 0.5f);
+			});
 		}
 
 		FMantleGarmentSurface Surface() const { return FMantleGarmentSurface(Positions, Normals, Indices); }
