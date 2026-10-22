@@ -112,6 +112,13 @@ public:
 		const FString& Name, FString& OutError);
 
 	/**
+	 * #55: a copy of Mesh's LOD 0 with only the triangles of the material slots in KeepSlots (a piece of clothing cut from the
+	 * character's own mesh; weights and materials kept), written into a new skeletal mesh Folder/Name. Null with why. The new
+	 * package is dirty, not saved; Mesh is never modified.
+	 */
+	static USkeletalMesh* WriteSlots(USkeletalMesh& Mesh, const TSet<int32>& KeepSlots, const FString& Folder, const FString& Name, FString& OutError);
+
+	/**
 	 * Epic's conform reader (UMetaHumanCharacterEditorSubsystem::GetMeshDataForConforming) against the mesh as it renders
 	 * (LOD 0 render vertices), nearest point both ways: true when both are within InputMatchCm. OutLine: "INPUTCHECK
 	 * <mesh>: N verts M tris | conform->render max X cm | render->conform max Y cm: MATCH". OutVertices and

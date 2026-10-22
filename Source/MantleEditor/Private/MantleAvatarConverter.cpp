@@ -443,6 +443,13 @@ bool FMantleAvatarConverter::MakeContext(UObject* Selection, const FMantleConver
 	{
 		TArray<FString> NotOffered;
 		FMantleGarmentOutfit::FindGarments(*Mesh, OutContext.Garments, NotOffered);
+		// #55: the clothing in the character's own sections, cut into pieces when the Outfits are made.
+		FString SplitNote;
+		FMantleGarmentOutfit::FindSectionGarments(*Mesh, OutContext.Garments, &SplitNote);
+		if (!SplitNote.IsEmpty())
+		{
+			OutContext.Notes.Add(SplitNote);
+		}
 		if (NotOffered.Num() > 0)
 		{
 			OutContext.Notes.Add(FString::Printf(TEXT("Only tops, bottoms and footwear become Outfits; not offered: %s."), *FString::Join(NotOffered, TEXT(", "))));
@@ -1126,6 +1133,16 @@ TSharedRef<FJsonObject> FMantleAvatarConverter::ToJson(const FMantleConvertConte
 		GarmentObject->SetStringField(TEXT("slot"), Garment.Slot);
 		GarmentObject->SetStringField(TEXT("mesh"), Garment.Mesh.IsValid() ? Garment.Mesh->GetPathName() : FString());
 		GarmentObject->SetStringField(TEXT("why"), Garment.Why);
+		if (Garment.SourceMesh.IsValid())
+		{
+			GarmentObject->SetStringField(TEXT("pieceOf"), Garment.SourceMesh->GetPathName());
+			TArray<TSharedPtr<FJsonValue>> Slots;
+			for (const int32 Slot : Garment.Sections)
+			{
+				Slots.Add(MakeShared<FJsonValueNumber>(Slot));
+			}
+			GarmentObject->SetArrayField(TEXT("materialSlots"), Slots);
+		}
 		Garments.Add(MakeShared<FJsonValueObject>(GarmentObject));
 	}
 	Object->SetArrayField(TEXT("garments"), Garments);

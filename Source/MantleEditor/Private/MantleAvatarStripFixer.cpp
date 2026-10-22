@@ -221,6 +221,45 @@ namespace MantleAvatarStripPrivate
 		}
 	}
 
+	/** A copy of Mesh (weights and materials kept) in Folder/Name whose LOD 0 source model is Out. Null with why; the copy with why when only the write failed. */
+	USkeletalMesh* StripWriteCopy(USkeletalMesh& Mesh, UDynamicMesh* Out, const FString& Folder, const FString& Name, const TCHAR* What, FString& OutError)
+	{
+	// A copy of the body takes the skin-only geometry (its LOD 0 source model; weights and materials kept).
+	if (Folder.IsEmpty() || !FPackageName::IsValidLongPackageName(Folder, /*bIncludeReadOnlyRoots*/ true))
+	{
+		OutError = FString::Printf(TEXT("\"%s\" is not a folder the copy can go in"), *Folder);
+		return nullptr;
+	}
+	TArray<USkinnedAsset*> Compiling = { &Mesh };
+	FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+	FString PackageName;
+	FString AssetName;
+	AssetTools.CreateUniqueAssetName(Folder / Name, FString(), PackageName, AssetName);
+	USkeletalMesh* Copy = Cast<USkeletalMesh>(AssetTools.DuplicateAsset(AssetName, FPackageName::GetLongPackagePath(PackageName), &Mesh));
+	if (!Copy)
+	{
+		OutError = FString::Printf(TEXT("%s could not be copied to %s"), *Mesh.GetName(), *Folder);
+		return nullptr;
+	}
+	Compiling = { Copy };
+	FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
+	FGeometryScriptCopyMeshToAssetOptions Options;
+	Options.bEnableRecomputeNormals = false;
+	Options.bEnableRecomputeTangents = false;
+	FGeometryScriptMeshWriteLOD Write;
+	Write.LODIndex = 0;
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+	UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshToSkeletalMesh(Out, Copy, Options, Write, Outcome);
+	FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
+	if (Outcome != EGeometryScriptOutcomePins::Success)
+	{
+		OutError = FString::Printf(TEXT("the geometry could not be written into %s"), *Copy->GetName());
+		return Copy; // The caller records and discards it.
+	}
+		return Copy;
+	}
+
 	/** The head slot's pieces, the largest first (stable on a tie), each held. */
 	bool StripHeadPieces(USkeletalMesh& Mesh, const int32 HeadSlot, TArray<TStrongObjectPtr<UDynamicMesh>>& OutPieces, FString& OutError)
 	{
@@ -508,41 +547,36 @@ USkeletalMesh* FMantleAvatarStrip::WriteSkinOnly(USkeletalMesh& Mesh, const TSet
 		return nullptr;
 	}
 
-	// A copy of the body takes the skin-only geometry (its LOD 0 source model; weights and materials kept).
-	if (Folder.IsEmpty() || !FPackageName::IsValidLongPackageName(Folder, /*bIncludeReadOnlyRoots*/ true))
+	USkeletalMesh* Copy = StripWriteCopy(Mesh, Out, Folder, Name, TEXT("skin-only"), OutError);
+	if (!Copy || !OutError.IsEmpty())
 	{
-		OutError = FString::Printf(TEXT("\"%s\" is not a folder the skin-only copy can go in"), *Folder);
-		return nullptr;
-	}
-	TArray<USkinnedAsset*> Compiling = { &Mesh };
-	FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
-	FString PackageName;
-	FString AssetName;
-	AssetTools.CreateUniqueAssetName(Folder / Name, FString(), PackageName, AssetName);
-	USkeletalMesh* Copy = Cast<USkeletalMesh>(AssetTools.DuplicateAsset(AssetName, FPackageName::GetLongPackagePath(PackageName), &Mesh));
-	if (!Copy)
-	{
-		OutError = FString::Printf(TEXT("%s could not be copied to %s"), *Mesh.GetName(), *Folder);
-		return nullptr;
-	}
-	Compiling = { Copy };
-	FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
-	FGeometryScriptCopyMeshToAssetOptions Options;
-	Options.bEnableRecomputeNormals = false;
-	Options.bEnableRecomputeTangents = false;
-	FGeometryScriptMeshWriteLOD Write;
-	Write.LODIndex = 0;
-	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
-	UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshToSkeletalMesh(Out, Copy, Options, Write, Outcome);
-	FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
-	if (Outcome != EGeometryScriptOutcomePins::Success)
-	{
-		OutError = FString::Printf(TEXT("the skin-only geometry could not be written into %s"), *Copy->GetName());
-		return Copy; // The caller records and discards it.
+		return Copy;
 	}
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_STRIP %s -> %s: %d triangles kept (head slot %d, one slot %d)"), *Mesh.GetName(), *Copy->GetPathName(),
 		Out->GetTriangleCount(), Plan.HeadSlot, Plan.bOneSlot ? 1 : 0);
+	return Copy;
+}
+
+USkeletalMesh* FMantleAvatarStrip::WriteSlots(USkeletalMesh& Mesh, const TSet<int32>& KeepSlots, const FString& Folder, const FString& Name, FString& OutError)
+{
+	using namespace MantleAvatarStripPrivate;
+	UDynamicMesh* Out = StripOnly(Mesh, KeepSlots, OutError);
+	if (!Out)
+	{
+		return nullptr;
+	}
+	const TStrongObjectPtr<UDynamicMesh> OutHeld(Out);
+	StripClean(*Out);
+	if (Out->GetTriangleCount() == 0)
+	{
+		OutError = TEXT("none of the kept material slots has any triangles");
+		return nullptr;
+	}
+	USkeletalMesh* Copy = StripWriteCopy(Mesh, Out, Folder, Name, TEXT("piece"), OutError);
+	if (Copy && OutError.IsEmpty())
+	{
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_STRIP %s -> %s: %d triangles of %d slots"), *Mesh.GetName(), *Copy->GetPathName(), Out->GetTriangleCount(), KeepSlots.Num());
+	}
 	return Copy;
 }
 

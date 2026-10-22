@@ -275,6 +275,14 @@ bool FMantleGarmentOutfitClearanceTest::RunTest(const FString& Parameters)
 	const FString Line = FMantleGarmentOutfit::DescribeClearance({ FVector3f(0.5f, 0.2f, 0.0f), FVector3f(0.2f, 0.2f, 2.0f), FVector3f(0.7f, 0.7f, -1.0f) }, SkinSheet(4, 0.0f));
 	TestTrue(TEXT("all three are tracked"), Line.StartsWith(TEXT("tracked 3/3, under 1,")));
 	TestTrue(TEXT("the share within 1 cm"), Line.Contains(TEXT("within 1 cm 67%")));
+
+	// The shape change: unmoved, nothing changed; the far corner pulled through the shared edge, its triangle turns over.
+	const TArray<FVector3f> Before = Mesh.Positions;
+	TestTrue(TEXT("an unmoved mesh did not change"), FMantleGarmentOutfit::DescribeShapeChange(Before, Mesh).StartsWith(TEXT("edge length change p50 0% p90 0% largest 0%, 0 of 2")));
+	Mesh.Positions[5] = FVector3f(0.25f, 0.25f, 0.0f);
+	const FString Shape = FMantleGarmentOutfit::DescribeShapeChange(Before, Mesh);
+	TestTrue(TEXT("the folded triangle is counted"), Shape.Contains(TEXT("1 of 2 triangles turned over")));
+	TestTrue(TEXT("a changed vertex count is not measured"), FMantleGarmentOutfit::DescribeShapeChange({ FVector3f::ZeroVector }, Mesh).StartsWith(TEXT("not measured")));
 	return true;
 }
 
@@ -366,3 +374,48 @@ bool FMantleGarmentOutfitSlotTest::RunTest(const FString& Parameters)
 }
 
 #endif
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitBareBodyRankTest,
+	"Mantle.Editor.GarmentOutfit.BareBodyRank",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitBareBodyRankTest::RunTest(const FString& Parameters)
+{
+	// A whole body wearing nothing beats one in underwear; a part, or a dressed body not named bare, is no bare body.
+	const int32 Bare = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Girl_Body"), 0, 1.0);
+	const int32 Underwear = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 2, 0.99);
+	TestTrue(TEXT("nothing on is best"), Bare > Underwear);
+	TestTrue(TEXT("underwear is a bare body"), Underwear >= 0);
+	TestTrue(TEXT("a nude name beats underwear"), FMantleGarmentOutfit::BareBodyRank(TEXT("Nude"), 1, 1.0) > Underwear);
+	TestEqual(TEXT("a torso alone is a part"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Torso"), 0, 0.45), -1);
+	TestEqual(TEXT("a dressed body is not bare"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Nightwear"), 3, 1.0), -1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitSplitsCleanlyTest,
+	"Mantle.Editor.GarmentOutfit.SplitsCleanly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitSplitsCleanlyTest::RunTest(const FString& Parameters)
+{
+	// Vampire's numbers: her merged mesh's skin folded 1706 of 47664 MetaHuman triangles (not splittable); her separate bare
+	// body 522 (at the toes, in her heels) and Ida Faber's none (both splittable).
+	TestFalse(TEXT("the merged Vampire doesn't split cleanly"), FMantleGarmentOutfit::SplitsCleanly(1706, 47664));
+	TestTrue(TEXT("her separate bare body does"), FMantleGarmentOutfit::SplitsCleanly(522, 47664));
+	TestTrue(TEXT("no folds splits"), FMantleGarmentOutfit::SplitsCleanly(0, 47664));
+	TestFalse(TEXT("no body is not clean"), FMantleGarmentOutfit::SplitsCleanly(0, 0));
+
+	// Turned triangles: one of two folded through the shared edge.
+	FMantleGlbMesh Mesh;
+	Mesh.Positions = { FVector3f(0, 0, 0), FVector3f(1, 0, 0), FVector3f(0, 1, 0), FVector3f(1, 1, 0) };
+	FMantleGlbPrimitive& Primitive = Mesh.Primitives.AddDefaulted_GetRef();
+	Primitive.NumVertices = 4;
+	Primitive.Indices = { 0, 1, 2, 1, 3, 2 };
+	const TArray<FVector3f> Before = Mesh.Positions;
+	TestEqual(TEXT("unmoved, none turned"), FMantleGarmentOutfit::TurnedTriangles(Before, Mesh), 0);
+	Mesh.Positions[3] = FVector3f(0.25f, 0.25f, 0.0f);
+	TestEqual(TEXT("the folded one turned"), FMantleGarmentOutfit::TurnedTriangles(Before, Mesh), 1);
+	return true;
+}

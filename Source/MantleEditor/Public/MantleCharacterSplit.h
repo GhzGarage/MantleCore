@@ -32,6 +32,9 @@ struct MANTLEEDITOR_API FMantleSplitSource
 	TArray<FMantleOutfitSection> Sections;
 	TArray<int32> Triangles;
 
+	/** Per section, the mesh's material slot index it draws (what the mesh's triangles carry as their material ID); empty when not read. */
+	TArray<int32> Slots;
+
 	/** Per section, the bones that carry its skin (its render bone map), for the body region it sits on. */
 	TArray<TArray<FString>> SectionBones;
 

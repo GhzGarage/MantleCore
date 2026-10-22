@@ -4047,6 +4047,12 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 	if (ConvertContext->Garments.Num() > 0)
 	{
 		const FString WhyNone = FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0);
+		const FString WhyNoneSection = FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0, /*bSectionPieces*/ true);
+		bool bAnySeparate = false;
+		for (const FMantleConvertGarment& Garment : ConvertContext->Garments)
+		{
+			bAnySeparate |= Garment.Sections.Num() == 0;
+		}
 		ConvertBox->AddSlot().AutoHeight().Padding(0, 10, 0, 2)
 		[
 			SNew(STextBlock)
@@ -4054,14 +4060,16 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 			.Font(FAppStyle::GetFontStyle("NormalFontBold"))
 			.Text(LOCTEXT("ConvertClothingHeading", "Clothing, as MetaHuman Outfits on this character's MetaHuman"))
 		];
-		if (!WhyNone.IsEmpty())
+		if (!(bAnySeparate ? WhyNone : WhyNoneSection).IsEmpty())
 		{
-			AddLine(WhyNone, SeverityColour(EMantleCosmeticSeverity::Warning));
+			AddLine(bAnySeparate ? WhyNone : WhyNoneSection, SeverityColour(EMantleCosmeticSeverity::Warning));
 		}
 		for (int32 GarmentIndex = 0; GarmentIndex < ConvertContext->Garments.Num(); ++GarmentIndex)
 		{
 			const FMantleConvertGarment& Garment = ConvertContext->Garments[GarmentIndex];
-			const bool bCan = WhyNone.IsEmpty() && Garment.Why.IsEmpty() && Garment.Error.IsEmpty() && Garment.Mesh.IsValid();
+			// A piece cut from the character's own mesh has no mesh of its own until the Outfits are made.
+			const bool bPiece = Garment.Sections.Num() > 0;
+			const bool bCan = (bPiece ? WhyNoneSection : WhyNone).IsEmpty() && Garment.Why.IsEmpty() && Garment.Error.IsEmpty() && (Garment.Mesh.IsValid() || (bPiece && Garment.SourceMesh.IsValid()));
 			FString SlotLabel = Garment.Slot;
 			if (!SlotLabel.IsEmpty())
 			{
@@ -4176,8 +4184,10 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 		return;
 	}
 	const FMantleConvertMetaHumanWork* Work = ConvertContext->MetaHuman.Find(0);
-	if (ConvertContext->Garments[GarmentIndex].Outfit.IsEmpty() && Work && FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0).IsEmpty())
+	if (ConvertContext->Garments[GarmentIndex].Outfit.IsEmpty() && Work && FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0, ConvertContext->Garments[GarmentIndex].Sections.Num() > 0).IsEmpty())
 	{
+		// The character's own clothing sections are cut into meshes first (they have none until now).
+		FMantleGarmentOutfit::MakeSectionMeshes(*ConvertContext);
 		// Every piece that can be an Outfit and isn't yet, at once: they share one copy of the MetaHuman as their authored body.
 		TArray<int32> Indices;
 		TArray<USkeletalMesh*> Meshes;
@@ -4201,7 +4211,13 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 			FScopedSlowTask Progress(1.0f, LOCTEXT("ConvertGarmentRunning", "Making the clothing into MetaHuman Outfits on this character's MetaHuman..."));
 			Progress.MakeDialog();
 			Progress.EnterProgressFrame(1.0f);
-			bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Result, RefusalCode, Refusal);
+			const bool bCut = Indices.ContainsByPredicate([this](const int32 Index) { return ConvertContext->Garments[Index].Sections.Num() > 0; });
+			bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Result, RefusalCode, Refusal, bCut);
+		}
+		// Its own mesh can't be split cleanly: Convert's note says its clothing isn't offered.
+		if (RefusalCode == TEXT("not_splittable"))
+		{
+			ConvertContext->Notes.AddUnique(Refusal);
 		}
 		for (int32 Made = 0; Made < Indices.Num(); ++Made)
 		{
