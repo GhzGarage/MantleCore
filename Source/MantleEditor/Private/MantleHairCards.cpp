@@ -15,22 +15,84 @@ TArray<int32> FMantleHairCards::SelectWholeCards(TConstArrayView<FVector3f> Posi
 	TArray<int32> Selected;
 	if (Budget <= 0 || Indices.Num() % 3 != 0) return Selected;
 	for (const uint32 I : Indices) if (I >= static_cast<uint32>(Positions.Num())) return Selected;
-	TArray<TArray<int32>> Cards = FindCards(Positions, Indices);
-	// Stable spatial hash distributes retained cards across the hairstyle instead of keeping the first layer.
-	auto Rank = [&](const TArray<int32>& Card)
+	const TArray<TArray<int32>> Cards = FindCards(Positions, Indices);
+	if (Cards.IsEmpty()) return Selected;
+	TArray<FVector3f> Centres;
+	Centres.Reserve(Cards.Num());
+	FVector3f Mean = FVector3f::ZeroVector;
+	for (const TArray<int32>& Card : Cards)
 	{
 		FVector3f Centre = FVector3f::ZeroVector;
 		for (const int32 T : Card) for (int32 C = 0; C < 3; ++C) Centre += Positions[Indices[T * 3 + C]];
 		Centre /= static_cast<float>(Card.Num() * 3);
-		uint32 H = static_cast<uint32>(FMath::RoundToInt(Centre.X * 100.f)) * 73856093u;
-		H ^= static_cast<uint32>(FMath::RoundToInt(Centre.Y * 100.f)) * 19349663u;
-		H ^= static_cast<uint32>(FMath::RoundToInt(Centre.Z * 100.f)) * 83492791u;
-		return H;
-	};
-	Cards.Sort([&](const auto& A, const auto& B) { const uint32 RA = Rank(A), RB = Rank(B); return RA != RB ? RA < RB : A[0] < B[0]; });
-	for (const auto& Card : Cards) if (Card.Num() <= Budget - Selected.Num()) Selected.Append(Card);
+		Centres.Add(Centre);
+		Mean += Centre;
+	}
+	Mean /= static_cast<float>(Cards.Num());
+
+	// Farthest-point pick: start nearest the middle, then always take the card farthest from every card already kept.
+	// A card too big for what is left is dropped for good (later picks only get smaller budgets).
+	TArray<float> Gap;
+	Gap.Init(TNumericLimits<float>::Max(), Cards.Num());
+	TArray<uint8> Done;
+	Done.Init(0, Cards.Num());
+	int32 Next = 0;
+	float Nearest = TNumericLimits<float>::Max();
+	for (int32 C = 0; C < Cards.Num(); ++C)
+	{
+		const float D = FVector3f::DistSquared(Centres[C], Mean);
+		if (D < Nearest) { Nearest = D; Next = C; }
+	}
+	int32 Left = Budget;
+	while (Next != INDEX_NONE)
+	{
+		Done[Next] = 1;
+		if (Cards[Next].Num() <= Left)
+		{
+			Selected.Append(Cards[Next]);
+			Left -= Cards[Next].Num();
+			for (int32 C = 0; C < Cards.Num(); ++C) if (!Done[C]) Gap[C] = FMath::Min(Gap[C], FVector3f::DistSquared(Centres[C], Centres[Next]));
+		}
+		Next = INDEX_NONE;
+		float Farthest = -1.f;
+		for (int32 C = 0; C < Cards.Num(); ++C)
+		{
+			if (Done[C] || Cards[C].Num() > Left) continue;
+			if (Gap[C] > Farthest) { Farthest = Gap[C]; Next = C; }
+		}
+	}
 	Selected.Sort();
 	return Selected;
+}
+
+int32 FMantleHairCards::SmallestCardTriangles(TConstArrayView<FVector3f> Positions, TConstArrayView<uint32> Indices)
+{
+	if (Indices.Num() % 3 != 0) return 0;
+	for (const uint32 I : Indices) if (I >= static_cast<uint32>(Positions.Num())) return 0;
+	int32 Smallest = 0;
+	for (const TArray<int32>& Card : FindCards(Positions, Indices)) if (Smallest == 0 || Card.Num() < Smallest) Smallest = Card.Num();
+	return Smallest;
+}
+
+TArray<int32> FMantleHairCards::AllocateSectionBudgets(TConstArrayView<int32> SectionTriangles, TConstArrayView<int32> SectionSmallestCard, int32 Budget, bool& bOverBudget)
+{
+	const int32 Sections = SectionTriangles.Num();
+	TArray<int32> Out;
+	Out.Init(0, Sections);
+	bOverBudget = false;
+	int64 Total = 0, Reserved = 0;
+	for (int32 S = 0; S < Sections; ++S)
+	{
+		Total += SectionTriangles[S];
+		Out[S] = SectionSmallestCard.IsValidIndex(S) ? SectionSmallestCard[S] : 0;
+		Reserved += Out[S];
+	}
+	if (Total <= 0) return Out;
+	if (Reserved > Budget) { bOverBudget = true; return Out; }
+	// Everyone keeps their smallest card; what is left of the budget is shared by triangle count.
+	const int64 Spare = Budget - Reserved;
+	for (int32 S = 0; S < Sections; ++S) Out[S] += static_cast<int32>(Spare * SectionTriangles[S] / Total);
+	return Out;
 }
 
 // Named, not anonymous: MantleEditor builds as a unity build.
