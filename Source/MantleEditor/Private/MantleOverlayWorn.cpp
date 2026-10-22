@@ -19,6 +19,7 @@
 #include "MantleRuntime.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 
 bool FMantleOverlayWorn::Make(const FMantleCosmeticPackage& Built, const FString& Slot, const FMantleAvatarContract& Contract, USkeletalMesh* PickedBody,
 	USkeletalMesh* PickedFace, FMantleOverlayWorn& Out, FString& OutRefusal)
@@ -236,6 +237,14 @@ namespace MantleOverlayWornDevCommands
 			return;
 		}
 		IFileManager::Get().MakeDirectory(*Args[0], true);
+		// Exit however this ends, so an unattended run never leaves an editor behind.
+		ON_SCOPE_EXIT
+		{
+			if (Args.Num() > 6 && Args[6].Equals(TEXT("Exit"), ESearchCase::IgnoreCase))
+			{
+				FPlatformMisc::RequestExit(false);
+			}
+		};
 		FString Error;
 		const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&Error);
 		if (!Contract)
@@ -284,10 +293,6 @@ namespace MantleOverlayWornDevCommands
 		Save(Package, Package.OverlayNormalKey, TEXT("placed_normal.png"));
 		Save(Package, Package.ThumbnailKey, TEXT("placed_thumbnail.png"));
 		UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED done errors=%d"), Package.HasErrors() ? 1 : 0);
-		if (Args.Num() > 6 && Args[6].Equals(TEXT("Exit"), ESearchCase::IgnoreCase))
-		{
-			FPlatformMisc::RequestExit(false);
-		}
 	}
 
 	FAutoConsoleCommand OverlayPlacedCommand(
