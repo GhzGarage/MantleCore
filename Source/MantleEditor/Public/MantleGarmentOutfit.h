@@ -265,8 +265,10 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	/**
 	 * A piece is trim on another (IsTrimOn) when it has at most TrimMaxTriangleShare of the other's triangles and at least
 	 * TrimNearShare of its points are within TrimNearCm of the other's surface, both as made (bind pose). An edging stands
-	 * up from the garment's rim (Vampire's corset lace), so not all of it lies on it. Two real garments (a shirt and the
-	 * jacket over it) are each too big to pass.
+	 * up from the garment's rim, so not all of it lies on it: Vampire's corset lace (152 of the corset's 2650 triangles)
+	 * measured 66% within 1 cm and 100% within 2 cm, which is why 80% within 1 cm missed it. Two real garments (a shirt and
+	 * the jacket over it) are each too big to pass; the lace against the pack's other top measured 85% within 2 cm, and the
+	 * closest garment wins.
 	 */
 	static constexpr double TrimMaxTriangleShare = 0.2;
 	static constexpr double TrimNearShare = 0.6;
