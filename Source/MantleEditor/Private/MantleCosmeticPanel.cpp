@@ -3988,6 +3988,7 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 		const TSharedRef<SMantleCosmeticPanel> Panel = StaticCastSharedRef<SMantleCosmeticPanel>(Tab->GetContent());
 		FString SourcePath;
 		FString CustomPng;
+		bool bAngle = false;
 		int32 ClassNumber = static_cast<int32>(EMantleCosmeticClass::Garment);
 		for (int32 Index = 1; Index < Args.Num(); ++Index)
 		{
@@ -4002,6 +4003,10 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 			else if (Args[Index].StartsWith(TEXT("SaveCustom=")))
 			{
 				CustomPng = Args[Index].Mid(11);
+			}
+			else if (Args[Index].Equals(TEXT("Angle"), ESearchCase::IgnoreCase))
+			{
+				bAngle = true;
 			}
 		}
 		if (!SourcePath.IsEmpty())
@@ -4027,6 +4032,15 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 			{
 				UE_LOG(LogMantle, Error, TEXT("MANTLE_PANEL_SHOT failed: %s did not load"), *SourcePath);
 			}
+		}
+		if (bAngle)
+		{
+			// Choose the angle, from the class's default view: the same sliders the builders show.
+			FMantleThumbnailChoice Choice = Panel->Draft.Thumbnail;
+			Choice.Mode = EMantleThumbnailMode::Angle;
+			Choice.Angle = FMantleCosmeticThumbnail::DefaultView(Panel->Draft.Class == EMantleCosmeticClass::Accessory);
+			Panel->Draft.Thumbnail = Choice;
+			Panel->ThumbnailSection->Refresh();
 		}
 		Save(Panel, Args[0], 640.0f, 6000.0f);
 	}

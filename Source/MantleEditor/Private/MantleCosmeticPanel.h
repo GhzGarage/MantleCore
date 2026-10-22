@@ -83,7 +83,7 @@ public:
 	static void DevConvertShot(const TArray<FString>& Args);
 
 	/**
-	 * #124: maintainer command Mantle.Dev.CosmeticPanelShot <File.png> [Source=<asset>] [Class=<number>] [SaveCustom=<png>] [Exit]: opens the panel
+	 * #124: maintainer command Mantle.Dev.CosmeticPanelShot <File.png> [Source=<asset>] [Class=<number>] [SaveCustom=<png>] [Angle] [Exit]: opens the panel
 	 * (with Source as the item, as that class) and renders it offscreen, to show the shared Thumbnail section as the cosmetic uploader has it; SaveCustom first
 	 * chooses that custom image for the item, saved as the creator's choice would be.
 	 */
