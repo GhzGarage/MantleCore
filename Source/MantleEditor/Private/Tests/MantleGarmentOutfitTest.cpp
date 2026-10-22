@@ -419,3 +419,63 @@ bool FMantleGarmentOutfitSplitsCleanlyTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the folded one turned"), FMantleGarmentOutfit::TurnedTriangles(Before, Mesh), 1);
 	return true;
 }
+
+namespace MantleGarmentOutfitTrimTestPrivate
+{
+	/** A flat square of Cells x Cells cells, Size cm across, at height Z, one primitive of material Material. */
+	FMantleGlbMesh Sheet(const int32 Cells, const float Size, const float Z, const int32 Material = 0)
+	{
+		FMantleGlbMesh Mesh;
+		for (int32 Y = 0; Y <= Cells; ++Y)
+		{
+			for (int32 X = 0; X <= Cells; ++X)
+			{
+				Mesh.Positions.Add(FVector3f(Size * X / Cells, Size * Y / Cells, Z));
+				Mesh.Normals.Add(FVector3f(0, 0, 1));
+				Mesh.UVs.Add(FVector2f(static_cast<float>(X) / Cells, static_cast<float>(Y) / Cells));
+			}
+		}
+		FMantleGlbPrimitive& Primitive = Mesh.Primitives.AddDefaulted_GetRef();
+		Primitive.MaterialIndex = Material;
+		Primitive.NumVertices = Mesh.Positions.Num();
+		for (int32 Y = 0; Y < Cells; ++Y)
+		{
+			for (int32 X = 0; X < Cells; ++X)
+			{
+				const uint32 A = Y * (Cells + 1) + X;
+				Primitive.Indices.Append({ A, A + 1, A + Cells + 1, A + 1, A + Cells + 2, A + Cells + 1 });
+			}
+		}
+		Mesh.MaterialNames.SetNum(Material + 1);
+		return Mesh;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitTrimTest,
+	"Mantle.Editor.GarmentOutfit.Trim",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitTrimTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleGarmentOutfitTrimTestPrivate;
+	// A corset (20 x 20 cells) and a small lace strip on it: trim. The same strip 3 cm off it, or a piece as big as the
+	// corset lying on it (a jacket over a shirt), is not.
+	const FMantleGlbMesh Corset = Sheet(20, 20.0f, 0.0f);
+	TestTrue(TEXT("a small piece 0.4 cm off it is its trim"), FMantleGarmentOutfit::IsTrimOn(Sheet(4, 5.0f, 0.4f), Corset));
+	TestFalse(TEXT("3 cm off it is not"), FMantleGarmentOutfit::IsTrimOn(Sheet(4, 5.0f, 3.0f), Corset));
+	TestFalse(TEXT("a whole garment on it is not trim"), FMantleGarmentOutfit::IsTrimOn(Sheet(20, 20.0f, 0.4f), Corset));
+
+	// Appended: its vertices after the garment's, its primitive drawn with its own material after the garment's.
+	FMantleGlbMesh Garment = Sheet(2, 1.0f, 0.0f);
+	const FMantleGlbMesh Trim = Sheet(1, 1.0f, 0.1f);
+	FMantleGarmentOutfit::AppendTrim(Garment, Trim);
+	TestEqual(TEXT("vertices added"), Garment.Positions.Num(), 9 + 4);
+	TestEqual(TEXT("normals kept in step"), Garment.Normals.Num(), Garment.Positions.Num());
+	TestEqual(TEXT("UVs kept in step"), Garment.UVs.Num(), Garment.Positions.Num());
+	TestEqual(TEXT("a primitive added"), Garment.Primitives.Num(), 2);
+	TestEqual(TEXT("its first vertex after the garment's"), Garment.Primitives[1].FirstVertex, 9);
+	TestEqual(TEXT("its material after the garment's"), Garment.Primitives[1].MaterialIndex, 1);
+	TestEqual(TEXT("material names appended"), Garment.MaterialNames.Num(), 2);
+	return true;
+}

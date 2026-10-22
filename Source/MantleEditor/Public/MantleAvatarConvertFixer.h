@@ -212,6 +212,12 @@ struct MANTLEEDITOR_API FMantleConvertGarment
 	/** "top", "bottom" or "footwear"; empty for merged clothing (Why says so). */
 	FString Slot;
 
+	/**
+	 * Thin pieces worn on this one, in the same slot (FMantleGarmentOutfit::IsTrimOn: a corset's lace edging): they go into
+	 * its Outfit with it, as one item, and are not listed on their own.
+	 */
+	TArray<TWeakObjectPtr<USkeletalMesh>> Trims;
+
 	/** Display name for the upload. */
 	FString Name;
 

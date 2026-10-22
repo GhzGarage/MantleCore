@@ -235,9 +235,12 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * be posed as it was.
 	 * bCutFromOwnMesh: the garments were cut from the character's own mesh (#55); refused ("not_splittable") when its skin
 	 * doesn't shape cleanly (SplitsCleanly): the clothing isn't offered as items.
+	 * Trims: per garment (by index, when given), the thin pieces worn on it (FMantleConvertGarment::Trims), posed with it and
+	 * made into its Outfit.
 	 */
 	static bool MakeFromWork(const FMantleConvertMetaHumanWork& Work, const FString& BodyName, const FString& Folder, TConstArrayView<USkeletalMesh*> Garments,
-		FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal, bool bCutFromOwnMesh = false);
+		FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal, bool bCutFromOwnMesh = false,
+		TConstArrayView<TArray<USkeletalMesh*>> Trims = {});
 
 	/**
 	 * Pure (tested): the garment slot a mesh beside a body is ("top", "bottom", "footwear"), from its name's words, else
@@ -255,7 +258,30 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * clothing (WornClothing), naming a bare body beside it to convert instead. OutNotOffered: the display names of the
 	 * others that aren't a body (hair, gloves, a belt ...).
 	 */
-	static void FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered);
+	static void FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered,
+		TArray<FString>* OutPaired = nullptr);
+
+	/**
+	 * A piece is trim on another (IsTrimOn) when it has at most TrimMaxTriangleShare of the other's triangles and at least
+	 * TrimNearShare of its points are within TrimNearCm of the other's surface, both as made (bind pose). Two real garments
+	 * (a shirt and the jacket over it) are each too big, or too far apart, to pass.
+	 */
+	static constexpr double TrimMaxTriangleShare = 0.2;
+	static constexpr double TrimNearShare = 0.8;
+	static constexpr float TrimNearCm = 1.0f;
+
+	/** Pure (tested): whether Trim is a thin piece lying on Garment (a corset's lace edging), by TrimMaxTriangleShare, TrimNearShare and TrimNearCm. */
+	static bool IsTrimOn(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment);
+
+	/** Pure (tested): the share of Trim's points within TrimNearCm of Garment's surface, or 0 when Trim is too big to be its trim (TrimMaxTriangleShare). */
+	static double TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment);
+
+	/**
+	 * Pure (tested): Trim's geometry added to Garment as more primitives (its materials after Garment's: OutMaterials gets
+	 * TrimMaterials appended). Joints and skin weights are Garment's; the trim's vertices get none, so this is for a garment
+	 * whose weights are transferred afterwards (TransferWeights), both posed alike first.
+	 */
+	static void AppendTrim(FMantleGlbMesh& Garment, const FMantleGlbMesh& Trim);
 
 	/**
 	 * #55: the pieces of clothing in Body's own mesh (its material sections), when the character splits into a bare body and
