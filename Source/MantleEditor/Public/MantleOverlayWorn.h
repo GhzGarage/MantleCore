@@ -6,7 +6,7 @@
 
 class UMaterialInterface;
 class USkeletalMesh;
-struct FMantleAvatarContract;
+class FMantleAvatarContract;
 struct FMantleCosmeticPackage;
 struct FMantleThumbnailSubject;
 
