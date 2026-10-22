@@ -208,7 +208,7 @@ bool FMantleWeaponBuilderExport::BuildDocument(const UMantleWeaponSource& Source
 	using namespace MantleWeaponBuilderExportPrivate;
 	using namespace MantleWeaponBuilderLogic;
 	Out = FMantleWeaponDesc();
-	if (Source.Hold >= EMantleWeaponHold::Count || Source.Delivery > EMantleWeaponSourceDelivery::Beam || Source.Resource > EMantleWeaponSourceResource::None)
+	if (Source.Hold >= EMantleWeaponHold::Count || Source.Delivery > EMantleWeaponSourceDelivery::Use || Source.Resource > EMantleWeaponSourceResource::None)
 	{
 		OutMessages.Add(LOCTEXT("InvalidChoice", "Pick a supported hold, delivery and resource for your weapon."));
 		return false;
@@ -258,6 +258,61 @@ bool FMantleWeaponBuilderExport::BuildDocument(const UMantleWeaponSource& Source
 				Desc.Socket(Socket).Set(MakeSocket(Point.Value));
 			}
 		}
+	}
+	if (Desc.GetHold() == EMantleWeaponDocHold::Consumable)
+	{
+		// #1025: a consumable is used up, never fired: no attack, spread, recoil, parts, attachments or sounds, just its own block.
+		const FMantleWeaponSourceConsumable& C = Source.Consumable;
+		const bool bHeals = C.Effect == EMantleWeaponSourceConsumableEffect::Heal;
+		if (bHeals && (!FMath::IsFinite(C.Heal) || C.Heal < 1.f || C.Heal > 1000.f || !FMath::IsFinite(C.HealSeconds) || C.HealSeconds < 0.f || C.HealSeconds > 60.f))
+		{
+			OutMessages.Add(LOCTEXT("BadHeal", "Set the health between 1 and 1000, and the time to spread it over between 0 and 60 seconds."));
+			return false;
+		}
+		if (C.Uses < 1 || C.Uses > 100)
+		{
+			OutMessages.Add(LOCTEXT("BadUses", "Set the uses between 1 and 100."));
+			return false;
+		}
+		if (C.bOverrideUseSeconds && (!FMath::IsFinite(C.UseSeconds) || C.UseSeconds < 0.5f || C.UseSeconds > 10.f))
+		{
+			OutMessages.Add(LOCTEXT("BadUseSeconds", "Set the use time between 0.5 and 10 seconds."));
+			return false;
+		}
+		if (!FMath::IsFinite(C.CooldownSeconds) || C.CooldownSeconds < 0.f || C.CooldownSeconds > 600.f)
+		{
+			OutMessages.Add(LOCTEXT("BadCooldown", "Set the wait between uses between 0 and 600 seconds."));
+			return false;
+		}
+		FMantleWeaponDocConsumable Consumable;
+		Consumable.Style = C.Style == EMantleWeaponSourceUseStyle::EatDrink ? EMantleWeaponDocUseStyle::EatDrink : EMantleWeaponDocUseStyle::Use;
+		if (bHeals)
+		{
+			Consumable.Heal.Set(C.Heal);
+			Consumable.HealSeconds.Set(C.HealSeconds);
+		}
+		else
+		{
+			// The document refuses heal and healSeconds beside effect none.
+			Consumable.Effect.Set(EMantleWeaponDocConsumableEffect::None);
+		}
+		Consumable.Uses.Set(C.Uses);
+		if (C.bOverrideUseSeconds) Consumable.UseSeconds.Set(C.UseSeconds);
+		Consumable.CooldownSeconds.Set(C.CooldownSeconds);
+		Consumable.bMoveWhileUsing.Set(C.bMoveWhileUsing);
+		Desc.Consumable.Set(Consumable);
+		TArray<FMantleWeaponDocError> ConsumableErrors;
+		if (!FMantleWeaponDocument::Validate(Desc, ConsumableErrors))
+		{
+			for (const auto& Error : ConsumableErrors)
+			{
+				OutMessages.Add(FText::FromString(Error.ToString()));
+				UE_LOG(LogMantleWeaponBuilderExport, Warning, TEXT("Weapon '%s' settings refused: %s"), *Desc.Name, *Error.ToString());
+			}
+			return false;
+		}
+		Out = MoveTemp(Desc);
+		return true;
 	}
 	const FMantleWeaponTuning& T = Source.Tuning;
 	// Export validates the creator's numbers. Clamping belongs to interactive controls, never to saved output.

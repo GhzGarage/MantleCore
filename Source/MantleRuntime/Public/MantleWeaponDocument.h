@@ -16,6 +16,9 @@
 // magazine; Write always writes v2. Decision 4 (2026-10-11): a shield is its own item (hold shield), which the client
 // pairs at run time with a main-hand weapon by the schema's x-pairings (MantleWeaponArchetypeLibrary::FindPairing); a
 // document has no off-hand mesh.
+//
+// #1025: the consumable hold (a potion, a medkit, food) with its one delivery, use, and the consumable block: an item used
+// on its holder, no fire. It has no clips of its own: its use plays the potion clip of whatever the holder holds.
 
 /**
  * An optional value of the document: Value holds the schema's default until the document sets it, and bSet says whether
@@ -74,6 +77,8 @@ enum class EMantleWeaponDocHold : uint8
 	Shield,
 	/** Step 4b: one hand, thrown overhand; its projectile is the weapon itself. */
 	Throwable,
+	/** #1025: an item used on its holder (delivery use, the consumable block). */
+	Consumable,
 	Count
 };
 
@@ -84,6 +89,8 @@ enum class EMantleWeaponDocDelivery : uint8
 	Projectile,
 	Sweep,
 	Beam,
+	/** #1025: no attack; the item is used on its holder (a consumable). */
+	Use,
 	Count
 };
 
@@ -212,6 +219,8 @@ enum class EMantleWeaponDocAction : uint8
 	Nock,
 	Draw,
 	Release,
+	/** #1025: a consumable's use. */
+	Use,
 	Count
 };
 
@@ -475,6 +484,43 @@ struct FMantleWeaponDocBeam
 	TMantleWeaponDocValue<double> Range{ 25000.0 };
 };
 
+/** schema consumable.style (#1025): which of each hold's two potion clips a use plays. */
+enum class EMantleWeaponDocUseStyle : uint8
+{
+	/** Raised to the mouth: each hold's _Potion_01 clip (a potion, a drink, food). */
+	EatDrink,
+	/** Lifted beside the head and crushed: each hold's _Potion_02 clip (a medkit, a charm). */
+	Use,
+	Count
+};
+
+/** schema consumable.effect (#1025): what the item does by itself at the effect moment. */
+enum class EMantleWeaponDocConsumableEffect : uint8
+{
+	/** Heals the holder (Heal, HealSeconds). */
+	Heal,
+	/** Nothing built in: the place's server script does it all (Backpack.ItemUsed fires either way). */
+	None,
+	Count
+};
+
+/** schema consumable (#1025): the use delivery's numbers. */
+struct FMantleWeaponDocConsumable
+{
+	/** Required. */
+	EMantleWeaponDocUseStyle Style = EMantleWeaponDocUseStyle::EatDrink;
+	TMantleWeaponDocValue<EMantleWeaponDocConsumableEffect> Effect{ EMantleWeaponDocConsumableEffect::Heal };
+	/** With effect heal: health given, up to the maximum. */
+	TMantleWeaponDocValue<double> Heal{ 50.0 };
+	/** With effect heal. 0: the whole heal at the effect moment; above 0: spread evenly over this many seconds from it. */
+	TMantleWeaponDocValue<double> HealSeconds{ 0.0 };
+	TMantleWeaponDocValue<int32> Uses{ 1 };
+	/** Seconds one use takes; unset: the clip's own length (the value here is only the clips' length, 2.5). */
+	TMantleWeaponDocValue<double> UseSeconds{ 2.5 };
+	TMantleWeaponDocValue<double> CooldownSeconds{ 0.0 };
+	TMantleWeaponDocValue<bool> bMoveWhileUsing{ true };
+};
+
 /** The walk and sprint clips' play rates are the archetype library's, not the weapon's. */
 struct FMantleWeaponDocFirstPerson
 {
@@ -679,6 +725,8 @@ struct MANTLERUNTIME_API FMantleWeaponDesc
 	TMantleWeaponDocValue<FMantleWeaponDocProjectile> Projectile;
 	TMantleWeaponDocValue<FMantleWeaponDocSweep> Sweep;
 	TMantleWeaponDocValue<FMantleWeaponDocBeam> Beam;
+	/** #1025: the use delivery's numbers, exactly when the delivery is use. */
+	TMantleWeaponDocValue<FMantleWeaponDocConsumable> Consumable;
 	/** #840: blocking, on a hold that blocks. */
 	TMantleWeaponDocValue<FMantleWeaponDocBlock> Block;
 	TMantleWeaponDocValue<FMantleWeaponDocSounds> Sounds;
@@ -776,6 +824,9 @@ public:
 	/** Whether a document built in code (the converter's) is one Parse accepts: Write, then Parse. */
 	static bool Validate(const FMantleWeaponDesc& Desc, TArray<FMantleWeaponDocError>& OutErrors);
 
+	/** #1025: what a consumable (delivery use) refuses, the top-level keys of a weapon's numbers and attachments (its mesh shows alone). */
+	static TConstArrayView<const TCHAR*> GetUseRefusedFields();
+
 	/** The document's text, UTF-8-ready, "\n" line ends, a line end at the end. */
 	static FString Write(const FMantleWeaponDesc& Desc);
 
@@ -804,6 +855,8 @@ public:
 	static const TCHAR* SocketName(EMantleWeaponDocSocket Socket);
 	static const TCHAR* ReloadStyleName(EMantleWeaponDocReloadStyle Style);
 	static const TCHAR* EffectsName(EMantleWeaponDocEffects Effects);
+	static const TCHAR* UseStyleName(EMantleWeaponDocUseStyle Style);
+	static const TCHAR* ConsumableEffectName(EMantleWeaponDocConsumableEffect Effect);
 
 	/** #904: Effects is an element (not one of the firearms' rifle, pistol and shotgun). */
 	static bool IsElement(EMantleWeaponDocEffects Effects) { return Effects > EMantleWeaponDocEffects::Shotgun && Effects < EMantleWeaponDocEffects::Count; }

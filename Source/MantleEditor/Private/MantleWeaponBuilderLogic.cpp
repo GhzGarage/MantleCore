@@ -81,7 +81,8 @@ static_assert(static_cast<uint8>(EMantleWeaponHold::BoltSniper) == static_cast<u
 static_assert(static_cast<uint8>(EMantleWeaponHold::Lmg) == static_cast<uint8>(EMantleWeaponFitHold::Lmg), "hold order");
 static_assert(static_cast<uint8>(EMantleWeaponHold::Count) == static_cast<uint8>(EMantleWeaponFitHold::Count), "hold count");
 static_assert(static_cast<uint8>(EMantleWeaponHold::Throwable) == static_cast<uint8>(EMantleWeaponDocHold::Throwable), "document hold order");
-static_assert(static_cast<uint8>(EMantleWeaponHold::Throwable) + 1 == static_cast<uint8>(EMantleWeaponDocHold::Count), "document hold count");
+static_assert(static_cast<uint8>(EMantleWeaponHold::Consumable) == static_cast<uint8>(EMantleWeaponDocHold::Consumable), "document hold order");
+static_assert(static_cast<uint8>(EMantleWeaponHold::Consumable) + 1 == static_cast<uint8>(EMantleWeaponDocHold::Count), "document hold count");
 static_assert(static_cast<uint8>(EMantleWeaponHold::Shield) == static_cast<uint8>(EMantleWeaponDocHold::Shield), "document hold order");
 static_assert(static_cast<uint8>(EMantleWeaponSourceAction::Release) == static_cast<uint8>(EMantleWeaponDocAction::Release), "action order");
 
@@ -224,6 +225,7 @@ FText MantleWeaponBuilderLogic::HoldLabel(EMantleWeaponHold Hold)
 	case EMantleWeaponHold::Unarmed: return LOCTEXT("HoldUnarmed", "Fist weapon (knuckles, claws)");
 	case EMantleWeaponHold::Shield: return LOCTEXT("HoldShield", "Shield");
 	case EMantleWeaponHold::Throwable: return LOCTEXT("HoldThrowable", "Throwable");
+	case EMantleWeaponHold::Consumable: return LOCTEXT("HoldConsumable", "Consumable");
 	}
 	return FText::GetEmpty();
 }

@@ -98,6 +98,7 @@ namespace MantleWeaponBuilderPanelPrivate
 		case EMantleWeaponSourceDelivery::Beam: return bGun
 			? LOCTEXT("DeliveryBeamGun", "Beam (laser, flamethrower)")
 			: LOCTEXT("DeliveryBeam", "Held beam");
+		case EMantleWeaponSourceDelivery::Use: return LOCTEXT("DeliveryUse", "Use it up");
 		}
 		return FText::GetEmpty();
 	}
@@ -163,6 +164,7 @@ namespace MantleWeaponBuilderPanelPrivate
 		case EMantleWeaponHold::Unarmed: return LOCTEXT("BlurbUnarmed", "Knuckles, claws or a gauntlet worn on the hand; it plays the fist animations. Empty hands are already built in.");
 		case EMantleWeaponHold::Shield: return LOCTEXT("BlurbShield", "A left-hand shield for blocking and bashing.");
 		case EMantleWeaponHold::Throwable: return LOCTEXT("BlurbThrowable", "A one-handed item thrown at a target.");
+		case EMantleWeaponHold::Consumable: return LOCTEXT("BlurbConsumable", "A potion, medkit or snack the character drinks, eats or uses up to heal.");
 		case EMantleWeaponHold::Count: break;
 		}
 		return FText::GetEmpty();
@@ -839,6 +841,23 @@ FText SMantleWeaponBuilder::SummaryText() const
 	const auto SourceDelivery = static_cast<EMantleWeaponSourceDelivery>(static_cast<uint8>(Delivery) + 1);
 	const EMantleWeaponDocResource Resource = EffectiveResource(*Working);
 	const auto SourceResource = static_cast<EMantleWeaponSourceResource>(static_cast<uint8>(Resource) + 1);
+	if (Working->Hold == EMantleWeaponHold::Consumable)
+	{
+		const FMantleWeaponSourceConsumable& C = Working->Consumable;
+		Lines.Add(FString::Printf(TEXT("Used by: %s"), C.Style == EMantleWeaponSourceUseStyle::EatDrink ? TEXT("eating or drinking") : TEXT("using it (lift and crush)")));
+		if (C.Effect == EMantleWeaponSourceConsumableEffect::Heal)
+		{
+			Lines.Add(FString::Printf(TEXT("Heals: %.0f%s; uses: %d"), C.Heal, C.HealSeconds > 0.f ? *FString::Printf(TEXT(" over %.1f seconds"), C.HealSeconds) : TEXT(""), C.Uses));
+		}
+		else
+		{
+			Lines.Add(FString::Printf(TEXT("Effect: none of its own (a script does it); uses: %d"), C.Uses));
+		}
+		Lines.Add(FString::Printf(TEXT("Use time: %s; wait between uses: %.1f seconds; %s"),
+			C.bOverrideUseSeconds ? *FString::Printf(TEXT("%.1f seconds"), C.UseSeconds) : TEXT("the animation's own length"), C.CooldownSeconds,
+			C.bMoveWhileUsing ? TEXT("can walk while using") : TEXT("stands still while using")));
+		return FText::FromString(FString::Join(Lines, TEXT("\n")));
+	}
 	Lines.Add(FString::Printf(TEXT("Attack: %s; resource: %s"), *DeliveryLabel(SourceDelivery, IsFirearm(Working->Hold)).ToString(), *ResourceLabel(SourceResource).ToString()));
 	Lines.Add(FString::Printf(TEXT("Damage: %.0f; attack rate: %.1f per second"), T.Damage, T.ShotsPerSecond));
 	if (Resource == EMantleWeaponDocResource::Magazine || Resource == EMantleWeaponDocResource::Quiver)
@@ -954,7 +973,7 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakeKindStep()
 		EMantleWeaponHold::Revolver, EMantleWeaponHold::Smg, EMantleWeaponHold::Dmr,
 		EMantleWeaponHold::PumpShotgun, EMantleWeaponHold::BoltSniper, EMantleWeaponHold::Lmg,
 		EMantleWeaponHold::Melee1h, EMantleWeaponHold::Melee2h, EMantleWeaponHold::Spear, EMantleWeaponHold::Staff,
-		EMantleWeaponHold::Bow, EMantleWeaponHold::Unarmed, EMantleWeaponHold::Shield, EMantleWeaponHold::Throwable, };
+		EMantleWeaponHold::Bow, EMantleWeaponHold::Unarmed, EMantleWeaponHold::Shield, EMantleWeaponHold::Throwable, EMantleWeaponHold::Consumable, };
 	for (const EMantleWeaponHold Hold : Order)
 	{
 		Cards->AddSlot()[MakeHoldCard(Hold)];
@@ -1357,6 +1376,73 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakeTuningStep()
 {
 	using namespace MantleWeaponBuilderLogic;
 	using namespace MantleWeaponBuilderPanelPrivate;
+	if (Working->Hold == EMantleWeaponHold::Consumable)
+	{
+		// A consumable is used up, not fired: its own few settings replace the attack ones.
+		const TArray<TPair<EMantleWeaponSourceUseStyle, FText>> Styles = {
+			{ EMantleWeaponSourceUseStyle::EatDrink, LOCTEXT("StyleEatDrink", "Eat or drink (bottle to the lips)") },
+			{ EMantleWeaponSourceUseStyle::Use, LOCTEXT("StyleUseIt", "Use (lift the hand and crush; medkits)") },
+		};
+		const TArray<TPair<EMantleWeaponSourceConsumableEffect, FText>> Effects = {
+			{ EMantleWeaponSourceConsumableEffect::Heal, LOCTEXT("EffectHeal", "Heal") },
+			{ EMantleWeaponSourceConsumableEffect::None, LOCTEXT("EffectNone", "Nothing of its own (a script does it)") },
+		};
+		const TFunction<EVisibility()> ShowHeal = [this]
+		{
+			return Working->Consumable.Effect == EMantleWeaponSourceConsumableEffect::Heal ? EVisibility::Visible : EVisibility::Collapsed;
+		};
+		return SNew(SScrollBox)
+			+ SScrollBox::Slot().Padding(0.f, 6.f)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()[MakeRow(LOCTEXT("UseStyle", "How it is used"),
+					LOCTEXT("UseStyleTip", "Eat or drink plays the drinking animation of whatever the character holds. Use plays the lift-and-crush animation, a good fit for a medkit."),
+					MakeChoiceControl<EMantleWeaponSourceUseStyle>(Styles, [this] { return Working->Consumable.Style; }, [this](EMantleWeaponSourceUseStyle V) { Working->Consumable.Style = V; }))]
+				+ SVerticalBox::Slot().AutoHeight()[MakeRow(LOCTEXT("UseEffect", "What it does"),
+					LOCTEXT("UseEffectTip", "Heal gives health. Nothing gives none of its own: a script in your place does the rest."),
+					MakeChoiceControl<EMantleWeaponSourceConsumableEffect>(Effects, [this] { return Working->Consumable.Effect; }, [this](EMantleWeaponSourceConsumableEffect V) { Working->Consumable.Effect = V; }))]
+				+ SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility_Lambda([ShowHeal] { return ShowHeal(); })[MakeRow(LOCTEXT("Heal", "Health given"),
+					LOCTEXT("HealTip", "How much health one use gives, from 1 to 1000, up to the character's maximum."),
+					MakeFloatSpin(1.f, 1000.f, 5.f, [this] { return Working->Consumable.Heal; }, [this](float V) { Working->Consumable.Heal = V; }))]]
+				+ SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility_Lambda([ShowHeal] { return ShowHeal(); })[MakeRow(LOCTEXT("HealSeconds", "Spread over (seconds)"),
+					LOCTEXT("HealSecondsTip", "0 gives all of it at once. Above 0 spreads it evenly over this many seconds."),
+					MakeFloatSpin(0.f, 60.f, 0.5f, [this] { return Working->Consumable.HealSeconds; }, [this](float V) { Working->Consumable.HealSeconds = V; }))]]
+				+ SVerticalBox::Slot().AutoHeight()[MakeRow(LOCTEXT("Uses", "Uses"),
+					LOCTEXT("UsesTip", "How many times it can be used before it is gone."),
+					MakeIntSpin(1, 100, [this] { return Working->Consumable.Uses; }, [this](int32 V) { Working->Consumable.Uses = V; }))]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+				[
+					SNew(SCheckBox)
+					.IsChecked_Lambda([this] { return Working->Consumable.bOverrideUseSeconds ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { Working->Consumable.bOverrideUseSeconds = State == ECheckBoxState::Checked; })
+					.ToolTipText(LOCTEXT("OverrideUseTimeTip", "Off: one use takes as long as the animation (2.5 seconds). On: the animation plays faster or slower to fit the time below."))
+					[
+						SNew(STextBlock).Text(LOCTEXT("OverrideUseTime", "Choose how long one use takes"))
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SBox).Visibility_Lambda([this] { return Working->Consumable.bOverrideUseSeconds ? EVisibility::Visible : EVisibility::Collapsed; })
+					[
+						MakeRow(LOCTEXT("UseSeconds", "Use time (seconds)"), LOCTEXT("UseSecondsTip", "From 0.5 to 10 seconds. The health arrives at the same point of the animation, scaled to this time."),
+							MakeFloatSpin(0.5f, 10.f, 0.1f, [this] { return Working->Consumable.UseSeconds; }, [this](float V) { Working->Consumable.UseSeconds = V; }))
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight()[MakeRow(LOCTEXT("Cooldown", "Wait between uses (seconds)"),
+					LOCTEXT("CooldownTip", "How long after a use before it can be used again. 0 means no wait."),
+					MakeFloatSpin(0.f, 600.f, 0.5f, [this] { return Working->Consumable.CooldownSeconds; }, [this](float V) { Working->Consumable.CooldownSeconds = V; }))]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f)
+				[
+					SNew(SCheckBox)
+					.IsChecked_Lambda([this] { return Working->Consumable.bMoveWhileUsing ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { Working->Consumable.bMoveWhileUsing = State == ECheckBoxState::Checked; })
+					.ToolTipText(LOCTEXT("MoveWhileUsingTip", "On: the character can walk while using it. Off: the character stands still until the use ends. Sprinting, jumping or dodging cancels a use before it takes effect and nothing is spent."))
+					[
+						SNew(STextBlock).Text(LOCTEXT("MoveWhileUsing", "Can walk while using"))
+					]
+				]
+			];
+	}
 	TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
 	auto AddHeading = [&Rows](const FText& Text)
 	{
@@ -1821,6 +1907,11 @@ TSharedRef<SWidget> SMantleWeaponBuilder::MakeTuningStep()
 TSharedRef<SWidget> SMantleWeaponBuilder::MakePartsAndSoundStep()
 {
 	using namespace MantleWeaponBuilderPanelPrivate;
+	if (Working->Hold == EMantleWeaponHold::Consumable)
+	{
+		return SNew(STextBlock).AutoWrapText(true)
+			.Text(LOCTEXT("ConsumableNoParts", "A consumable has no moving parts, extra details or custom sounds. Go on to Create."));
+	}
 	const TArray<TPair<EMantleWeaponSourcePartRole, FText>> PartChoices = PartRoleChoices(Working->Hold);
 	// An attachment's effect is an element's held effect (#904).
 	TArray<TPair<EMantleWeaponSourceStyle, FText>> Styles = AllStyles();

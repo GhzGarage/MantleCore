@@ -32,6 +32,7 @@ namespace MantleWeaponFitImpl
 			{TEXT("fists"), 20.f, 5.f, 40.f},
 			{TEXT("shield"), 70.f, 25.f, 130.f},
 			{TEXT("throwable"), 15.f, 3.f, 70.f},
+			{TEXT("consumable"), 15.f, 4.f, 35.f},
 		};
 		static_assert(UE_ARRAY_COUNT(Table) == static_cast<int32>(EMantleWeaponFitHold::Count), "one size per hold");
 		return Table[FMath::Clamp<int32>(static_cast<int32>(Hold), 0, UE_ARRAY_COUNT(Table) - 1)];
@@ -456,7 +457,12 @@ FMantleWeaponFitResult FMantleWeaponFit::Fit(const FMantleWeaponFitInput& In)
 		Result.GripFromRearCm = static_cast<float>((Grip.X - Box.Min.X) * Scale);
 		Result.MeshToWeapon = FTransform(FQuat(Frame), -FVector(Centroid | X, Centroid | Y, Centroid | Z) * Scale - Origin, FVector(Scale));
 		auto Point = [&](const TCHAR* Role, FVector P) { Result.Points.Add(FName(Role), FTransform(FQuat::Identity, P * Scale - Origin)); };
-		if (bShield)
+		if (In.Hold == EMantleWeaponFitHold::Consumable)
+		{
+			// An item held whole in the palm: its middle is the grip.
+			Point(TEXT("Grip"), Centre);
+		}
+		else if (bShield)
 		{
 			Point(TEXT("Grip"), Grip);
 			Point(TEXT("Face"), FVector(Box.Max.X, Centre.Y, Centre.Z));

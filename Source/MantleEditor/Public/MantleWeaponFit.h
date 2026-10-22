@@ -14,7 +14,7 @@ enum class EMantleWeaponFitHold : uint8
 	PumpShotgun,
 	BoltSniper,
 	Lmg,
-	Melee1h, Melee2h, Spear, Staff, Bow, Unarmed, Shield, Throwable,
+	Melee1h, Melee2h, Spear, Staff, Bow, Unarmed, Shield, Throwable, Consumable,
 	Count
 };
 

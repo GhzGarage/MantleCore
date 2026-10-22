@@ -608,7 +608,7 @@ namespace MantleWeaponBuilderKindHeld
 		{
 			return { FVector(0.0, 1.0, 0.0), FVector(-1.0, 0.0, 0.0), FVector(0.0, 0.0, 1.0) };
 		}
-		if (Hold < EMantleWeaponFitHold::Melee1h || Hold == EMantleWeaponFitHold::Shield)
+		if (Hold < EMantleWeaponFitHold::Melee1h || Hold == EMantleWeaponFitHold::Shield || Hold == EMantleWeaponFitHold::Consumable)
 		{
 			return { FVector(1.0, 0.0, 0.0), FVector(0.0, 1.0, 0.0), FVector(0.0, 0.0, 1.0) };
 		}
@@ -724,7 +724,8 @@ namespace MantleWeaponBuilderKindHeld
 			AddBody(Out, Frame, Palm, HandL.GetValue(), Right, Left, 0.15);
 			return;
 		}
-		if (Hold == EMantleWeaponFitHold::Shield)
+		// A shield and a consumable are each one item in the left hand (the bow's clips use the right, but the ghost only needs a hand there).
+		if (Hold == EMantleWeaponFitHold::Shield || Hold == EMantleWeaponFitHold::Consumable)
 		{
 			if (!HandL.IsSet())
 			{
@@ -1127,7 +1128,7 @@ const FMantleWeaponBuilderKind::FContactCache& FMantleWeaponBuilderKind::Contact
 		return A.IsSet() == B.IsSet() && (!A.IsSet() || A.GetValue() == B.GetValue());
 	};
 	const TOptional<FVector> HandR = ToWeapon(GripR);
-	const TOptional<FVector> HandL = ToWeapon(Hold == EMantleWeaponFitHold::Shield ? FName(TEXT("Grip")) : GripL);
+	const TOptional<FVector> HandL = ToWeapon(Hold == EMantleWeaponFitHold::Shield || Hold == EMantleWeaponFitHold::Consumable ? FName(TEXT("Grip")) : GripL);
 	const TOptional<FVector> SightLoc = ToWeapon(Sight);
 	if (Cache.bValid && Cache.Hold == Hold && Cache.MeshToWeapon.Equals(MeshToWeapon, 0.f) && Same(Cache.HandR, HandR) && Same(Cache.HandL, HandL) && Same(Cache.Sight, SightLoc))
 	{

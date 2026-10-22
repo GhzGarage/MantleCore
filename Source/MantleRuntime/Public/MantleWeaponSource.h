@@ -27,12 +27,14 @@ enum class EMantleWeaponHold : uint8
 	Unarmed,
 	Shield,
 	Throwable,
+	/** #1025: a potion, a medkit, food: used on its holder (delivery Use, the Consumable numbers). */
+	Consumable,
 	Count UMETA(Hidden)
 };
 
 /** Default uses the hold's first allowed delivery/resource, so old firearm sources remain hitscan/magazine. */
 UENUM()
-enum class EMantleWeaponSourceDelivery : uint8 { Default, Hitscan, Projectile, Sweep, Beam };
+enum class EMantleWeaponSourceDelivery : uint8 { Default, Hitscan, Projectile, Sweep, Beam, Use };
 UENUM()
 enum class EMantleWeaponSourceResource : uint8 { Default, Magazine, Quiver, Charges, None };
 UENUM()
@@ -46,8 +48,14 @@ UENUM()
 enum class EMantleWeaponSourceAction : uint8
 {
 	Equip, Holster, Idle, Fire, FireLast, ReloadTactical, ReloadEmpty, ReloadStart, ReloadStartEmpty, ReloadLoop, ReloadEnd,
-	ReloadPartial, Attack, Heavy, Block, Throw, Cast, Nock, Draw, Release
+	ReloadPartial, Attack, Heavy, Block, Throw, Cast, Nock, Draw, Release, Use
 };
+/** #1025: which of each hold's two potion clips a consumable plays (the document's consumable.style). */
+UENUM()
+enum class EMantleWeaponSourceUseStyle : uint8 { EatDrink, Use };
+/** #1025: what a consumable does by itself (the document's consumable.effect): heal, or nothing (the place's script does it). */
+UENUM()
+enum class EMantleWeaponSourceConsumableEffect : uint8 { Heal, None };
 
 USTRUCT()
 struct MANTLERUNTIME_API FMantleWeaponSourceCharge
@@ -111,6 +119,24 @@ struct MANTLERUNTIME_API FMantleWeaponSourceCharges
 	GENERATED_BODY()
 	UPROPERTY(EditAnywhere, Category = "Mantle") int32 Count = 3;
 	UPROPERTY(EditAnywhere, Category = "Mantle") float RefillSeconds = 4.f;
+};
+
+/** #1025: a consumable's numbers (the document's consumable block). */
+USTRUCT()
+struct MANTLERUNTIME_API FMantleWeaponSourceConsumable
+{
+	GENERATED_BODY()
+	UPROPERTY(EditAnywhere, Category = "Mantle") EMantleWeaponSourceUseStyle Style = EMantleWeaponSourceUseStyle::EatDrink;
+	UPROPERTY(EditAnywhere, Category = "Mantle") EMantleWeaponSourceConsumableEffect Effect = EMantleWeaponSourceConsumableEffect::Heal;
+	/** With effect Heal: health given (1..1000), and 0 for all at once or the seconds it is spread over. */
+	UPROPERTY(EditAnywhere, Category = "Mantle") float Heal = 50.f;
+	UPROPERTY(EditAnywhere, Category = "Mantle") float HealSeconds = 0.f;
+	UPROPERTY(EditAnywhere, Category = "Mantle") int32 Uses = 1;
+	/** False: one use takes the clip's own length (2.5 s) and useSeconds is not written. */
+	UPROPERTY(EditAnywhere, Category = "Mantle") bool bOverrideUseSeconds = false;
+	UPROPERTY(EditAnywhere, Category = "Mantle") float UseSeconds = 2.5f;
+	UPROPERTY(EditAnywhere, Category = "Mantle") float CooldownSeconds = 0.f;
+	UPROPERTY(EditAnywhere, Category = "Mantle") bool bMoveWhileUsing = true;
 };
 
 /** A separately selected rigid part, positioned in the body's original model space. */
@@ -231,6 +257,8 @@ public:
 	/** #909: a staff with the held beam also throws spells (a tap casts, holding is the beam): the projectile's numbers go with the beam's. */
 	UPROPERTY(EditAnywhere, Category = "Mantle") bool bSpellsBesideBeam = false;
 	UPROPERTY(EditAnywhere, Category = "Mantle") FMantleWeaponSourceCharges Charges;
+	/** #1025: hold Consumable's numbers. */
+	UPROPERTY(EditAnywhere, Category = "Mantle") FMantleWeaponSourceConsumable Consumable;
 	UPROPERTY(EditAnywhere, Category = "Mantle") float BowStringRadiusCm = 1.5f;
 	UPROPERTY(EditAnywhere, Category = "Mantle") TArray<FMantleWeaponSourcePart> Parts;
 	UPROPERTY(EditAnywhere, Category = "Mantle") TArray<FMantleWeaponSourceAttachment> Attachments;
