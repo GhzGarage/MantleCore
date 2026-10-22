@@ -21,6 +21,7 @@
 #include "MantleEditorActions.h"
 #include "MantleGarmentOutfit.h"
 #include "MantleHairColor.h"
+#include "MantleHairFitPictures.h"
 #include "MantleHairGeneration.h"
 #include "MantleMetaHumanBuild.h"
 #include "MantleMetaHumanPose.h"
@@ -64,6 +65,8 @@
 #include "Modules/ModuleManager.h"
 #include "PropertyCustomizationHelpers.h"
 #include "Styling/AppStyle.h"
+#include "Brushes/SlateDynamicImageBrush.h"
+#include "Widgets/Images/SImage.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -2097,7 +2100,22 @@ void SMantleCosmeticPanel::ShowHairHeadFit()
 	}
 	// The hair card lives in its own box so confirming it leaves every check above it alone.
 	const TSharedRef<SVerticalBox> Card = SNew(SVerticalBox);
-	Card->AddSlot().AutoHeight()[Card];
+	IssuesBox->AddSlot().AutoHeight()[Card];
+	// #52: which route this hair takes, in words, before anything it did to the hair.
+	if (Package->bHasHairRoute)
+	{
+		const FMantleHairRoute::FResult& Route = Package->HairRoute;
+		Card->AddSlot().AutoHeight().Padding(0, 8, 0, 2)
+		[
+			SNew(STextBlock).Font(FAppStyle::GetFontStyle("BoldFont")).Text(FText::FromString(Route.Title))
+		];
+		Card->AddSlot().AutoHeight().Padding(0, 2)
+		[
+			SNew(STextBlock).AutoWrapText(true)
+			.ColorAndOpacity(Route.bSupported ? FSlateColor::UseForeground() : FSlateColor(MantleCosmeticPanelPrivate::SeverityColour(EMantleCosmeticSeverity::Warning)))
+			.Text(FText::FromString(Route.Words))
+		];
+	}
 	if (!Package->bHairHeadFitted)
 	{
 		if (Draft.bPlaceHairByHand && Draft.Class == EMantleCosmeticClass::Hair)
@@ -2126,6 +2144,42 @@ void SMantleCosmeticPanel::ShowHairHeadFit()
 	[
 		SNew(STextBlock).AutoWrapText(true).Text(FText::FromString(Fit.Headline))
 	];
+	// The hair as authored and as fitted, on the head it was fitted to (the same pictures as Mantle.Dev.RenderHairFit's angled view).
+	{
+		constexpr int32 PictureSize = 220;
+		const auto MakeBrush = [this](bool bAfter) -> TSharedPtr<FSlateDynamicImageBrush>
+		{
+			TArray<FColor> Pixels;
+			FString Ignored;
+			if (!FMantleHairFitPictures::Render(Package->HairHeadFitMeshes, bAfter, FMantleHairFitPictures::AngledYaw, PictureSize, Pixels, Ignored)) return nullptr;
+			// FColor is BGRA in memory, the order the dynamic brush takes. A new name each time, so Slate never shows the old picture.
+			TArray<uint8> Bytes;
+			Bytes.Append(reinterpret_cast<const uint8*>(Pixels.GetData()), Pixels.Num() * sizeof(FColor));
+			static int32 Serial = 0;
+			return FSlateDynamicImageBrush::CreateWithImageData(*FString::Printf(TEXT("MantleHairFit_%d"), ++Serial), FVector2f(PictureSize, PictureSize), Bytes);
+		};
+		HairFitBeforeBrush = MakeBrush(false);
+		HairFitAfterBrush = MakeBrush(true);
+		if (HairFitBeforeBrush.IsValid() && HairFitAfterBrush.IsValid())
+		{
+			Card->AddSlot().AutoHeight().Padding(0, 4)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Text(LOCTEXT("HairFitBefore", "As you made it"))]
+					+ SVerticalBox::Slot().AutoHeight()[SNew(SImage).Image(HairFitBeforeBrush.Get())]
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Text(LOCTEXT("HairFitAfter", "Fitted to the standard head"))]
+					+ SVerticalBox::Slot().AutoHeight()[SNew(SImage).Image(HairFitAfterBrush.Get())]
+				]
+			];
+		}
+	}
 	for (const FString& Message : Fit.Messages)
 	{
 		Card->AddSlot().AutoHeight().Padding(0, 2)
@@ -3970,7 +4024,7 @@ namespace MantleCosmeticPanelDevShot
 {
 	FAutoConsoleCommand PanelShotCommand(
 		TEXT("Mantle.Dev.CosmeticPanelShot"),
-		TEXT("Mantle.Dev.CosmeticPanelShot <File.png> [Exit]: renders the Cosmetics panel offscreen, to show its Thumbnail section. Uploads nothing."),
+		TEXT("Mantle.Dev.CosmeticPanelShot <File.png> [Exit] [Source= Class= Body= Face=]: renders the Cosmetics panel offscreen, to show its Thumbnail section. Uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&SMantleCosmeticPanel::DevPanelShot));
 }
 
@@ -3988,6 +4042,8 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 		const TSharedRef<SMantleCosmeticPanel> Panel = StaticCastSharedRef<SMantleCosmeticPanel>(Tab->GetContent());
 		FString SourcePath;
 		FString CustomPng;
+		// #52: Body= and Face= (asset paths) and Build check the draft as the Check button does, so the hair fit card shows.
+		FString BodyPath, FacePath;
 		bool bAngle = false;
 		int32 ClassNumber = static_cast<int32>(EMantleCosmeticClass::Garment);
 		for (int32 Index = 1; Index < Args.Num(); ++Index)
@@ -3999,6 +4055,14 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 			else if (Args[Index].StartsWith(TEXT("Class=")))
 			{
 				ClassNumber = FCString::Atoi(*Args[Index].Mid(6));
+			}
+			else if (Args[Index].StartsWith(TEXT("Body=")))
+			{
+				BodyPath = Args[Index].Mid(5);
+			}
+			else if (Args[Index].StartsWith(TEXT("Face=")))
+			{
+				FacePath = Args[Index].Mid(5);
 			}
 			else if (Args[Index].StartsWith(TEXT("SaveCustom=")))
 			{
@@ -4032,6 +4096,20 @@ void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
 			{
 				UE_LOG(LogMantle, Error, TEXT("MANTLE_PANEL_SHOT failed: %s did not load"), *SourcePath);
 			}
+		}
+		const auto LoadPath = [](FString Path) -> UObject*
+		{
+			if (Path.IsEmpty()) return nullptr;
+			if (!FPackageName::GetShortName(Path).Contains(TEXT("."))) Path += TEXT(".") + FPackageName::GetShortName(Path);
+			return LoadObject<UObject>(nullptr, *Path);
+		};
+		if (!BodyPath.IsEmpty() || !FacePath.IsEmpty())
+		{
+			Panel->Draft.AuthoringBody = Cast<USkeletalMesh>(LoadPath(BodyPath));
+			Panel->Draft.AuthoringFace = Cast<USkeletalMesh>(LoadPath(FacePath));
+			if (Panel->Draft.Class == EMantleCosmeticClass::Hair) Panel->Draft.Slot = TEXT("hair");
+			Panel->Draft.bRenderThumbnail = false;
+			Panel->BuildPackage();
 		}
 		if (bAngle)
 		{

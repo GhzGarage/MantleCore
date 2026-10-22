@@ -348,6 +348,30 @@ bool FMantleHairCardsFitClearFaceTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHairFitMeshesHeadInHairFrameTest,
+	"Mantle.Editor.HairFitReport.TheBeforePictureHeadIsScaledToTheAuthoredHair",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHairFitMeshesHeadInHairFrameTest::RunTest(const FString& Parameters)
+{
+	// Hair authored at 1/10 size and 100 cm elsewhere, fitted by scale 10 and a shift: the head must come back to the hair's frame.
+	FMantleHairFitMeshes Meshes;
+	const TArray<FVector3f> Authored = {FVector3f(0.f, 0.f, 0.f), FVector3f(1.f, 0.f, 0.f), FVector3f(0.f, 2.f, 0.f), FVector3f(0.f, 0.f, 3.f)};
+	for (const FVector3f& P : Authored)
+	{
+		Meshes.BeforePositions.Add(P + FVector3f(100.f, 50.f, 20.f));
+		Meshes.AfterPositions.Add(P * 10.f + FVector3f(0.f, 5.f, 160.f));
+	}
+	Meshes.HeadPositions = {FVector3f(0.f, 5.f, 160.f), FVector3f(10.f, 5.f, 160.f)};
+	Meshes.HairTriangles = {0, 1, 2};
+	Meshes.HeadTriangles = {0, 1, 0};
+	const TArray<FVector3f> Head = Meshes.HeadInHairFrame();
+	TestTrue(TEXT("the head's first point lands on the authored hair's origin"), Head[0].Equals(FVector3f(100.f, 50.f, 20.f), 1.e-3f));
+	TestTrue(TEXT("and the head is a tenth of its size there"), Head[1].Equals(FVector3f(101.f, 50.f, 20.f), 1.e-3f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMantleHairCardsFitCapGuardTest,
 	"Mantle.Editor.HairCardsFit.ABigSheetFarFromTheSkinIsHairNotACap",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

@@ -16,6 +16,7 @@ class UAnimSequence;
 class SBox;
 class SVerticalBox;
 struct FAssetData;
+struct FSlateDynamicImageBrush;
 template <typename OptionType> class SComboBox;
 
 /**
@@ -167,6 +168,9 @@ private:
 	void ShowIssues(const TArray<FMantleCosmeticIssue>& Issues, const TArray<FString>& Notes);
 	/** #51: under the checks, the hair head-fit words with one-click Looks good / Adjust (nothing for hair that was not fitted). */
 	void ShowHairHeadFit();
+	/** #52: the before and after pictures the hair fit card shows (null when nothing could render them). */
+	TSharedPtr<FSlateDynamicImageBrush> HairFitBeforeBrush;
+	TSharedPtr<FSlateDynamicImageBrush> HairFitAfterBrush;
 
 	FText GetFilesText() const;
 	FText GetStatusText() const;
