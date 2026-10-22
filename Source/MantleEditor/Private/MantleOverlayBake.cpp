@@ -32,22 +32,28 @@ TArray<uint8> FMantleOverlayBake::PictureStrength(TConstArrayView<FColor> Pixels
 	return Out;
 }
 
-bool FMantleOverlayBake::ReadMesh(const USkeletalMesh& Mesh, TArray<FTriangle>& OutTriangles, FString& OutError)
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleOverlayBakePrivate
+{
+	bool ReadLod(const USkeletalMesh& Mesh, int32 LodIndex, TArray<FMantleOverlayBake::FTriangle>& OutTriangles, FString& OutError);
+}
+
+bool MantleOverlayBakePrivate::ReadLod(const USkeletalMesh& Mesh, const int32 LodIndex, TArray<FMantleOverlayBake::FTriangle>& OutTriangles, FString& OutError)
 {
 	OutTriangles.Reset();
 	const FSkeletalMeshModel* Imported = Mesh.GetImportedModel();
-	if (!Imported || !Imported->LODModels.IsValidIndex(0))
+	if (!Imported || !Imported->LODModels.IsValidIndex(LodIndex))
 	{
-		OutError = FString::Printf(TEXT("%s has no LOD0 to read."), *Mesh.GetName());
+		OutError = FString::Printf(TEXT("%s has no LOD%d to read."), *Mesh.GetName(), LodIndex);
 		return false;
 	}
-	const FSkeletalMeshLODModel& Model = Imported->LODModels[0];
+	const FSkeletalMeshLODModel& Model = Imported->LODModels[LodIndex];
 	// Only the skin sections: a face mesh also carries eyes, teeth and lashes on their own UV layouts. The role comes from the slot name as the
 	// export and the worn preview read it (a built face names its skin slot something the guide's name match would not catch).
 	TSet<FString> SkinSlots;
 	{
-		const TArray<FString> Names = FMantleCosmeticExport::SectionMaterialNames(&Mesh, 0);
-		const TArray<FString> Roles = FMantleCosmeticExport::DefaultSectionRoles(&Mesh, 0);
+		const TArray<FString> Names = FMantleCosmeticExport::SectionMaterialNames(&Mesh, LodIndex);
+		const TArray<FString> Roles = FMantleCosmeticExport::DefaultSectionRoles(&Mesh, LodIndex);
 		for (int32 Index = 0; Index < Names.Num(); ++Index)
 		{
 			if (Roles.IsValidIndex(Index) && Roles[Index] == TEXT("skin"))
@@ -74,7 +80,7 @@ bool FMantleOverlayBake::ReadMesh(const USkeletalMesh& Mesh, TArray<FTriangle>& 
 		}
 		for (uint32 TriangleIndex = 0; TriangleIndex < Section.NumTriangles; ++TriangleIndex)
 		{
-			FTriangle Out;
+			FMantleOverlayBake::FTriangle Out;
 			bool bValid = true;
 			for (int32 Corner = 0; Corner < 3 && bValid; ++Corner)
 			{
@@ -111,7 +117,42 @@ bool FMantleOverlayBake::ReadMesh(const USkeletalMesh& Mesh, TArray<FTriangle>& 
 	}
 	if (OutTriangles.IsEmpty())
 	{
-		OutError = FString::Printf(TEXT("%s has no triangles in LOD0 the editor can read."), *Mesh.GetName());
+		OutError = FString::Printf(TEXT("%s has no skin triangles in LOD%d the editor can read."), *Mesh.GetName(), LodIndex);
+		return false;
+	}
+	return true;
+}
+
+bool FMantleOverlayBake::ReadMesh(const USkeletalMesh& Mesh, TArray<FTriangle>& OutTriangles, FString& OutError)
+{
+	// The LOD with the most skin: LOD0 for a body. A built face can carry its fine skin on a later LOD (its LOD0 holds only a low-detail strip),
+	// and every LOD shares the one UV layout.
+	OutTriangles.Reset();
+	const FSkeletalMeshModel* Imported = Mesh.GetImportedModel();
+	const int32 LodCount = Imported ? Imported->LODModels.Num() : 0;
+	if (LodCount == 0)
+	{
+		OutError = FString::Printf(TEXT("%s has no LOD0 to read."), *Mesh.GetName());
+		return false;
+	}
+	FString FirstError;
+	for (int32 LodIndex = 0; LodIndex < LodCount; ++LodIndex)
+	{
+		TArray<FTriangle> Lod;
+		FString Error;
+		if (!MantleOverlayBakePrivate::ReadLod(Mesh, LodIndex, Lod, Error))
+		{
+			if (FirstError.IsEmpty()) FirstError = Error;
+			continue;
+		}
+		if (Lod.Num() > OutTriangles.Num())
+		{
+			OutTriangles = MoveTemp(Lod);
+		}
+	}
+	if (OutTriangles.IsEmpty())
+	{
+		OutError = FirstError;
 		return false;
 	}
 	return true;
