@@ -134,6 +134,15 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 */
 	static bool TransferWeights(FMantleGlbMesh& Garment, const FMantleGlbMesh& Body, int32& OutFar, double& OutMeanCm, FString& OutError);
 
+	/**
+	 * The MetaHuman's skin is shaped like the original body's where clothing is within ShapeNearCm of it, not at all past
+	 * ShapeFarCm (in between, in proportion), and the moves smoothed ShapeSmoothIters passes over its edges: its hands,
+	 * face and the rest stay MetaHuman's own.
+	 */
+	static constexpr double ShapeNearCm = 2.0;
+	static constexpr double ShapeFarCm = 8.0;
+	static constexpr int32 ShapeSmoothIters = 10;
+
 	/** Skin moves are smoothed this many passes over the original body's edges, so a fold of the closest-point map is not printed on the garment. */
 	static constexpr int32 CarrySmoothIters = 3;
 

@@ -1242,10 +1242,47 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		}
 	}
 
-	// The MetaHuman's skin moved onto the original body (CarryWithSkin, skin onto skin), as the body the Outfit is made on: the
-	// clothing then stays as it was made, sitting on the body it was made for, and the resize that fits an Outfit onto another
-	// body (Epic's, smooth) takes it from that shape to theirs. Moving the clothing onto the MetaHuman's shape instead crushed
-	// it where the MetaHuman is smaller (a corset's cups on a flatter bust).
+	// 2. Each garment posed the way the body was, on the MetaHuman, before the body is shaped (it is shaped only under them).
+	TArray<TSharedPtr<FMantleGlbMesh>> PosedGarments;
+	TArray<TArray<UMaterialInterface*>> GarmentMaterials;
+	TArray<FString> PoseErrors;
+	TArray<FVector3f> Worn;
+	for (USkeletalMesh* Garment : Garments)
+	{
+		TSharedPtr<FMantleGlbMesh>& Geometry = PosedGarments.Add_GetRef(MakeShared<FMantleGlbMesh>());
+		TArray<UMaterialInterface*>& Materials = GarmentMaterials.AddDefaulted_GetRef();
+		FString& PoseError = PoseErrors.AddDefaulted_GetRef();
+		if (!Garment)
+		{
+			PoseError = TEXT("not a skeletal mesh");
+			continue;
+		}
+		if (!FMantleCosmeticExport::ReadSkeletalMesh(Garment, 0, *Geometry, Materials, Triangles, PoseError))
+		{
+			continue;
+		}
+		const TArray<FTransform> Posed = GarmentPosedJoints(Geometry->Joints, ClipBones, Matched);
+		if (Matched == 0)
+		{
+			PoseError = FString::Printf(TEXT("%s shares no bones with %s, so it can't be posed the way the body was"), *Garment->GetName(), *BodyName);
+			continue;
+		}
+		if (!PoseMesh(*Geometry, Posed, Work.InputScale, PoseError))
+		{
+			continue;
+		}
+		for (FVector3f& Position : Geometry->Positions)
+		{
+			Position += OutResult.Offset;
+		}
+		Worn.Append(Geometry->Positions);
+	}
+
+	// The MetaHuman's skin under the clothing moved onto the original body's (CarryWithSkin, skin onto skin), fading out past
+	// it (ShapeNearCm to ShapeFarCm from the clothing) and smoothed over its edges, as the body the Outfit is made on: the
+	// clothing then stays as it was made, on the body it was made for, and the resize that fits an Outfit onto another body
+	// (Epic's, smooth) takes it from that shape to theirs. Moving the clothing onto the MetaHuman's shape instead crushed it
+	// where the MetaHuman is smaller (a corset's cups on a flatter bust); shaping all of the body tore its hands and arms.
 	TArray<FVector3f> Wrapped = TwinSurface.Positions;
 	{
 		double WrapCm = 0.0;
@@ -1255,8 +1292,55 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 			OutRefusal = FString::Printf(TEXT("The MetaHuman could not be shaped like the original body: %s."), *Error);
 			return false;
 		}
-		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT the MetaHuman shaped like the original body (%.2f cm on average): %s"), WrapCm,
-			*DescribeClearance(Wrapped, OriginalSurface));
+		const int32 NumPoints = TwinSurface.Positions.Num();
+		TArray<FVector3f> Move;
+		Move.SetNum(NumPoints);
+		const FGarmentPointGrid WornGrid(Worn, 2.0);
+		TArray<TPair<double, int32>> Near;
+		int32 Shaped = 0;
+		for (int32 Point = 0; Point < NumPoints; ++Point)
+		{
+			WornGrid.Nearest(TwinSurface.Positions[Point], 1, ShapeFarCm, Near);
+			const double Share = Near.IsEmpty() ? 0.0 : FMath::Clamp((ShapeFarCm - Near[0].Key) / (ShapeFarCm - ShapeNearCm), 0.0, 1.0);
+			Move[Point] = (Wrapped[Point] - TwinSurface.Positions[Point]) * static_cast<float>(Share);
+			Shaped += Share > 0.0 ? 1 : 0;
+		}
+		TArray<TArray<int32>> Neighbours;
+		Neighbours.SetNum(NumPoints);
+		for (int32 First = 0; First + 2 < TwinSurface.Indices.Num(); First += 3)
+		{
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				const int32 A = static_cast<int32>(TwinSurface.Indices[First + Corner]);
+				const int32 B = static_cast<int32>(TwinSurface.Indices[First + (Corner + 1) % 3]);
+				Neighbours[A].AddUnique(B);
+				Neighbours[B].AddUnique(A);
+			}
+		}
+		for (int32 Pass = 0; Pass < ShapeSmoothIters; ++Pass)
+		{
+			TArray<FVector3f> Next = Move;
+			for (int32 Point = 0; Point < NumPoints; ++Point)
+			{
+				if (Neighbours[Point].IsEmpty())
+				{
+					continue;
+				}
+				FVector3f Sum = FVector3f::ZeroVector;
+				for (const int32 Neighbour : Neighbours[Point])
+				{
+					Sum += Move[Neighbour];
+				}
+				Next[Point] = 0.5f * Move[Point] + 0.5f * Sum / static_cast<float>(Neighbours[Point].Num());
+			}
+			Move = MoveTemp(Next);
+		}
+		for (int32 Point = 0; Point < NumPoints; ++Point)
+		{
+			Wrapped[Point] = TwinSurface.Positions[Point] + Move[Point];
+		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT the MetaHuman shaped like the original body under the clothing (%d of %d points, %.2f cm on average where whole): %s"),
+			Shaped, NumPoints, WrapCm, *DescribeClearance(Wrapped, OriginalSurface));
 	}
 	FMantleGlbMesh WrappedSkin = MetaHumanSkin;
 	for (int32 Vertex = 0; Vertex < WrappedSkin.Positions.Num(); ++Vertex)
@@ -1286,8 +1370,8 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 				const int32* Point = PointAt.Find(Position);
 				if (!Point)
 				{
-					++Unmatched;
 					Grid.Nearest(Position, 1, 1.0, Found);
+					Unmatched += Found.IsEmpty() ? 1 : 0;
 				}
 				const int32 Index = Point ? *Point : (Found.Num() > 0 ? Found[0].Value : INDEX_NONE);
 				if (Wrapped.IsValidIndex(Index))
@@ -1323,40 +1407,21 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		return false;
 	}
 	OutResult.AuthoringBody = Authoring->GetPathName();
-	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT Outfit body %s: %d vertices not found on the MetaHuman's skin"), *OutResult.AuthoringBody, Unmatched);
+	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT Outfit body %s: %d vertices not within 1 cm of the MetaHuman's skin (left unshaped)"), *OutResult.AuthoringBody, Unmatched);
 
 	// 3 and 4, per garment.
-	for (USkeletalMesh* Garment : Garments)
+	for (int32 Index = 0; Index < Garments.Num(); ++Index)
 	{
+		USkeletalMesh* Garment = Garments[Index];
 		FMantleGarmentOutfitPiece& Piece = OutResult.Pieces.AddDefaulted_GetRef();
 		Piece.Garment = Garment ? Garment->GetPathName() : FString();
-		if (!Garment)
+		if (!PoseErrors[Index].IsEmpty())
 		{
-			Piece.Error = TEXT("not a skeletal mesh");
+			Piece.Error = PoseErrors[Index];
 			continue;
 		}
-		TSharedRef<FMantleGlbMesh> Geometry = MakeShared<FMantleGlbMesh>();
-		TArray<UMaterialInterface*> Materials;
-		if (!FMantleCosmeticExport::ReadSkeletalMesh(Garment, 0, *Geometry, Materials, Triangles, Error))
-		{
-			Piece.Error = Error;
-			continue;
-		}
-		const TArray<FTransform> Posed = GarmentPosedJoints(Geometry->Joints, ClipBones, Matched);
-		if (Matched == 0)
-		{
-			Piece.Error = FString::Printf(TEXT("%s shares no bones with %s, so it can't be posed the way the body was"), *Garment->GetName(), *BodyName);
-			continue;
-		}
-		if (!PoseMesh(*Geometry, Posed, Work.InputScale, Error))
-		{
-			Piece.Error = Error;
-			continue;
-		}
-		for (FVector3f& Position : Geometry->Positions)
-		{
-			Position += OutResult.Offset;
-		}
+		const TSharedRef<FMantleGlbMesh> Geometry = PosedGarments[Index].ToSharedRef();
+		const TArray<UMaterialInterface*>& Materials = GarmentMaterials[Index];
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the original body: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, OriginalSurface));
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman as posed: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, TwinSurface));
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman shaped like the original body: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, WrappedSurface));
@@ -1782,7 +1847,9 @@ USkeletalMesh* FMantleGarmentOutfit::FindBareBody(const USkeletalMesh& Body, FSt
 	}
 	if (Best)
 	{
-		OutWhy = BestWorn == 0 ? FString::Printf(TEXT("%s is %s's whole body with nothing on"), *Best->GetName(), *Body.GetName())
+		const TArray<FString> Words = FMantleOutfitSections::Words(Best->GetName());
+		const bool bUnderwear = BestWorn > 0 || Words.Contains(TEXT("underwear")) || Words.Contains(TEXT("lingerie"));
+		OutWhy = !bUnderwear ? FString::Printf(TEXT("%s is %s's whole body with nothing on"), *Best->GetName(), *Body.GetName())
 			: FString::Printf(TEXT("%s is %s's whole body in underwear, which Convert takes off"), *Best->GetName(), *Body.GetName());
 	}
 	return Best;

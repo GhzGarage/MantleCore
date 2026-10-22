@@ -122,7 +122,7 @@ namespace MantleDevSectionOutfitsPrivate
 		}
 		FMantleGarmentOutfitResult Made;
 		FString ConvertJson, Code, Refusal;
-		const bool bMade = FMantleGarmentOutfit::Make(*Body, Garments, FString(), FString(), Made, ConvertJson, Code, Refusal);
+		const bool bMade = FMantleGarmentOutfit::Make(*Body, Garments, FString(), TEXT("Strip.0.BareSkin"), Made, ConvertJson, Code, Refusal);
 		UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS Outfits on %s: %s (body gap %.2f cm)"), *Made.Character, bMade ? TEXT("made") : *Refusal, Made.BodyGapCm);
 		for (int32 Index = 0; Index < Made.Pieces.Num() && Index < Garments.Num(); ++Index)
 		{
