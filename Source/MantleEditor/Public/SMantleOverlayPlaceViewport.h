@@ -22,6 +22,12 @@ namespace MantleOverlayPlaceMath
 	/** A projector at Point looking into the surface (against Normal), the picture upright (its up is world up, else world forward on a flat-up surface). */
 	MANTLEEDITOR_API FQuat FaceSurface(const FVector& Normal);
 
+	/**
+	 * Where a picture starts on a skin: the front of the chest (or of the face) of Bounds, a ray in from the front at that height,
+	 * moved by Offset first. The converted meshes face +Y; -Y is tried when that misses. False when the ray meets nothing.
+	 */
+	MANTLEEDITOR_API bool DefaultPlacement(TConstArrayView<FMantleOverlayBake::FTriangle> Triangles, const FBox& Bounds, const FVector& Offset, FTransform& OutTransform);
+
 	/** A gizmo scale drag as the picture's new width: the width grows by the mean of the drag's axes (a uniform scale), never below MinCm. */
 	MANTLEEDITOR_API float ApplyScaleDrag(float WidthCm, const FVector& ScaleDelta, float MinCm = 0.5f);
 }

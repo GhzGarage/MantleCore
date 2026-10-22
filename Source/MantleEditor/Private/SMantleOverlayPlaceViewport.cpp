@@ -62,6 +62,30 @@ FQuat MantleOverlayPlaceMath::FaceSurface(const FVector& Normal)
 	return FRotationMatrix::MakeFromXZ(Look, Up).ToQuat();
 }
 
+bool MantleOverlayPlaceMath::DefaultPlacement(TConstArrayView<FMantleOverlayBake::FTriangle> Triangles, const FBox& Bounds, const FVector& Offset, FTransform& OutTransform)
+{
+	if (!Bounds.IsValid)
+	{
+		return false;
+	}
+	FVector Centre = Bounds.GetCenter();
+	if (Bounds.GetSize().Z > 100.0)
+	{
+		Centre.Z = Bounds.Min.Z + Bounds.GetSize().Z * 0.72;
+	}
+	Centre += Offset;
+	for (const double Side : { 1.0, -1.0 })
+	{
+		FVector Point, Normal;
+		if (RayOnTriangles(Triangles, Centre + FVector(0.0, Side * 500.0, 0.0), FVector(0.0, -Side, 0.0), Point, Normal))
+		{
+			OutTransform = FTransform(FaceSurface(Normal), Point);
+			return true;
+		}
+	}
+	return false;
+}
+
 float MantleOverlayPlaceMath::ApplyScaleDrag(const float WidthCm, const FVector& ScaleDelta, const float MinCm)
 {
 	const double Mean = (ScaleDelta.X + ScaleDelta.Y + ScaleDelta.Z) / 3.0;
@@ -303,27 +327,13 @@ const FMantleOverlayPlacement& SMantleOverlayPlaceViewport::GetPlacement() const
 
 void SMantleOverlayPlaceViewport::ResetPlacement()
 {
-	// The front of the chest (or of the face): a ray in from the front at that height. The converted meshes face +Y; try -Y when that misses.
-	const FBox& Bounds = Client->Bounds;
-	if (!Bounds.IsValid)
+	// The front of the chest (or of the face).
+	FTransform Result;
+	if (MantleOverlayPlaceMath::DefaultPlacement(Client->Triangles, Client->Bounds, FVector::ZeroVector, Result))
 	{
-		return;
-	}
-	FVector Centre = Bounds.GetCenter();
-	if (Bounds.GetSize().Z > 100.0)
-	{
-		Centre.Z = Bounds.Min.Z + Bounds.GetSize().Z * 0.72;
-	}
-	for (const double Side : { 1.0, -1.0 })
-	{
-		FVector Point, Normal;
-		if (MantleOverlayPlaceMath::RayOnTriangles(Client->Triangles, Centre + FVector(0.0, Side * 500.0, 0.0), FVector(0.0, -Side, 0.0), Point, Normal))
-		{
-			Client->Placement.Transform = FTransform(MantleOverlayPlaceMath::FaceSurface(Normal), Point);
-			Client->Invalidate();
-			OnPlacementChanged.ExecuteIfBound();
-			return;
-		}
+		Client->Placement.Transform = Result;
+		Client->Invalidate();
+		OnPlacementChanged.ExecuteIfBound();
 	}
 }
 
