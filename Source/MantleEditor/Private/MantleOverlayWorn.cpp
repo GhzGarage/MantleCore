@@ -235,7 +235,7 @@ namespace MantleOverlayWornDevCommands
 	{
 		if (Args.Num() < 5)
 		{
-			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED usage: Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>/<yaw>] [Zoom=<z>] [Exit]"));
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED usage: Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>/<yaw>] [Zoom=<z>] [Relief=<n>] [Exit]"));
 			return;
 		}
 		IFileManager::Get().MakeDirectory(*Args[0], true);
@@ -279,6 +279,10 @@ namespace MantleOverlayWornDevCommands
 			else if (Arg.StartsWith(TEXT("Zoom=")))
 			{
 				Draft.Thumbnail.Zoom = FCString::Atof(*Arg.Mid(5));
+			}
+			else if (Arg.StartsWith(TEXT("Relief=")))
+			{
+				Draft.OverlayPlacement.Relief = FCString::Atof(*Arg.Mid(7));
 			}
 		}
 		// The same default spot the panel starts on, moved by the offset.
@@ -342,7 +346,7 @@ namespace MantleOverlayWornDevCommands
 
 	FAutoConsoleCommand OverlayPlacedCommand(
 		TEXT("Mantle.Dev.OverlayPlacedSample"),
-		TEXT("Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>/<yaw>] [Zoom=<z>] [Exit]: a placed picture through the panel's export; the baked mask, normal map and Automatic thumbnail as PNGs. Uploads nothing."),
+		TEXT("Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>/<yaw>] [Zoom=<z>] [Relief=<n>] [Exit]: a placed picture through the panel's export; the baked mask, normal map and Automatic thumbnail as PNGs. Uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunPlacedSample));
 
 	FAutoConsoleCommand OverlaySamplesCommand(
