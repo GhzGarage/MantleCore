@@ -1,6 +1,8 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleOverlayBake.h"
 
+#include "MantleCosmeticExport.h"
+
 #include "Engine/SkeletalMesh.h"
 #include "Rendering/SkeletalMeshLODModel.h"
 #include "Rendering/SkeletalMeshModel.h"
@@ -40,13 +42,28 @@ bool FMantleOverlayBake::ReadMesh(const USkeletalMesh& Mesh, TArray<FTriangle>& 
 		return false;
 	}
 	const FSkeletalMeshLODModel& Model = Imported->LODModels[0];
-	// Only the skin sections, as the painting guide reads them: a face mesh also carries eyes and teeth on their own UV layouts.
+	// Only the skin sections: a face mesh also carries eyes, teeth and lashes on their own UV layouts. The role comes from the slot name as the
+	// export and the worn preview read it (a built face names its skin slot something the guide's name match would not catch).
+	TSet<FString> SkinSlots;
+	{
+		const TArray<FString> Names = FMantleCosmeticExport::SectionMaterialNames(&Mesh, 0);
+		const TArray<FString> Roles = FMantleCosmeticExport::DefaultSectionRoles(&Mesh, 0);
+		for (int32 Index = 0; Index < Names.Num(); ++Index)
+		{
+			if (Roles.IsValidIndex(Index) && Roles[Index] == TEXT("skin"))
+			{
+				SkinSlots.Add(Names[Index]);
+			}
+		}
+	}
 	const TArray<FSkeletalMaterial>& Slots = Mesh.GetMaterials();
-	const auto IsSkin = [&Slots](const FSkelMeshSection& Section)
+	const auto IsSkin = [&Slots, &SkinSlots](const FSkelMeshSection& Section)
 	{
 		if (!Slots.IsValidIndex(Section.MaterialIndex)) return false;
-		const FString Name = Slots[Section.MaterialIndex].MaterialSlotName.ToString().ToLower();
-		return Name.Contains(TEXT("head")) || Name.Contains(TEXT("body")) || Name.Contains(TEXT("skin"));
+		const FString Name = Slots[Section.MaterialIndex].MaterialSlotName.ToString();
+		if (!SkinSlots.IsEmpty()) return SkinSlots.Contains(Name);
+		const FString Lower = Name.ToLower();
+		return Lower.Contains(TEXT("head")) || Lower.Contains(TEXT("body")) || Lower.Contains(TEXT("skin"));
 	};
 	const bool bAnySkin = Model.Sections.ContainsByPredicate(IsSkin);
 	for (const FSkelMeshSection& Section : Model.Sections)
