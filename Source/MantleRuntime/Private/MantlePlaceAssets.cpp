@@ -2023,6 +2023,11 @@ void FMantlePlaceAssets::QueueWeaponPartsOf(const FString& WeaponId, const FMant
 	}
 	QueueMaterialsOf(WeaponId, MaterialIds);
 	QueueSoundsOf(WeaponId, Named.Sounds);
+	// The hotbar icon is a colour texture, as a livery is; a dedicated server draws no hotbar and fetches none.
+	if (!Named.Icon.IsEmpty())
+	{
+		QueueLiveriesOf(WeaponId, { Named.Icon });
+	}
 }
 
 // ---- Fetch --------------------------------------------------------------------------------------------

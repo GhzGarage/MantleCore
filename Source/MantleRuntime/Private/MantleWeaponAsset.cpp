@@ -19,6 +19,7 @@ TArray<FString> FMantleWeaponAsset::NamedIds() const
 {
 	TArray<FString> Ids;
 	MantleWeaponAssetPrivate::AddOnce(Ids, Mesh);
+	MantleWeaponAssetPrivate::AddOnce(Ids, Icon);
 	for (const TArray<FString>* List : { &Attachments, &Sounds, &Materials })
 	{
 		for (const FString& Id : *List)
@@ -61,6 +62,7 @@ bool FMantleWeaponAsset::Read(const TConstArrayView<uint8> Bytes, FMantleWeaponA
 	Out.Text = Text;
 	Out.Name = Desc.Name;
 	Out.Mesh = Desc.Mesh;
+	Out.Icon = Desc.Icon;
 	if (Desc.Attachments.bSet)
 	{
 		for (const FMantleWeaponDocAttachment& Attachment : Desc.Attachments.Value)

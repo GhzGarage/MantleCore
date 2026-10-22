@@ -9,8 +9,9 @@
 #include "Misc/Parse.h"
 
 // Mantle's hosted API: what the shipped client talks to, and where the editor plugin publishes
-// unless something overrides it.
-#define MANTLE_HOSTED_API_URL TEXT("https://mantle-api-staging-ghzgarage.onrender.com")
+// unless something overrides it. A name on Mantle's own zone (#810), so moving the API to another
+// host or account is a DNS change, not a client release.
+#define MANTLE_HOSTED_API_URL TEXT("https://api.mantleplatform.com")
 
 const TCHAR* FMantleConnection::HostedBaseUrl = MANTLE_HOSTED_API_URL;
 

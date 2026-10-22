@@ -1398,6 +1398,17 @@ bool FMantlePlaceAssetSet::WeaponBytes(const FMantleConvertedWeapon& Weapon, TAr
 		return false;
 	}
 	Root->SetStringField(TEXT("mesh"), MeshRef->Id);
+	// The hotbar icon is the library picture the weapon uploaded beside it (a colour texture). Create writes the icon's local name;
+	// a weapon whose picture could not be taken or uploaded names none.
+	const FMantlePlaceUploadedRef* IconRef = Weapon.ThumbnailKey.IsEmpty() ? nullptr : Uploaded.Find(Weapon.ThumbnailKey);
+	if (IconRef && !IconRef->Id.IsEmpty())
+	{
+		Root->SetStringField(TEXT("icon"), IconRef->Id);
+	}
+	else
+	{
+		Root->RemoveField(TEXT("icon"));
+	}
 	// The slots' materials by uploaded id: the weapon's own, and (#898) each extra part's.
 	auto SetMaterials = [this, &Weapon, &OutError](FJsonObject& Into, const TArray<FMantleConvertedWeapon::FSlot>& Slots) -> bool
 	{

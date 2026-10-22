@@ -707,6 +707,11 @@ struct MANTLERUNTIME_API FMantleWeaponDesc
 	 * published). Unset: the slots draw untextured, or with whatever the caller passes beside the document.
 	 */
 	TMantleWeaponDocValue<TArray<FString>> Materials;
+	/**
+	 * Optional: the texture the hotbar shows for the weapon, a local name (an uploaded texture's id once published), the
+	 * library thumbnail. Empty: the hotbar shows no picture.
+	 */
+	FString Icon;
 	/** The hold's sockets are required, its optional sockets allowed (x-holds); the sockets block is written when any is set. */
 	TMantleWeaponDocValue<FMantleWeaponDocSocket> Sockets[static_cast<int32>(EMantleWeaponDocSocket::Count)];
 	TMantleWeaponDocValue<FMantleWeaponDocParts> Parts;
