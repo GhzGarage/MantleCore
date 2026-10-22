@@ -235,7 +235,7 @@ namespace MantleOverlayWornDevCommands
 	{
 		if (Args.Num() < 5)
 		{
-			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED usage: Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>,<yaw>] [Zoom=<z>] [Exit]"));
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_OVERLAY_PLACED usage: Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>/<yaw>] [Zoom=<z>] [Exit]"));
 			return;
 		}
 		IFileManager::Get().MakeDirectory(*Args[0], true);
@@ -271,7 +271,7 @@ namespace MantleOverlayWornDevCommands
 		for (const FString& Arg : Args)
 		{
 			FString Pitch, Yaw;
-			if (Arg.StartsWith(TEXT("Angle=")) && Arg.Mid(6).Split(TEXT(","), &Pitch, &Yaw))
+			if (Arg.StartsWith(TEXT("Angle=")) && Arg.Mid(6).Split(TEXT("/"), &Pitch, &Yaw))
 			{
 				Draft.Thumbnail.Mode = EMantleThumbnailMode::Angle;
 				Draft.Thumbnail.Angle = FRotator(FCString::Atof(*Pitch), FCString::Atof(*Yaw), 0.0);
@@ -282,12 +282,7 @@ namespace MantleOverlayWornDevCommands
 			}
 		}
 		// The same default spot the panel starts on, moved by the offset.
-		USkeletalMesh* Mesh = FMantleOverlayChecks::IsFaceSlot(Draft.Slot) ? FMantleReferenceBodies::GetFace() : nullptr;
-		if (!Mesh && !FMantleOverlayChecks::IsFaceSlot(Draft.Slot))
-		{
-			const TArray<USkeletalMesh*> References = FMantleReferenceBodies::FindBodies(*Contract, nullptr);
-			Mesh = References.IsEmpty() ? nullptr : References[0];
-		}
+		USkeletalMesh* Mesh = FMantleOverlayBake::DefaultMesh(FMantleOverlayChecks::IsFaceSlot(Draft.Slot), Contract);
 		TArray<FMantleOverlayBake::FTriangle> Triangles;
 		FTransform Spot;
 		if (!Mesh || !FMantleOverlayBake::ReadMesh(*Mesh, Triangles, Error)
@@ -347,7 +342,7 @@ namespace MantleOverlayWornDevCommands
 
 	FAutoConsoleCommand OverlayPlacedCommand(
 		TEXT("Mantle.Dev.OverlayPlacedSample"),
-		TEXT("Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>,<yaw>] [Zoom=<z>] [Exit]: a placed picture through the panel's export; the baked mask, normal map and Automatic thumbnail as PNGs. Uploads nothing."),
+		TEXT("Mantle.Dev.OverlayPlacedSample <Directory> <Picture.png> <Slot> <OffsetX> <OffsetZ> [WidthCm] [DepthCm] [Angle=<pitch>/<yaw>] [Zoom=<z>] [Exit]: a placed picture through the panel's export; the baked mask, normal map and Automatic thumbnail as PNGs. Uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunPlacedSample));
 
 	FAutoConsoleCommand OverlaySamplesCommand(

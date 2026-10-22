@@ -3413,15 +3413,7 @@ void SMantleCosmeticPanel::RefreshOverlayPlacement()
 	USkeletalMesh* Mesh = FMantleOverlayChecks::IsFaceSlot(Draft.Slot) ? OverlayPreviewFace.Get() : OverlayPreviewBody.Get();
 	if (!Mesh)
 	{
-		if (FMantleOverlayChecks::IsFaceSlot(Draft.Slot))
-		{
-			Mesh = FMantleReferenceBodies::GetFace();
-		}
-		else if (Contract)
-		{
-			const TArray<USkeletalMesh*> References = FMantleReferenceBodies::FindBodies(*Contract, nullptr);
-			Mesh = References.IsEmpty() ? nullptr : References[0];
-		}
+		Mesh = FMantleOverlayBake::DefaultMesh(FMantleOverlayChecks::IsFaceSlot(Draft.Slot), Contract);
 	}
 	Draft.OverlayPlaceMesh = Mesh;
 	FString Error;

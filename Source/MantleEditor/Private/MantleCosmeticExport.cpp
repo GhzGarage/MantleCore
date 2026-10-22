@@ -2277,16 +2277,8 @@ namespace MantleCosmeticExportPrivate
 		USkeletalMesh* Mesh = Draft.OverlayPlaceMesh.Get();
 		if (!Mesh)
 		{
-			// Not picked: Mantle's reference body or face, as the Preview falls back.
-			if (FMantleOverlayChecks::IsFaceSlot(Draft.Slot))
-			{
-				Mesh = FMantleReferenceBodies::GetFace();
-			}
-			else
-			{
-				const TArray<USkeletalMesh*> References = FMantleReferenceBodies::FindBodies(Contract, nullptr);
-				Mesh = References.IsEmpty() ? nullptr : References[0];
-			}
+			// Not picked: the template body or face, else Mantle's reference one.
+			Mesh = FMantleOverlayBake::DefaultMesh(FMantleOverlayChecks::IsFaceSlot(Draft.Slot), &Contract);
 		}
 		if (!Mesh)
 		{

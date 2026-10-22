@@ -2,10 +2,30 @@
 #include "MantleOverlayBake.h"
 
 #include "MantleCosmeticExport.h"
+#include "MantleOverlayGuide.h"
+#include "MantleReferenceBodies.h"
 
 #include "Engine/SkeletalMesh.h"
 #include "Rendering/SkeletalMeshLODModel.h"
 #include "Rendering/SkeletalMeshModel.h"
+
+USkeletalMesh* FMantleOverlayBake::DefaultMesh(const bool bFace, const FMantleAvatarContract* Contract)
+{
+	if (USkeletalMesh* Template = LoadObject<USkeletalMesh>(nullptr, bFace ? FMantleOverlayGuide::TemplateFacePath : FMantleOverlayGuide::TemplateBodyPath))
+	{
+		return Template;
+	}
+	if (bFace)
+	{
+		return FMantleReferenceBodies::GetFace();
+	}
+	if (!Contract)
+	{
+		return nullptr;
+	}
+	const TArray<USkeletalMesh*> References = FMantleReferenceBodies::FindBodies(*Contract, nullptr);
+	return References.IsEmpty() ? nullptr : References[0];
+}
 
 TArray<uint8> FMantleOverlayBake::PictureStrength(TConstArrayView<FColor> Pixels, const int32 Width, const int32 Height)
 {
