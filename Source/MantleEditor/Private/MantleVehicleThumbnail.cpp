@@ -2,11 +2,14 @@
 #include "MantleVehicleThumbnail.h"
 
 #include "MantleCosmeticThumbnail.h"
+#include "MantleModelThumbnail.h"
 #include "MantlePng.h"
 #include "MantleSkinnedMesh.h"
 #include "MantleVehicleSource.h"
 
 #include "Engine/SkeletalMesh.h"
+#include "ImageCore.h"
+#include "ImageUtils.h"
 #include "Math/RotationMatrix.h"
 
 // Named, not anonymous: MantleEditor builds as a unity build.
@@ -230,4 +233,38 @@ bool FMantleVehicleThumbnail::Take(UMantleVehicleSource& Source, USkeletalMesh* 
 	Source.Modify();
 	Source.ThumbnailPng = MoveTemp(Png);
 	return true;
+}
+
+FString FMantleVehicleThumbnail::TakenWhenBuiltNote()
+{
+	return TEXT("The vehicle's picture is taken when you build it. Press Build to see it here.");
+}
+
+FMantleThumbnailResolver::FRender FMantleVehicleThumbnail::PreviewFor(TFunction<const UMantleVehicleSource*()> GetBuilt, TFunction<UObject*()> GetModel)
+{
+	const FMantleThumbnailResolver::FRender ModelRender = FMantleModelThumbnail::RenderFor(GetModel);
+	return [GetBuilt = MoveTemp(GetBuilt), ModelRender](const FMantleThumbnailChoice& Choice, TArray<FColor>& OutPixels, int32& OutWidth, int32& OutHeight, FString& OutError)
+	{
+		if (Choice.Mode != EMantleThumbnailMode::Automatic)
+		{
+			return ModelRender(Choice, OutPixels, OutWidth, OutHeight, OutError);
+		}
+		const UMantleVehicleSource* Built = GetBuilt();
+		if (!Built || Built->ThumbnailPng.IsEmpty())
+		{
+			OutError = TakenWhenBuiltNote();
+			return false;
+		}
+		FImage Image;
+		if (!FImageUtils::DecompressImage(Built->ThumbnailPng.GetData(), Built->ThumbnailPng.Num(), Image))
+		{
+			OutError = TEXT("The vehicle's saved picture could not be read. Build the vehicle again.");
+			return false;
+		}
+		Image.ChangeFormat(ERawImageFormat::BGRA8, EGammaSpace::sRGB);
+		OutWidth = Image.SizeX;
+		OutHeight = Image.SizeY;
+		OutPixels = TArray<FColor>(reinterpret_cast<const FColor*>(Image.RawData.GetData()), OutWidth * OutHeight);
+		return true;
+	};
 }
