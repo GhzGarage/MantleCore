@@ -168,7 +168,7 @@ TSharedRef<SWidget> SMantleThumbnailSection::MakeModeRow(EMantleThumbnailMode Mo
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(4.0f, 0.0f, 0.0f, 4.0f)
 			[
-				SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground()).Text(FMantleThumbnailText::ModeHelp(Mode))
+				SNew(STextBlock).WrapTextAt(500.0f).ColorAndOpacity(FSlateColor::UseSubduedForeground()).Text(FMantleThumbnailText::ModeHelp(Mode))
 			]
 		];
 }
