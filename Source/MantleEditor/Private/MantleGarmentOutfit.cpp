@@ -6,6 +6,7 @@
 #include "MantleAvatarRefitFixer.h"
 #include "MantleAvatarReposeFixer.h"
 #include "MantleAvatarStripFixer.h"
+#include "MantleCharacterSplit.h"
 #include "MantleCosmeticExport.h"
 #include "MantleGarmentClearance.h"
 #include "MantleMetaHumanPose.h"
@@ -1409,7 +1410,72 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 	});
 }
 
-FString FMantleGarmentOutfit::WhyNoOutfits(const FMantleConvertContext& Context, const int32 PartIndex)
+void FMantleGarmentOutfit::FindSectionGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments)
+{
+	FMantleSplitSource Source;
+	if (!FMantleCharacterSplit::Gather(Body, Source))
+	{
+		return;
+	}
+	const FMantleSplitProposal Proposal = FMantleCharacterSplit::Propose({ Source });
+	for (const FString& Line : Proposal.Describe(Body.GetName()))
+	{
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("%s"), *Line);
+	}
+	if (!Proposal.bSplittable)
+	{
+		return;
+	}
+	for (const FMantleSplitPiece& Piece : Proposal.Pieces)
+	{
+		if (Piece.Role != EMantleSplitRole::Garment || Piece.Sections.Num() == 0)
+		{
+			continue;
+		}
+		FMantleConvertGarment& Garment = OutGarments.AddDefaulted_GetRef();
+		Garment.SourceMesh = &Body;
+		Garment.Slot = Piece.Slot;
+		Garment.Name = Piece.Name;
+		for (const int32 Section : Piece.Sections)
+		{
+			if (Source.Slots.IsValidIndex(Section))
+			{
+				Garment.Sections.AddUnique(Source.Slots[Section]);
+			}
+		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT found a piece of %s: %s slot=%s material slots=%d"), *Body.GetName(), *Piece.Name, *Piece.Slot, Garment.Sections.Num());
+	}
+}
+
+int32 FMantleGarmentOutfit::MakeSectionMeshes(FMantleConvertContext& Context)
+{
+	int32 Made = 0;
+	const FString Folder = Context.OutputFolder / TEXT("Work");
+	for (FMantleConvertGarment& Garment : Context.Garments)
+	{
+		USkeletalMesh* Source = Garment.SourceMesh.Get();
+		if (!Source || Garment.Sections.Num() == 0 || Garment.Mesh.IsValid())
+		{
+			continue;
+		}
+		FString Error;
+		USkeletalMesh* Piece = FMantleAvatarStrip::WriteSlots(*Source, TSet<int32>(Garment.Sections), Folder,
+			FString::Printf(TEXT("SK_%s_%s"), *FMantleMetaHumanSteps::AssetTag(Source->GetName()), *FMantleMetaHumanSteps::AssetTag(Garment.Name)), Error);
+		if (Piece && Error.IsEmpty())
+		{
+			Garment.Mesh = Piece;
+			Context.CreatedAssets.AddUnique(Piece);
+			++Made;
+		}
+		else
+		{
+			Garment.Error = Error.IsEmpty() ? FString(TEXT("the piece could not be cut from the mesh")) : Error;
+		}
+	}
+	return Made;
+}
+
+FString FMantleGarmentOutfit::WhyNoOutfits(const FMantleConvertContext& Context, const int32 PartIndex, const bool bSectionPieces)
 {
 	const FMantleConvertPart* Part = Context.Parts.IsValidIndex(PartIndex) ? &Context.Parts[PartIndex] : nullptr;
 	const FString BodyName = Part && Part->Original.IsValid() ? Part->Original->GetName() : FString(TEXT("The body"));
@@ -1423,7 +1489,7 @@ FString FMantleGarmentOutfit::WhyNoOutfits(const FMantleConvertContext& Context,
 		return FString::Printf(TEXT("Convert made no MetaHuman of %s, so there is nothing to fit its clothing on."), *BodyName);
 	}
 	// A body wearing clothing: the MetaHuman is made of what Strip left, not the bare body the clothing was made for.
-	const FString Worn = Part && Part->Original.IsValid() ? WornClothing(*Part->Original.Get()) : FString();
+	const FString Worn = !bSectionPieces && Part && Part->Original.IsValid() ? WornClothing(*Part->Original.Get()) : FString();
 	if (!Worn.IsEmpty())
 	{
 		return FString::Printf(TEXT("%s wears clothing (%s), so it isn't the bare body this clothing was made for. Convert the character's bare body to use its clothing."),

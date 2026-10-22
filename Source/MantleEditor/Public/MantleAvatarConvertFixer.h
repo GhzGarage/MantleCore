@@ -202,8 +202,12 @@ struct MANTLEEDITOR_API FMantleConvertMetaHumanWork
  */
 struct MANTLEEDITOR_API FMantleConvertGarment
 {
-	/** The creator's mesh (never modified). */
+	/** The creator's mesh (never modified). For a piece cut from the character's own mesh (Sections set), the copy that holds only that piece, made when the Outfits are (FMantleGarmentOutfit::MakeSectionMeshes). */
 	TWeakObjectPtr<USkeletalMesh> Mesh;
+
+	/** #55: a piece of the character's own mesh: that mesh, and the material slots of the sections that make the piece. Empty for a separate mesh. */
+	TWeakObjectPtr<USkeletalMesh> SourceMesh;
+	TArray<int32> Sections;
 
 	/** "top", "bottom" or "footwear"; empty for merged clothing (Why says so). */
 	FString Slot;

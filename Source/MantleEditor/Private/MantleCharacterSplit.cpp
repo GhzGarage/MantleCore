@@ -369,6 +369,7 @@ bool FMantleCharacterSplit::Gather(USkeletalMesh& Mesh, FMantleSplitSource& Out)
 	{
 		return false;
 	}
+	Out.Slots = Slots;
 	// Triangles and the bones of each slot's sections, from LOD 0's imported model (no renderer needed).
 	Out.Triangles.SetNumZeroed(Slots.Num());
 	Out.SectionBones.SetNum(Slots.Num());

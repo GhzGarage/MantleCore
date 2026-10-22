@@ -200,11 +200,26 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	static void FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered);
 
 	/**
+	 * #55: the pieces of clothing in Body's own mesh (its material sections), when the character splits into a bare body and
+	 * clothing (FMantleCharacterSplit::Propose): one entry per garment piece, appended to OutGarments with SourceMesh and Sections
+	 * set and no Mesh yet (MakeSectionMeshes cuts them). Nothing is appended when the character stays a fixed avatar.
+	 */
+	static void FindSectionGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments);
+
+	/**
+	 * #55: cuts each section piece of Context.Garments that has no Mesh yet from its SourceMesh (FMantleAvatarStrip::WriteSlots)
+	 * into <output>/Work, so MakeFromWork can take it like a separate mesh. A piece that can't be cut gets its Error. Returns
+	 * how many were cut.
+	 */
+	static int32 MakeSectionMeshes(FMantleConvertContext& Context);
+
+	/**
 	 * Why Context's avatar part (PartIndex) gives its clothing no Outfits, in plain words; empty when MakeFromWork can run:
 	 * Convert made no MetaHuman of it, made it as a face on MetaHuman's own body, or cut clothing off it (so it isn't the
-	 * bare body the clothing was made for).
+	 * bare body the clothing was made for). bSectionPieces: for pieces cut from the character's own mesh (#55), whose bare body
+	 * is exactly the one Strip left, wearing clothing is not a reason.
 	 */
-	static FString WhyNoOutfits(const FMantleConvertContext& Context, int32 PartIndex);
+	static FString WhyNoOutfits(const FMantleConvertContext& Context, int32 PartIndex, bool bSectionPieces = false);
 
 	/** The material slots of Body that are clothing (a top, bottom or footwear), comma-separated; empty for a bare body. */
 	static FString WornClothing(const USkeletalMesh& Body);
