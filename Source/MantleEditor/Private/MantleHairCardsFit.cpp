@@ -29,6 +29,14 @@ bool FMantleHairCardsFit::CoversScalp(TConstArrayView<FVector3f> HeadPositions, 
 	return CapSize.X >= CapMinScalpSpan * ScalpSize.X && CapSize.Y >= CapMinScalpSpan * ScalpSize.Y;
 }
 
+FVector3f FMantleHairCardsFit::RotateUpright(const FVector3f& P, int32 QuarterTurns)
+{
+	// +1: Y-up to Z-up (up becomes +Z, the file's +Z becomes -Y); -1: the other way.
+	if (QuarterTurns > 0) return FVector3f(P.X, -P.Z, P.Y);
+	if (QuarterTurns < 0) return FVector3f(P.X, P.Z, -P.Y);
+	return P;
+}
+
 FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 {
 	FResult Out;
@@ -72,14 +80,51 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 		return Out;
 	}
 
+	// Which way is up: as imported, or turned a quarter either way about X. Coarse pass only; a turn must win clearly.
+	FMantleHairPieceFit::FSearch Coarse = FMantleHairPieceFit::FSearch::Default();
+	Coarse.FineScaleStep = 0.0;
+	Coarse.FineOffsetStep = 0.0;
+	const auto Oriented = [&](int32 Turns)
+	{
+		TArray<FVector3f> Moved(Input.HairPositions.GetData(), Input.HairPositions.Num());
+		for (FVector3f& P : Moved) P = RotateUpright(P, Turns);
+		return Moved;
+	};
+	const auto Sizing = [&](const TArray<FVector3f>& Positions)
+	{
+		TArray<FVector3f> Points;
+		for (int32 V = 0; V < Positions.Num(); ++V) if (bHairVertex[V]) Points.Add(Positions[V]);
+		return Points;
+	};
+	int32 Turns = 0;
+	{
+		double BestRank = -1.0, UprightRank = 0.0;
+		for (const int32 Candidate : {0, 1, -1})
+		{
+			const TArray<FVector3f> Moved = Oriented(Candidate);
+			FMantleHairPieceFit::FResult Trial;
+			FString TrialError;
+			const double Rank = FMantleHairPieceFit::Fit(Samples, Sizing(Moved), FMantleScalpFit::FindCardEnds(Moved, HairTriangles), Coarse, Trial, TrialError)
+				? Trial.SeatedFraction * Trial.ScalpCoverage : 0.0;
+			if (Candidate == 0) UprightRank = Rank;
+			if (Rank > BestRank + 1.e-9) { BestRank = Rank; Turns = Candidate; }
+		}
+		if (Turns != 0 && BestRank < UprightRank + OrientMinGain) Turns = 0;
+	}
+
 	// The piece is placed where its card roots meet the scalp, so it needs each card's two ends.
-	const TArray<FVector3f> CardEnds = FMantleScalpFit::FindCardEnds(Input.HairPositions, HairTriangles);
+	const TArray<FVector3f> Upright = Oriented(Turns);
+	SizingPoints = Sizing(Upright);
+	const TArray<FVector3f> CardEnds = FMantleScalpFit::FindCardEnds(Upright, HairTriangles);
 	FMantleHairPieceFit::FResult Piece;
 	if (!FMantleHairPieceFit::Fit(Samples, SizingPoints, CardEnds, Piece, Error))
 	{
 		Out.Warnings.Add(FString::Printf(TEXT("the hair could not be fitted to the head (%s), so it uploads as it is."), *Error));
 		return Out;
 	}
+	Out.Positions = Upright;
+	Out.QuarterTurns = Turns;
+	if (Turns != 0) Out.Notes.Add(TEXT("The hair was lying on its side (its file is Y-up), so it was turned upright."));
 	FMantleHairPieceFit::ApplyTo(Piece, Out.Positions);
 	Out.Notes.Add(Piece.Describe());
 	if (!Piece.bKeepsOutOfHead)
