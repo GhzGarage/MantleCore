@@ -121,6 +121,15 @@ bool FMantleMetaHumanHeadOnly::IsCovered(const FMantleStripPlan& Plan, FString& 
 		OutWhy = TEXT("no material on it reads as bare skin");
 		return true;
 	}
+	// A skin slot with clothing modelled into it is not bare (FMantleFusedClothing), whatever it is called.
+	for (const FMantleStripSlot& Slot : Plan.Slots)
+	{
+		if (Slot.bSkin && Slot.Fused == EMantleFusedVerdict::FusedClothing)
+		{
+			OutWhy = Slot.FusedWhy;
+			return true;
+		}
+	}
 	const double Height = All.IsValid ? All.Max.Z - All.Min.Z : 0.0;
 	if (Height <= 0.0)
 	{

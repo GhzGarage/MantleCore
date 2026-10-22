@@ -4,6 +4,7 @@
 #include "MantleAvatarConverter.h"
 #include "MantleBodyTopologyData.h"
 #include "MantleCosmeticExport.h"
+#include "MantleFusedClothing.h"
 #include "MantleMetaHumanBuild.h"
 #include "MetaHumanCharacter.h"
 #include "MantleMetaHumanHeadOnly.h"
@@ -160,6 +161,65 @@ namespace MantleAvatarStripPrivate
 		});
 	}
 
+	/**
+	 * #50: for each skin slot of Plan (read from Mesh), whether clothing is modelled into it (FMantleFusedClothing on its triangles);
+	 * the character's height is the whole mesh's.
+	 */
+	void StripJudgeFused(const UDynamicMesh& Mesh, FMantleStripPlan& Plan)
+	{
+		FBox3d All(ForceInit);
+		for (const FMantleStripSlot& Slot : Plan.Slots)
+		{
+			if (Slot.Bounds.IsValid)
+			{
+				All += Slot.Bounds;
+			}
+		}
+		const double Height = All.IsValid ? All.Max.Z - All.Min.Z : 0.0;
+		TMap<int32, TArray<FVector3f>> Vertices;
+		TMap<int32, TArray<int32>> Indices;
+		for (const FMantleStripSlot& Slot : Plan.Slots)
+		{
+			if (Slot.bSkin)
+			{
+				Vertices.Add(Slot.Index);
+				Indices.Add(Slot.Index);
+			}
+		}
+		Mesh.ProcessMesh([&](const UE::Geometry::FDynamicMesh3& Read)
+		{
+			const UE::Geometry::FDynamicMeshMaterialAttribute* Ids = Read.HasAttributes() ? Read.Attributes()->GetMaterialID() : nullptr;
+			for (const int32 Triangle : Read.TriangleIndicesItr())
+			{
+				const int32 Id = Ids ? Ids->GetValue(Triangle) : 0;
+				TArray<int32>* SlotIndices = Indices.Find(Id);
+				if (!SlotIndices)
+				{
+					continue;
+				}
+				TArray<FVector3f>& SlotVertices = Vertices.FindChecked(Id);
+				const UE::Geometry::FIndex3i Corners = Read.GetTriangle(Triangle);
+				for (int32 Corner = 0; Corner < 3; ++Corner)
+				{
+					SlotIndices->Add(SlotVertices.Add(FVector3f(Read.GetVertex(Corners[Corner]))));
+				}
+			}
+		});
+		for (FMantleStripSlot& Slot : Plan.Slots)
+		{
+			if (!Slot.bSkin)
+			{
+				continue;
+			}
+			const FMantleFusedResult Result = FMantleFusedClothing::CheckSlot({ Slot.SlotName.ToString(), Vertices.FindChecked(Slot.Index), Indices.FindChecked(Slot.Index) }, Height);
+			Slot.Fused = Result.Verdict;
+			Slot.FusedWhy = Result.Reason;
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_STRIP fused-clothing check '%s': %s (%.0f%% layered) %s"), *Slot.SlotName.ToString(),
+				Result.Verdict == EMantleFusedVerdict::Bare ? TEXT("bare") : Result.Verdict == EMantleFusedVerdict::FusedClothing ? TEXT("fused clothing") : TEXT("unknown"),
+				Result.Layered * 100.0, *Result.Reason);
+		}
+	}
+
 	/** The head slot's pieces, the largest first (stable on a tie), each held. */
 	bool StripHeadPieces(USkeletalMesh& Mesh, const int32 HeadSlot, TArray<TStrongObjectPtr<UDynamicMesh>>& OutPieces, FString& OutError)
 	{
@@ -301,6 +361,11 @@ bool FMantleAvatarStrip::Plan(USkeletalMesh& Mesh, const TSet<int32>* RemovedSlo
 		Slot.Bounds = Bounds.FindRef(Id);
 		Slot.bSkin = LooksLikeSkin(Slot.SlotName.ToString(), Slot.MaterialName, Base ? Base->GetName() : FString());
 	}
+	// Strip's own Apply asks for the creator's choices (RemovedSlots): only the first look judges the shapes.
+	if (!RemovedSlots)
+	{
+		StripJudgeFused(*Full, OutPlan);
+	}
 
 	// The kept skin: the creator's choice when given (every slot not removed), else the slots read as skin.
 	TArray<const FMantleStripSlot*> Kept;
@@ -345,6 +410,47 @@ bool FMantleAvatarStrip::Plan(USkeletalMesh& Mesh, const TSet<int32>* RemovedSlo
 		Piece.Bounds = StripBoundsOf(*Pieces[Index]);
 		Piece.bInside = Index > 0 && IsInside(Piece.Bounds, SkinBox);
 	}
+	return true;
+}
+
+bool FMantleAvatarStrip::PlanStatic(UStaticMesh& Mesh, FMantleStripPlan& OutPlan, FString& OutError)
+{
+	using namespace MantleAvatarStripPrivate;
+	OutPlan = FMantleStripPlan();
+	UDynamicMesh* Full = NewObject<UDynamicMesh>(GetTransientPackage());
+	const TStrongObjectPtr<UDynamicMesh> FullHeld(Full);
+	FGeometryScriptCopyMeshFromAssetOptions Options;
+	FGeometryScriptMeshReadLOD Read;
+	Read.LODType = EGeometryScriptLODType::SourceModel;
+	Read.LODIndex = 0;
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+	UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshFromStaticMeshV2(&Mesh, Full, Options, Read, Outcome, /*bUseSectionMaterials*/ false);
+	if (Outcome != EGeometryScriptOutcomePins::Success || Full->GetTriangleCount() == 0)
+	{
+		OutError = FString::Printf(TEXT("%s's LOD 0 source geometry could not be read"), *Mesh.GetName());
+		return false;
+	}
+	TMap<int32, int32> Triangles;
+	TMap<int32, FBox3d> Bounds;
+	StripSlotStats(*Full, Triangles, Bounds);
+	const TArray<FStaticMaterial>& Materials = Mesh.GetStaticMaterials();
+	TArray<int32> Ids;
+	Triangles.GetKeys(Ids);
+	Ids.Sort();
+	for (const int32 Id : Ids)
+	{
+		FMantleStripSlot& Slot = OutPlan.Slots.AddDefaulted_GetRef();
+		Slot.Index = Id;
+		const FStaticMaterial* Material = Materials.IsValidIndex(Id) ? &Materials[Id] : nullptr;
+		Slot.SlotName = Material ? Material->MaterialSlotName : FName(*FString::Printf(TEXT("Slot_%d"), Id));
+		UMaterialInterface* Interface = Material ? Material->MaterialInterface.Get() : nullptr;
+		Slot.MaterialName = Interface ? Interface->GetName() : FString();
+		const UMaterialInterface* Base = Interface ? Interface->GetBaseMaterial() : nullptr;
+		Slot.Triangles = Triangles.FindRef(Id);
+		Slot.Bounds = Bounds.FindRef(Id);
+		Slot.bSkin = LooksLikeSkin(Slot.SlotName.ToString(), Slot.MaterialName, Base ? Base->GetName() : FString());
+	}
+	StripJudgeFused(*Full, OutPlan);
 	return true;
 }
 
