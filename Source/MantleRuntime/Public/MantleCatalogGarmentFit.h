@@ -73,7 +73,8 @@ struct MANTLERUNTIME_API FMantleCatalogGarmentFit
 	/**
 	 * Out = Garment's authored clearance over Source's positions on Topology's LOD0 triangle list and vertex normals,
 	 * for every LOD of the garment (A3.8), and over SourceFace when given (#430: the face the garment was authored
-	 * with, the item's faceMeshAssetId at its FMantleFaceTopology::FitLOD; the collar's clearance, Out.Face). False,
+	 * with, the item's faceMeshAssetId at its FMantleFaceTopology::FitLOD; the collar's clearance, Out.Face).
+	 * Also Out.SkinMask (#877: FMantleSkinMask::Derive on the source body; null, with a warning, when it cannot be derived). False,
 	 * with the reason, when Topology has no LOD0, its vertex count or normals do not match Source's positions, or the
 	 * clearance refuses the garment.
 	 */

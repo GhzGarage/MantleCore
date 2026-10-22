@@ -4,6 +4,7 @@
 #include "HAL/PlatformTime.h"
 #include "MantleBodyShape.h"
 #include "MantleRuntime.h"
+#include "MantleSkinMask.h"
 
 // Named, not anonymous: unity builds.
 namespace MantleCatalogGarmentFitPrivate
@@ -43,7 +44,26 @@ bool FMantleCatalogGarmentFit::DeriveAuthoredClearance(const FMantleSkinnedMesh&
 	SourceBody.Indices = Reference.Indices;
 	// The face it was authored with, when the item names one (a face without triangles is no face).
 	const FMantleSkinnedMeshLOD* Face = SourceFace && SourceFace->NumTriangles() > 0 ? SourceFace : nullptr;
-	return FMantleGarmentFitter::ComputeAuthoredClearance(Garment, SourceBody, Face, Out, OutError);
+	if (!FMantleGarmentFitter::ComputeAuthoredClearance(Garment, SourceBody, Face, Out, OutError))
+	{
+		return false;
+	}
+
+	// #877: the skin it hides, decided on the body it was made on. Without it the dressed body takes the wearer fallback.
+	TSharedRef<FMantleSkinMask> Mask = MakeShared<FMantleSkinMask>();
+	FString MaskError;
+	if (Garment.LODs.Num() > 0
+		&& FMantleSkinMask::Derive(FMantleGarmentSurface(Garment.LODs[0]), Source.Positions, Reference.Normals, Reference.Indices, FMantleSkinMaskParams(), *Mask, &MaskError))
+	{
+		Mask->SourcePositionsHash = Source.PositionsHash;
+		Out.SkinMask = Mask;
+	}
+	else
+	{
+		UE_LOG(LogMantle, Warning, TEXT("MANTLE_GARMENTFIT skin mask not derived (%s); the body under it takes the wearer fallback"),
+			MaskError.IsEmpty() ? TEXT("the garment has no LOD0") : *MaskError);
+	}
+	return true;
 }
 
 bool FMantleCatalogGarmentFit::SharesSurface(const FMantleGarmentAuthoredClearance& Authored, const FMantleSkinnedMesh& WearerBody)

@@ -102,8 +102,14 @@ namespace MantleGarmentGeometry
 		return DX * DX + DY * DY + DZ * DZ;
 	}
 
-	/** Two-sided Moller-Trumbore: the ray Origin + t Dir hits ABC at t in [0, TMax]. */
-	inline bool RayHitsTriangle(const FVector3f& Origin, const FVector3f& Dir, const FVector3f& A, const FVector3f& B, const FVector3f& C, const float TMax, float& OutT)
+	/**
+	 * Two-sided Moller-Trumbore: the ray Origin + t Dir hits ABC at t in [0, TMax]. EdgeTolerance (barycentric) widens the
+	 * triangle a little past its edges: a ray through an edge or corner several triangles share can otherwise slip
+	 * between all of them to rounding (#877: a garment made by pushing the body out along its normals puts every garment
+	 * vertex on a body vertex's normal ray). 0, the default, is the exact test.
+	 */
+	inline bool RayHitsTriangle(const FVector3f& Origin, const FVector3f& Dir, const FVector3f& A, const FVector3f& B, const FVector3f& C, const float TMax, float& OutT,
+		const float EdgeTolerance = 0.0f)
 	{
 		const FVector3f E1 = B - A;
 		const FVector3f E2 = C - A;
@@ -116,13 +122,13 @@ namespace MantleGarmentGeometry
 		const float InvDet = 1.0f / Det;
 		const FVector3f TV = Origin - A;
 		const float U = FVector3f::DotProduct(TV, PV) * InvDet;
-		if (U < 0.0f || U > 1.0f)
+		if (U < -EdgeTolerance || U > 1.0f + EdgeTolerance)
 		{
 			return false;
 		}
 		const FVector3f QV = FVector3f::CrossProduct(TV, E1);
 		const float V = FVector3f::DotProduct(Dir, QV) * InvDet;
-		if (V < 0.0f || U + V > 1.0f)
+		if (V < -EdgeTolerance || U + V > 1.0f + EdgeTolerance)
 		{
 			return false;
 		}

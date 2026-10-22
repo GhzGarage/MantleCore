@@ -4,6 +4,7 @@
 #include "MantleGarmentGeometry.h"
 #include "MantleRuntime.h"
 #include "MantleRuntimeSkeletalMeshBuilder.h"
+#include "MantleSkinMask.h"
 #include "Async/ParallelFor.h"
 
 // Named, not anonymous: MantleRuntime builds as a unity build.
@@ -159,7 +160,7 @@ namespace MantleBodyCoveragePrivate
 // ---------------------------------------------------------------------------------------------------------------
 
 bool FMantleGarmentCoverage::Compute(const FMantleGarmentSurface& Garment, TConstArrayView<FVector3f> BodyPositions, TConstArrayView<FVector3f> BodyNormals,
-	FMantleGarmentCoverage& Out, const float ReachCm, FString* OutError, TConstArrayView<uint32> BodyIndices, const float NearShare)
+	FMantleGarmentCoverage& Out, const float ReachCm, FString* OutError, TConstArrayView<uint32> BodyIndices, const float NearShare, const float EdgeTolerance)
 {
 	using namespace MantleGarmentGeometry;
 	using namespace MantleBodyCoveragePrivate;
@@ -169,6 +170,7 @@ bool FMantleGarmentCoverage::Compute(const FMantleGarmentSurface& Garment, TCons
 	const int32 NB = BodyPositions.Num();
 	const int32 NG = Garment.Positions.Num();
 	Out.Covered.Init(false, NB);
+	Out.Under.Init(false, NB);
 	if (NB == 0 || NG == 0 || Garment.Indices.Num() < 3 || BodyNormals.Num() != NB || Garment.Normals.Num() != NG || ReachCm <= 0.0f
 		|| !IndicesInRange(Garment.Indices, NG))
 	{
@@ -240,7 +242,7 @@ bool FMantleGarmentCoverage::Compute(const FMantleGarmentSurface& Garment, TCons
 						float HitT = 0.0f;
 						// A triangle listed in several of the walked cells is kept once.
 						if (RayHitsTriangle(From, Normal, Garment.Positions[Garment.Indices[Triangle * 3]], Garment.Positions[Garment.Indices[Triangle * 3 + 1]],
-								Garment.Positions[Garment.Indices[Triangle * 3 + 2]], WalkT, HitT)
+								Garment.Positions[Garment.Indices[Triangle * 3 + 2]], WalkT, HitT, EdgeTolerance)
 							&& !Hits.ContainsByPredicate([Triangle](const FHit& Hit) { return Hit.Triangle == Triangle; }))
 						{
 							Hits.Add({ HitT, Triangle });
@@ -327,6 +329,7 @@ bool FMantleGarmentCoverage::Compute(const FMantleGarmentSurface& Garment, TCons
 			Out.CoveredFacingAway += Result.bFacingAway ? 1 : 0;
 			Out.CoveredAcrossGap += Result.bAcrossGap ? 1 : 0;
 			Out.CoveredUnder += Result.Kind == KindUnder ? 1 : 0;
+			Out.Under[BodyVertex] = Result.Kind == KindUnder;
 		}
 		else
 		{
@@ -551,7 +554,7 @@ void FMantleBodySinkApply::ShrinkSeam(TConstArrayView<FVector3f> Base, TConstArr
 
 bool FMantleBodySink::Compute(TConstArrayView<FVector3f> BodyPositions, TConstArrayView<FVector3f> BodyNormals, TConstArrayView<uint32> KeptIndices,
 	TConstArrayView<FMantleGarmentSurface> Garments, const FMantleBodySinkParams& Params, TArray<float>& OutSinkCm, FMantleBodySink& Out, FString* OutError,
-	TConstArrayView<uint32> AcrossBodyIndices)
+	TConstArrayView<uint32> AcrossBodyIndices, const TBitArray<>* SinkOnly)
 {
 	using namespace MantleGarmentGeometry;
 	using namespace MantleBodyCoveragePrivate;
@@ -561,10 +564,11 @@ bool FMantleBodySink::Compute(TConstArrayView<FVector3f> BodyPositions, TConstAr
 	Out.SmoothIters = FMath::Clamp(Params.SmoothIters, 0, MaxSmoothIters);
 	const int32 NB = BodyPositions.Num();
 	OutSinkCm.Init(0.0f, NB);
-	if (NB == 0 || BodyNormals.Num() != NB || Params.UnderCm < 0.0f || Params.BackCm <= 0.0f || Params.MaxSinkCm <= 0.0f || !IndicesInRange(KeptIndices, NB))
+	if (NB == 0 || BodyNormals.Num() != NB || Params.UnderCm < 0.0f || Params.BackCm <= 0.0f || Params.MaxSinkCm <= 0.0f || !IndicesInRange(KeptIndices, NB)
+		|| (SinkOnly && SinkOnly->Num() != NB))
 	{
-		return RefuseBody(TEXT("body sink"), FString::Printf(TEXT("bad inputs (body verts %d, normals %d, kept indices %d, under %.2f, back %.2f, max %.2f)"),
-			NB, BodyNormals.Num(), KeptIndices.Num(), Params.UnderCm, Params.BackCm, Params.MaxSinkCm), OutError);
+		return RefuseBody(TEXT("body sink"), FString::Printf(TEXT("bad inputs (body verts %d, normals %d, kept indices %d, under %.2f, back %.2f, max %.2f, sink-only bits %d)"),
+			NB, BodyNormals.Num(), KeptIndices.Num(), Params.UnderCm, Params.BackCm, Params.MaxSinkCm, SinkOnly ? SinkOnly->Num() : -1), OutError);
 	}
 
 	// Every garment's triangles in one list, with their outward normals and bounds, and the grid the rays walk.
@@ -742,7 +746,8 @@ bool FMantleBodySink::Compute(TConstArrayView<FVector3f> BodyPositions, TConstAr
 			return;
 		}
 		Kind[BodyVertex] = Height < 0.0f ? SinkInside : SinkOutside;
-		if (Height < RayUnderCm)
+		// #877: skin not under cloth on this wearer is measured (the skin-poke counts) but never moved.
+		if (Height < RayUnderCm && (!SinkOnly || (*SinkOnly)[BodyVertex]))
 		{
 			Required[BodyVertex] = FMath::Min(RayUnderCm - Height, Params.MaxSinkCm);
 		}
@@ -771,6 +776,15 @@ bool FMantleBodySink::Compute(TConstArrayView<FVector3f> BodyPositions, TConstAr
 			Current[Weld[BodyVertex]] = FMath::Max(Current[Weld[BodyVertex]], Required[BodyVertex]);
 		}
 		const TArray<float> PointRequired = Current;
+		// #877: a point none of whose copies may sink stays at 0, so the smoothing never spreads onto it.
+		TBitArray<> PointMay(SinkOnly == nullptr, NumPoints);
+		if (SinkOnly)
+		{
+			for (TConstSetBitIterator<> It(*SinkOnly); It; ++It)
+			{
+				PointMay[Weld[It.GetIndex()]] = true;
+			}
+		}
 		FPointNeighbours Neighbours;
 		PointNeighbours(KeptIndices, Weld, NumPoints, Neighbours);
 		TArray<float> Next;
@@ -780,6 +794,11 @@ bool FMantleBodySink::Compute(TConstArrayView<FVector3f> BodyPositions, TConstAr
 			ParallelFor(NumPoints, [&](const int32 Point)
 			{
 				const TArray<int32, TInlineAllocator<8>>& Around = Neighbours[Point];
+				if (!PointMay[Point])
+				{
+					Next[Point] = 0.0f;
+					return;
+				}
 				if (Around.Num() == 0)
 				{
 					Next[Point] = Current[Point];
@@ -825,7 +844,7 @@ FString FMantleBodySink::ToString() const
 // ---------------------------------------------------------------------------------------------------------------
 
 bool FMantleDressedBody::Compute(const FMantleSkinnedMeshLOD& Body, TConstArrayView<FMantleGarmentSurface> Garments, const FMantleDressedBodyParams& Params,
-	FMantleDressedBody& Out, FString* OutError)
+	FMantleDressedBody& Out, FString* OutError, TConstArrayView<FMantleDressedMask> Masks)
 {
 	using namespace MantleGarmentGeometry;
 	using namespace MantleBodyCoveragePrivate;
@@ -846,17 +865,59 @@ bool FMantleDressedBody::Compute(const FMantleSkinnedMeshLOD& Body, TConstArrayV
 		return true;
 	}
 
-	// 1. Coverage per garment on this wearer, and the union.
+	// 1. Coverage per garment on this wearer, and the union. #877 (bSkinMask): each garment hides its mask's bits (or,
+	// without one, its coverage at the border's depth over this body) AND its coverage here.
 	Out.Coverage.SetNum(Garments.Num());
+	if (Params.bSkinMask)
+	{
+		Out.WearerCovered.Init(false, NB);
+		Out.SlackMm.Init(0, NB);
+	}
 	for (int32 GarmentIndex = 0; GarmentIndex < Garments.Num(); ++GarmentIndex)
 	{
 		FString Error;
+		const FMantleGarmentCoverage& Coverage = Out.Coverage[GarmentIndex];
 		if (!FMantleGarmentCoverage::Compute(Garments[GarmentIndex], Body.Positions, Body.Normals, Out.Coverage[GarmentIndex], Params.CoverageReachCm, &Error,
-				Body.Indices, Params.NearShare))
+				Body.Indices, Params.NearShare, Params.EdgeTolerance))
 		{
 			return RefuseBody(TEXT("dressed body"), FString::Printf(TEXT("garment %d's coverage: %s"), GarmentIndex, *Error), OutError);
 		}
-		Out.Hidden.CombineWithBitwiseOR(Out.Coverage[GarmentIndex].Covered, EBitwiseOperatorFlags::MaintainSize);
+		if (!Params.bSkinMask)
+		{
+			Out.Hidden.CombineWithBitwiseOR(Coverage.Covered, EBitwiseOperatorFlags::MaintainSize);
+			continue;
+		}
+		Out.WearerCovered.CombineWithBitwiseOR(Coverage.Covered, EBitwiseOperatorFlags::MaintainSize);
+		const FMantleDressedMask Mask = Masks.IsValidIndex(GarmentIndex) ? Masks[GarmentIndex] : FMantleDressedMask();
+		TArray<uint8> WearerDepthMm;
+		TConstArrayView<uint8> DepthMm;
+		if (Mask.Mask && Mask.Mask->Num() == NB)
+		{
+			DepthMm = Mask.Mask->DepthMm;
+		}
+		else
+		{
+			// No source mask (it failed, or a test hook gave none): the border on this wearer's own coverage.
+			++Out.FallbackGarments;
+			FMantleSkinMask::SurfaceDepthMm(Body.Positions, Body.Indices, Coverage.Covered, WearerDepthMm);
+			DepthMm = WearerDepthMm;
+		}
+		const uint8 BorderMm = FMantleSkinMask::BorderMm(Mask.BorderCm);
+		for (int32 Vertex = 0; Vertex < NB; ++Vertex)
+		{
+			if (DepthMm[Vertex] < BorderMm)
+			{
+				continue;
+			}
+			++Out.MaskHidden;
+			if (!Coverage.Covered[Vertex])
+			{
+				++Out.MaskKeptByWearer;
+				continue;
+			}
+			Out.Hidden[Vertex] = true;
+			Out.SlackMm[Vertex] = FMath::Max(Out.SlackMm[Vertex], static_cast<uint8>(DepthMm[Vertex] - BorderMm));
+		}
 	}
 	Out.CoveredVertices = Out.Hidden.CountSetBits();
 	Out.CoverageMs = NowMs() - T0;
@@ -898,7 +959,8 @@ bool FMantleDressedBody::Compute(const FMantleSkinnedMeshLOD& Body, TConstArrayV
 		FMantleBodySinkParams SinkParams = Params.Sink;
 		SinkParams.NearShare = Params.NearShare;
 		const TConstArrayView<uint32> SurfaceIndices = Params.NearShare > 0.0f ? TConstArrayView<uint32>(Body.Indices) : TConstArrayView<uint32>();
-		if (!FMantleBodySink::Compute(Shrunk, Body.Normals, Out.KeptIndices, Garments, SinkParams, SinkCm, Out.Sink, &Error, SurfaceIndices))
+		if (!FMantleBodySink::Compute(Shrunk, Body.Normals, Out.KeptIndices, Garments, SinkParams, SinkCm, Out.Sink, &Error, SurfaceIndices,
+				Params.bSkinMask ? &Out.WearerCovered : nullptr))
 		{
 			return RefuseBody(TEXT("dressed body"), FString::Printf(TEXT("the body sink: %s"), *Error), OutError);
 		}
@@ -914,9 +976,66 @@ bool FMantleDressedBody::Compute(const FMantleSkinnedMeshLOD& Body, TConstArrayV
 
 FString FMantleDressedBody::ToString() const
 {
-	return FString::Printf(TEXT("covered %d of %d verts, dropped %d of %d tris, seam %d verts (%d points, limited %d, zeroed %d, max turn %.1f deg), sink applied to %d points (limited %d, zeroed %d, max turn %.1f deg); sink: %s; coverage %.2f ms, seam + sink %.2f ms"),
+	FString Text = FString::Printf(TEXT("covered %d of %d verts, dropped %d of %d tris, seam %d verts (%d points, limited %d, zeroed %d, max turn %.1f deg), sink applied to %d points (limited %d, zeroed %d, max turn %.1f deg); sink: %s; coverage %.2f ms, seam + sink %.2f ms"),
 		CoveredVertices, Hidden.Num(), DroppedTriangles, KeptTriangles + DroppedTriangles, SeamVertices, Seam.Points, Seam.LimitedVertices, Seam.ZeroedVertices, Seam.MaxTurnDeg,
 		SinkApplied.Points, SinkApplied.LimitedVertices, SinkApplied.ZeroedVertices, SinkApplied.MaxTurnDeg, *Sink.ToString(), CoverageMs, SinkMs);
+	if (SlackMm.Num() > 0)
+	{
+		Text += FString::Printf(TEXT("; skin mask: hides %d, kept by the wearer %d, under cloth %d, %d garments on the wearer fallback"),
+			MaskHidden, MaskKeptByWearer, WearerCovered.CountSetBits(), FallbackGarments);
+	}
+	return Text;
+}
+
+bool FMantleDressedBody::LowerLODHidden(const FMantleSkinnedMesh& WearerBody, const FMantleDressedBody& Dressed, TArray<TBitArray<>>& Out, FString* OutError)
+{
+	using namespace MantleBodyCoveragePrivate;
+	Out.Reset();
+	if (Dressed.SlackMm.Num() == 0 || WearerBody.LODs.Num() < 2)
+	{
+		return true;
+	}
+	const FMantleSkinnedMeshLOD& LOD0 = WearerBody.LODs[0];
+	const int32 N = LOD0.NumVertices();
+	if (Dressed.SlackMm.Num() != N || Dressed.Hidden.Num() != N)
+	{
+		return RefuseBody(TEXT("dressed body LODs"), FString::Printf(TEXT("%d slack and %d hidden entries for %d LOD0 vertices"),
+			Dressed.SlackMm.Num(), Dressed.Hidden.Num(), N), OutError);
+	}
+	Out.SetNum(WearerBody.LODs.Num() - 1);
+	for (int32 LODIndex = 1; LODIndex < WearerBody.LODs.Num(); ++LODIndex)
+	{
+		const FMantleSkinnedMeshLOD& LOD = WearerBody.LODs[LODIndex];
+		double EdgeSum = 0.0;
+		int32 Edges = 0;
+		for (int32 Index = 0; Index + 2 < LOD.Indices.Num(); Index += 3)
+		{
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				const uint32 A = LOD.Indices[Index + Corner];
+				const uint32 B = LOD.Indices[Index + (Corner + 1) % 3];
+				if (static_cast<int64>(FMath::Max(A, B)) < LOD.NumVertices())
+				{
+					EdgeSum += FVector3f::Dist(LOD.Positions[A], LOD.Positions[B]);
+					++Edges;
+				}
+			}
+		}
+		// Half the LOD's mean edge past the border, in mm.
+		const int32 NeedMm = Edges > 0 ? FMath::CeilToInt32(5.0 * EdgeSum / Edges) : 0;
+		TBitArray<> Deep(false, N);
+		for (TConstSetBitIterator<> It(Dressed.Hidden); It; ++It)
+		{
+			Deep[It.GetIndex()] = Dressed.SlackMm[It.GetIndex()] >= NeedMm;
+		}
+		FString Error;
+		if (!FMantleRuntimeSkeletalMeshBuilder::TransferHiddenVertices(LOD0, Deep, LOD, Out[LODIndex - 1], &Error))
+		{
+			Out.Reset();
+			return RefuseBody(TEXT("dressed body LODs"), FString::Printf(TEXT("LOD%d: %s"), LODIndex, *Error), OutError);
+		}
+	}
+	return true;
 }
 
 FMantleSkinnedMesh FMantleDressedBody::MakeDressedMesh(const FMantleSkinnedMesh& WearerBody, const FMantleDressedBody& Dressed)
