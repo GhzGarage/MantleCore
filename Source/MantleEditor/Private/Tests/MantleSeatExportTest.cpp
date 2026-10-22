@@ -1,4 +1,5 @@
 // Copyright Joshua Eger. All Rights Reserved.
+#include "MantleEnvironment.h"
 #include "MantlePlaceExporter.h"
 #include "MantlePlaceLimits.h"
 #include "MantlePlaceParser.h"
@@ -160,8 +161,13 @@ bool FMantleSeatCheckTest::RunTest(const FString& Parameters)
 		USceneComponent* Root = NewObject<USceneComponent>(Plain, TEXT("Root"));
 		Plain->SetRootComponent(Root);
 		Root->RegisterComponent();
+		// What Mantle's environment spawns into a built place is never content, so it does not publish.
+		Plain->Tags.Add(FName(FMantleEnvironment::EnvironmentActorTag));
+		Plain->SetActorLabel(TEXT("Not published"));
 		AddSeat(Plain, FVector(0.0, 0.0, 45.0));
-		TestFalse(TEXT("a bare actor is not a published owner"), FMantleSeatExport::OwnerPublishes(Plain));
+		TestFalse(TEXT("an actor that does not publish is not an owner"), FMantleSeatExport::OwnerPublishes(Plain));
+		TestTrue(TEXT("Check says the seat has nothing to belong to"),
+			HasIssue(FMantlePlaceValidator::Validate(Fixture.World), TEXT("nothing to belong to")));
 	}
 	return true;
 }
