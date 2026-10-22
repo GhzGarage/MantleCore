@@ -2,6 +2,7 @@
 #include "MantleMetaHumanHeadOnly.h"
 
 #include "MantleAvatarStripFixer.h"
+#include "MantleBodySilhouette.h"
 #include "MantleMetaHumanPose.h"
 #include "MantleRuntime.h"
 
@@ -119,6 +120,15 @@ bool FMantleMetaHumanHeadOnly::IsCovered(const FMantleStripPlan& Plan, FString& 
 	{
 		OutWhy = TEXT("no material on it reads as bare skin");
 		return true;
+	}
+	// A skin slot with clothing modelled into it is not bare (FMantleFusedClothing), whatever it is called.
+	for (const FMantleStripSlot& Slot : Plan.Slots)
+	{
+		if (Slot.bSkin && Slot.Fused == EMantleFusedVerdict::FusedClothing)
+		{
+			OutWhy = Slot.FusedWhy;
+			return true;
+		}
 	}
 	const double Height = All.IsValid ? All.Max.Z - All.Min.Z : 0.0;
 	if (Height <= 0.0)
@@ -447,5 +457,71 @@ bool FMantleMetaHumanHeadOnly::MakeCleanHead(USkeletalMesh& Source, const double
 	Static->MarkPackageDirty();
 	Out.Mesh = Static;
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_FACEONLY clean head %s from %s: %s"), *Static->GetPathName(), *Source.GetName(), *Out.Describe());
+	return true;
+}
+
+bool FMantleMetaHumanHeadOnly::MeasureBuild(USkeletalMesh& Source, const double StandingHeightCm, FMantleSilhouette& Out, FString& OutError)
+{
+	Out = FMantleSilhouette();
+	// Only bare skin tells the body's shape: clothing, armour and robes (their own materials, or modelled into a skin slot) are left out.
+	FMantleStripPlan Plan;
+	if (!FMantleAvatarStrip::Plan(Source, nullptr, Plan, OutError))
+	{
+		return false;
+	}
+	TSet<int32> Bare;
+	for (const FMantleStripSlot& Slot : Plan.Slots)
+	{
+		if (Slot.bSkin && Slot.Fused != EMantleFusedVerdict::FusedClothing)
+		{
+			Bare.Add(Slot.Index);
+		}
+	}
+	if (Bare.Num() == 0)
+	{
+		OutError = TEXT("none of its materials is bare skin (it is clothed or armoured), so its build can't be seen");
+		return false;
+	}
+	UDynamicMesh* Mesh = NewObject<UDynamicMesh>(GetTransientPackage());
+	const TStrongObjectPtr<UDynamicMesh> MeshHeld(Mesh);
+	FGeometryScriptMeshReadLOD Read;
+	Read.LODType = EGeometryScriptLODType::SourceModel;
+	Read.LODIndex = 0;
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+	UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshFromSkeletalMesh(&Source, Mesh, FGeometryScriptCopyMeshFromAssetOptions(), Read, Outcome);
+	if (Outcome != EGeometryScriptOutcomePins::Success || Mesh->GetTriangleCount() == 0)
+	{
+		OutError = FString::Printf(TEXT("%s's LOD 0 source geometry could not be read"), *Source.GetName());
+		return false;
+	}
+	TArray<FVector3f> Vertices;
+	double FeetZ = TNumericLimits<double>::Max();
+	Mesh->ProcessMesh([&](const UE::Geometry::FDynamicMesh3& Geometry)
+	{
+		const UE::Geometry::FDynamicMeshMaterialAttribute* Ids = Geometry.HasAttributes() ? Geometry.Attributes()->GetMaterialID() : nullptr;
+		for (const int32 Vertex : Geometry.VertexIndicesItr())
+		{
+			FeetZ = FMath::Min(FeetZ, Geometry.GetVertex(Vertex).Z);
+		}
+		for (const int32 Triangle : Geometry.TriangleIndicesItr())
+		{
+			if (!Bare.Contains(Ids ? Ids->GetValue(Triangle) : 0))
+			{
+				continue;
+			}
+			const UE::Geometry::FIndex3i Corners = Geometry.GetTriangle(Triangle);
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				Vertices.Add(FVector3f(Geometry.GetVertex(Corners[Corner])));
+			}
+		}
+	});
+	FMantleSilhouette Cm;
+	if (!FMantleBodySilhouette::Measure(Vertices, FeetZ, StandingHeightCm, Cm))
+	{
+		OutError = TEXT("no bare torso could be found at its chest, waist or hips (they are under clothing)");
+		return false;
+	}
+	Out = FMantleBodySilhouette::Normalised(Cm, StandingHeightCm);
 	return true;
 }

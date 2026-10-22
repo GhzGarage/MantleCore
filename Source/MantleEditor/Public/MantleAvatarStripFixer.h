@@ -3,10 +3,12 @@
 
 #include "CoreMinimal.h"
 #include "MantleAvatarConvertFixer.h"
+#include "MantleFusedClothing.h"
 
 class FMantleAvatarContract;
 class UObject;
 class USkeletalMesh;
+class UStaticMesh;
 
 /** One material slot of the body being stripped (LOD 0's source geometry). */
 struct MANTLEEDITOR_API FMantleStripSlot
@@ -23,6 +25,10 @@ struct MANTLEEDITOR_API FMantleStripSlot
 
 	/** Read as bare skin (kept by default): FMantleAvatarStrip::LooksLikeSkin. */
 	bool bSkin = false;
+
+	/** For a skin slot, whether clothing is modelled into it (FMantleFusedClothing); Unknown for any other, and when Plan was given the creator's choices. */
+	EMantleFusedVerdict Fused = EMantleFusedVerdict::Unknown;
+	FString FusedWhy;
 };
 
 /** One connected piece of the head slot, the largest first. */
@@ -90,6 +96,12 @@ public:
 	 * the mesh has no source geometry.
 	 */
 	static bool Plan(USkeletalMesh& Mesh, const TSet<int32>* RemovedSlots, FMantleStripPlan& OutPlan, FString& OutError);
+
+	/**
+	 * #50: the slots of a model with no skeleton (a static mesh), read and judged as Plan does (skin or not, and with fused clothing),
+	 * without the head pieces. False with why when the mesh has no source geometry.
+	 */
+	static bool PlanStatic(UStaticMesh& Mesh, FMantleStripPlan& OutPlan, FString& OutError);
 
 	/**
 	 * The skin-only copy: Mesh's LOD 0 without RemovedSlots and without the head pieces RemovedPieces names (by their

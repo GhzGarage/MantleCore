@@ -7,6 +7,7 @@ class UObject;
 class USkeletalMesh;
 class UStaticMesh;
 struct FMantleStripPlan;
+struct FMantleSilhouette;
 
 /** What the clean head cut kept and how it was sized (FMantleMetaHumanHeadOnly::MakeCleanHead). */
 struct MANTLEEDITOR_API FMantleCleanHead
@@ -86,4 +87,11 @@ public:
 	 */
 	static bool MakeCleanHead(USkeletalMesh& Source, double TargetHeightCm, const FString& Folder, const FString& Name, FMantleCleanHead& Out,
 		TArray<TWeakObjectPtr<UObject>>& Created, FString& OutError);
+	/**
+	 * Source's build (#50): its LOD 0 (bind pose) torso widths and depths at the chest, waist and hips, as shares of StandingHeightCm
+	 * (a clean head's SourceHeightCm). Only bare skin is measured: the slots that read as skin and have no clothing built into them
+	 * (FMantleAvatarStrip::Plan, FMantleFusedClothing). A band with no bare torso (under a robe, armour or a jacket) stays unmeasured and
+	 * seeds nothing. False with why when the geometry can't be read or no band has bare skin to measure.
+	 */
+	static bool MeasureBuild(USkeletalMesh& Source, double StandingHeightCm, FMantleSilhouette& Out, FString& OutError);
 };

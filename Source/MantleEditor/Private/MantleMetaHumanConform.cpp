@@ -5,6 +5,7 @@
 #include "MetaHumanCharacterIdentity.h"
 #include "MetaHumanCharacterBodyIdentity.h"
 #include "MantleAvatarHeight.h"
+#include "MantleBodySilhouette.h"
 #include "MantleMetaHumanHeadOnly.h"
 #include "MantleAvatarContract.h"
 #include "MantleAvatarStripFixer.h"
@@ -371,8 +372,16 @@ namespace MantleMetaHumanConformPrivate
 		FMantleMetaHumanConformResult Result;
 		if (bDone)
 		{
+			// The source's build seeds the body sliders; a build that can't be read leaves them at the default (said in the log).
+			FMantleSilhouette Build;
+			FString BuildError;
+			if (!FMantleMetaHumanHeadOnly::MeasureBuild(*Source, Clean.SourceHeightCm, Build, BuildError))
+			{
+				UE_LOG(LogMantle, Warning, TEXT("MANTLE_CONVERT_FACEONLY %s: its build was not read (%s); the body sliders keep their defaults"), *Name, *BuildError);
+				Context.Notes.Add(FString::Printf(TEXT("%s: its build couldn't be seen (%s), so the body sliders start at MetaHuman's default."), *Part.Name, *BuildError));
+			}
 			bDone = FMantleMetaHumanConform::ConformHeadOnly(*Clean.Mesh.Get(), Clean.HeadJoint, TargetCm, Work.bFeminineBody, CharacterFolder, Name,
-				Result, OutError);
+				Result, OutError, &Build);
 			Made.Append(Result.Created);
 		}
 		FString Dirtied;
@@ -635,9 +644,79 @@ bool FMantleMetaHumanConform::ChooseParametricBody(UObject& InCharacter, const b
 	return bFound;
 }
 
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleMetaHumanConformSeedPrivate
+{
+	/**
+	 * #50: the Weight, Fat and Muscularity sliders of Character (open for editing, its body chosen) moved from the default body
+	 * towards SourceBuild: the default's own silhouette (evaluated body, Y up and Z forward in MetaHuman space) is the reference.
+	 */
+	void SeedBodySliders(UMetaHumanCharacterEditorSubsystem& Subsystem, UMetaHumanCharacter& Character, const FMantleSilhouette& SourceBuild)
+	{
+		const TSharedRef<const FMetaHumanCharacterBodyIdentity::FState> State = Subsystem.GetBodyState(&Character);
+		const TArray<int32> LODCounts = State->GetNumVerticesPerLOD();
+		const FMetaHumanRigEvaluatedState Geometry = State->GetVerticesAndVertexNormals();
+		if (LODCounts.IsEmpty() || LODCounts[0] <= 0 || LODCounts[0] > Geometry.Vertices.Num())
+		{
+			UE_LOG(LogMantle, Warning, TEXT("MANTLE_CONVERT_FACEONLY %s: the default body has no LOD0 vertices, so the sliders keep their defaults"), *Character.GetPathName());
+			return;
+		}
+		// To the source's axes (Z up, Y front to back).
+		TArray<FVector3f> Vertices;
+		FBox3f Bounds(ForceInit);
+		for (int32 Index = 0; Index < LODCounts[0]; ++Index)
+		{
+			const FVector3f& Vertex = Geometry.Vertices[Index];
+			Vertices.Add(FVector3f(Vertex.X, Vertex.Z, Vertex.Y));
+			Bounds += Vertex;
+		}
+		const double Height = Bounds.GetSize().Y;
+		FMantleSilhouette Default;
+		if (!FMantleBodySilhouette::Measure(Vertices, Bounds.Min.Y, Height, Default))
+		{
+			UE_LOG(LogMantle, Warning, TEXT("MANTLE_CONVERT_FACEONLY %s: the default body's silhouette could not be measured, so the sliders keep their defaults"), *Character.GetPathName());
+			return;
+		}
+		const FMantleSliderSeed Seed = FMantleBodySilhouette::Seed(SourceBuild, FMantleBodySilhouette::Normalised(Default, Height));
+		TArray<FMetaHumanCharacterBodyConstraint> Constraints = Subsystem.GetBodyConstraints(&Character);
+		FString Moved;
+		for (FMetaHumanCharacterBodyConstraint& Constraint : Constraints)
+		{
+			const FString Name = Constraint.Name.ToString();
+			double Offset = 0.0;
+			if (Name == TEXT("Weight"))
+			{
+				Offset = Seed.Weight;
+			}
+			else if (Name == TEXT("Fat"))
+			{
+				Offset = Seed.Fat;
+			}
+			else if (Name.Contains(TEXT("Muscul")))
+			{
+				Offset = Seed.Muscularity;
+			}
+			else
+			{
+				continue;
+			}
+			const float From = Constraint.TargetMeasurement;
+			Constraint.bIsActive = true;
+			Constraint.TargetMeasurement = FMath::Clamp(static_cast<float>(From + Offset * (Constraint.MaxMeasurement - Constraint.MinMeasurement)),
+				Constraint.MinMeasurement, FMath::Max(Constraint.MinMeasurement, Constraint.MaxMeasurement));
+			Moved += FString::Printf(TEXT(" %s %.2f -> %.2f (range %.2f to %.2f);"), *Name, From, Constraint.TargetMeasurement, Constraint.MinMeasurement,
+				Constraint.MaxMeasurement);
+		}
+		Subsystem.SetBodyConstraints(&Character, Constraints);
+		Subsystem.CommitBodyState(&Character);
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_FACEONLY %s: sliders seeded from the silhouette (source %s; default %s; %s):%s"), *Character.GetPathName(),
+			*SourceBuild.ToString(true), *FMantleBodySilhouette::Normalised(Default, Height).ToString(true), *Seed.ToString(), *Moved);
+	}
+}
+
 bool FMantleMetaHumanConform::ConformHeadOnly(UStaticMesh& Head, const TOptional<FVector>& HeadJoint, const double HeightCm, const bool bFeminine,
 	const FString& CharacterFolder,
-	const FString& InName, FMantleMetaHumanConformResult& OutResult, FString& OutError)
+	const FString& InName, FMantleMetaHumanConformResult& OutResult, FString& OutError, const FMantleSilhouette* SourceBuild)
 {
 	using namespace MantleMetaHumanConformPrivate;
 	OutResult = FMantleMetaHumanConformResult();
@@ -744,6 +823,11 @@ bool FMantleMetaHumanConform::ConformHeadOnly(UStaticMesh& Head, const TOptional
 		{
 			UE_LOG(LogMantle, Warning, TEXT("MANTLE_CONVERT_FACEONLY %s: %s"), *Character->GetPathName(), *ChooseError);
 		}
+	}
+	// The character's own build: the sliders start where its torso is, not at MetaHuman's default.
+	if (SourceBuild && SourceBuild->bValid)
+	{
+		MantleMetaHumanConformSeedPrivate::SeedBodySliders(*Subsystem, *Character, *SourceBuild);
 	}
 	Character->MarkPackageDirty();
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_FACEONLY %s: head-only conform solved in %.1f s (%s; landmarks %d curves, %d points from the %s portrait); body at %.1f cm"),

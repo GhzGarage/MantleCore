@@ -54,6 +54,15 @@ bool FMantleMetaHumanHeadOnlyCoveredTest::RunTest(const FString& Parameters)
 	FMantleStripPlan ShortBoots;
 	ShortBoots.Slots = { HeadOnlyTestSlot(0, true, 25.0, 172.0), HeadOnlyTestSlot(1, false, 0.0, 30.0) };
 	TestFalse(TEXT("boots over the feet alone leave a bare body"), FMantleMetaHumanHeadOnly::IsCovered(ShortBoots, Why));
+
+	FMantleStripPlan Fused;
+	Fused.Slots = { HeadOnlyTestSlot(0, true, 0.0, 170.0), HeadOnlyTestSlot(1, false, 150.0, 175.0) };
+	Fused.Slots[0].Fused = EMantleFusedVerdict::FusedClothing;
+	Fused.Slots[0].FusedWhy = TEXT("clothing looks built into the body");
+	TestTrue(TEXT("skin from the feet to the head with clothing built in: covered"), FMantleMetaHumanHeadOnly::IsCovered(Fused, Why));
+	TestTrue(TEXT("and says so"), Why.Contains(TEXT("built into the body")));
+	Fused.Slots[0].Fused = EMantleFusedVerdict::Unknown;
+	TestFalse(TEXT("an unknown verdict leaves a bare body"), FMantleMetaHumanHeadOnly::IsCovered(Fused, Why));
 	return true;
 }
 

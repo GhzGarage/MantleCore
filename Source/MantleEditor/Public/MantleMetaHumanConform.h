@@ -7,6 +7,7 @@
 class UObject;
 class USkeletalMesh;
 class UStaticMesh;
+struct FMantleSilhouette;
 
 /**
  * The guide's hand numbers on an A-pose body export (Epic's MetaHuman skeleton, whose bone names are Epic's own): the hand
@@ -145,10 +146,12 @@ public:
 	 * its own. The same input check and portrait as Conform, then a new character <CharacterFolder>/<Name> with its Height
 	 * constraint at HeightCm and ConformToTargetMeshes with the head only and MetaHuman's head_only pipeline: the face is the
 	 * character's, the body MetaHuman's own (no A-pose export or hand re-estimate: nothing about the body was fitted). No
-	 * landmarks is a plain stop ("we couldn't see a face"). False with why; OutResult.Created lists what was made either way.
+	 * landmarks is a plain stop ("we couldn't see a face"). SourceBuild (the source's torso as shares of its height,
+	 * FMantleMetaHumanHeadOnly::MeasureBuild) seeds the Weight, Fat and Muscularity sliders (FMantleBodySilhouette::Seed): below the
+	 * default is allowed, each clamped to its range. False with why; OutResult.Created lists what was made either way.
 	 */
 	static bool ConformHeadOnly(UStaticMesh& Head, const TOptional<FVector>& HeadJoint, double HeightCm, bool bFeminine, const FString& CharacterFolder,
-		const FString& Name, FMantleMetaHumanConformResult& OutResult, FString& OutError);
+		const FString& Name, FMantleMetaHumanConformResult& OutResult, FString& OutError, const FMantleSilhouette* SourceBuild = nullptr);
 
 	/**
 	 * The body the creator picked for a kept face (#770, #875): Character (a UMetaHumanCharacter open for editing) keeps MetaHuman's
