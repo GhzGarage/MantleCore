@@ -26,6 +26,7 @@
 #include "MantlePlaceWorldPartition.h"
 #include "MantleQuickJSRuntime.h"
 #include "MantleReflectionProbeExport.h"
+#include "MantleSeatExport.h"
 #include "MantleRmlDocumentRules.h"
 #include "MantleRuntime.h"
 #include "MantleScatterVolume.h"
@@ -4612,6 +4613,9 @@ FMantleExportResult FMantlePlaceExporter::Export(UWorld* World, const FMantleExp
 		Place.Metadata.Thumbnail = Uploads.IdFor(Options.Assets->Thumbnail, EMantleAssetKind::Texture, nullptr);
 	}
 
+	// GhzGarage/MantleCore#142: Mantle Seats, each owned by the entity of the prop it is on.
+	FMantleSeatExport::Export(Exportable, IdByActor, Place.Seats, Result.Errors);
+
 	// Pass 2f — the level's storage, from Mantle Place Settings: the library items the place pins by
 	// name. The schema's rules are the parser's, and every VehicleSpawn's Storage Item must name an entry. The
 	// place file carries references only: nothing is uploaded or converted for a stored item.
@@ -5922,6 +5926,27 @@ FString FMantlePlaceExporter::ToJson(const FMantlePlace& Place)
 				}
 				Writer->WriteObjectEnd();
 			}
+			Writer->WriteObjectEnd();
+		}
+		Writer->WriteArrayEnd();
+	}
+
+	// GhzGarage/MantleCore#142: only when the level has seats, so a place without them stays byte-identical and is
+	// never sent a key an older client refuses.
+	if (Place.Seats.Num() > 0)
+	{
+		Writer->WriteArrayStart(TEXT("seats"));
+		for (const FMantleSeat& Seat : Place.Seats)
+		{
+			Writer->WriteObjectStart();
+			Writer->WriteValue(TEXT("entity"), Seat.Entity);
+			Writer->WriteArrayStart(TEXT("position"));
+			Writer->WriteValue(Seat.Position.X);
+			Writer->WriteValue(Seat.Position.Y);
+			Writer->WriteValue(Seat.Position.Z);
+			Writer->WriteArrayEnd();
+			Writer->WriteValue(TEXT("yaw"), Seat.Yaw);
+			Writer->WriteValue(TEXT("style"), FString(MantleSeatStyleToString(Seat.Style)));
 			Writer->WriteObjectEnd();
 		}
 		Writer->WriteArrayEnd();

@@ -16,6 +16,7 @@
 #include "MantlePlaceStorage.h"
 #include "MantlePlaceWorldPartition.h"
 #include "MantleReflectionProbeExport.h"
+#include "MantleSeatExport.h"
 #include "MantleRuntime.h"
 #include "MantleSkyMesh.h"
 #include "MantleScatterVolume.h"
@@ -1801,6 +1802,9 @@ FMantleValidationResult FMantlePlaceValidator::Validate(UWorld* World, const boo
 		CheckDroppedBehaviourForCheck(Actor, Result);
 		PhysicsObjects += CheckPhysicsForCheck(Actor, Type, Result) ? 1 : 0;
 	}
+
+	// GhzGarage/MantleCore#142: Mantle Seats, on any prop (an unpublished prop included, which the loop above may have skipped).
+	FMantleSeatExport::Check(World, Result);
 
 	// #456: every physics entity is simulated on the server and replicated to every player. Past
 	// the hard cap the place is refused (the parser and backend refuse it too); past the soft one,

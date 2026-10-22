@@ -42,6 +42,10 @@
 #include "MantlePlaceSecretsDetails.h"
 #include "MantleTestLocally.h"
 #include "MantleScriptPointDetails.h"
+#include "MantleSeatSpot.h"
+#include "MantleSeatSpotVisualizer.h"
+#include "UnrealEdGlobals.h"
+#include "Editor/UnrealEdEngine.h"
 #include "MantleRuntime.h"
 #include "Graph/MantleScriptGraphModule.h"
 #include "Scripts/MantleScriptsPanelController.h"
@@ -633,6 +637,11 @@ void FMantleEditorModule::StartupModule()
 	SMantlePublishPanel::RegisterTab();
 	// #838: a Script Point's Details panel: its package from the place's storage and Packages/, its parameters with the package's hints.
 	FMantleScriptPointDetails::Register();
+	// GhzGarage/MantleCore#142: a Mantle Seat's hip marker.
+	if (GUnrealEd)
+	{
+		GUnrealEd->RegisterComponentVisualizer(UMantleSeatSpotComponent::StaticClass()->GetFName(), MakeShareable(new FMantleSeatSpotVisualizer));
+	}
 	// #1011: Place Settings > Secrets.
 	FMantlePlaceSecretsDetails::Register();
 	// #610: the avatar converter's third-party rig fixer (Mixamo, Character Creator, Daz, guided mapping).
@@ -699,6 +708,10 @@ void FMantleEditorModule::ShutdownModule()
 	SMantlePreviewPanel::UnregisterTab();
 	SMantlePublishPanel::UnregisterTab();
 	FMantleScriptPointDetails::Unregister();
+	if (GUnrealEd)
+	{
+		GUnrealEd->UnregisterComponentVisualizer(UMantleSeatSpotComponent::StaticClass()->GetFName());
+	}
 	FMantlePlaceSecretsDetails::Unregister();
 	FMantleScriptGraphModule::Shutdown();
 	FMantleScriptsPanelController::Shutdown();
