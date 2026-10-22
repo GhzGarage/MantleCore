@@ -246,7 +246,7 @@ namespace MantleDevSectionOutfitsPrivate
 		FMantleGarmentOutfitResult Made;
 		FString Code;
 		FString Refusal;
-		const bool bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Made, Code, Refusal);
+		const bool bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Made, Code, Refusal, /*bCutFromOwnMesh*/ true);
 		UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS Outfits on %s: %s (body gap %.2f cm)"), *Made.Character, bMade ? TEXT("made") : *Refusal, Made.BodyGapCm);
 		for (int32 Piece = 0; Piece < Indices.Num(); ++Piece)
 		{

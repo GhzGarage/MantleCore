@@ -1037,7 +1037,7 @@ bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletal
 }
 
 bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work, const FString& BodyName, const FString& Folder,
-	TConstArrayView<USkeletalMesh*> Garments, FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal)
+	TConstArrayView<USkeletalMesh*> Garments, FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal, const bool bCutFromOwnMesh)
 {
 	using namespace MantleGarmentOutfitPrivate;
 	if (!Work.Character.IsValid() || !Work.APoseClip.IsValid() || !Work.SkinOnly.IsValid() || !Work.PosedMesh.IsValid())
@@ -1348,6 +1348,22 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		WrappedSkin.Positions[Vertex] = Wrapped[TwinPointOf[Vertex]];
 	}
 	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_SHAPE the MetaHuman shaped like the original body: %s"), *DescribeShapeChange(MetaHumanSkin.Positions, WrappedSkin));
+	{
+		const int32 Turned = TurnedTriangles(MetaHumanSkin.Positions, WrappedSkin);
+		int32 BodyTriangles = 0;
+		for (const FMantleGlbPrimitive& Primitive : WrappedSkin.Primitives)
+		{
+			BodyTriangles += Primitive.Indices.Num() / 3;
+		}
+		if (bCutFromOwnMesh && !SplitsCleanly(Turned, BodyTriangles))
+		{
+			OutRefusalCode = TEXT("not_splittable");
+			OutRefusal = FString::Printf(TEXT("%s can't be split cleanly: the skin under its clothing isn't a whole body (shaping a MetaHuman like it folds %.1f%% of it), so its clothing would come out crushed and isn't offered. It stays a fixed avatar: upload it with the As-is route, clothes and all."),
+				*BodyName, BodyTriangles > 0 ? 100.0 * Turned / BodyTriangles : 0.0);
+			UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_SPLIT %s: not splittable (%d of %d triangles turned over)"), *BodyName, Turned, BodyTriangles);
+			return false;
+		}
+	}
 	FMantleSkinnedMeshLOD WrappedSurface = TwinSurface;
 	WrappedSurface.Positions = Wrapped;
 	int32 Unmatched = 0;
@@ -1779,6 +1795,33 @@ FString FMantleGarmentOutfit::WornClothing(const USkeletalMesh& Body)
 		}
 	}
 	return FString::Join(Worn, TEXT(", "));
+}
+
+bool FMantleGarmentOutfit::SplitsCleanly(const int32 Turned, const int32 Triangles)
+{
+	return Triangles > 0 && Turned <= MaxFoldShare * Triangles;
+}
+
+int32 FMantleGarmentOutfit::TurnedTriangles(TConstArrayView<FVector3f> Before, const FMantleGlbMesh& Mesh)
+{
+	int32 Turned = 0;
+	for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives)
+	{
+		for (int32 First = 0; First + 2 < Primitive.Indices.Num(); First += 3)
+		{
+			const int32 A = Primitive.FirstVertex + static_cast<int32>(Primitive.Indices[First]);
+			const int32 B = Primitive.FirstVertex + static_cast<int32>(Primitive.Indices[First + 1]);
+			const int32 C = Primitive.FirstVertex + static_cast<int32>(Primitive.Indices[First + 2]);
+			if (!Before.IsValidIndex(A) || !Before.IsValidIndex(B) || !Before.IsValidIndex(C) || !Mesh.Positions.IsValidIndex(FMath::Max3(A, B, C)))
+			{
+				continue;
+			}
+			const FVector3f Was = FVector3f::CrossProduct(Before[B] - Before[A], Before[C] - Before[A]);
+			const FVector3f Now = FVector3f::CrossProduct(Mesh.Positions[B] - Mesh.Positions[A], Mesh.Positions[C] - Mesh.Positions[A]);
+			Turned += FVector3f::DotProduct(Was, Now) < 0.0f ? 1 : 0;
+		}
+	}
+	return Turned;
 }
 
 int32 FMantleGarmentOutfit::BareBodyRank(const FString& MeshName, const int32 WornSlots, const double HeightShare)

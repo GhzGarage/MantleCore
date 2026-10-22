@@ -3944,7 +3944,13 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 			FScopedSlowTask Progress(1.0f, LOCTEXT("ConvertGarmentRunning", "Making the clothing into MetaHuman Outfits on this character's MetaHuman..."));
 			Progress.MakeDialog();
 			Progress.EnterProgressFrame(1.0f);
-			bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Result, RefusalCode, Refusal);
+			const bool bCut = Indices.ContainsByPredicate([this](const int32 Index) { return ConvertContext->Garments[Index].Sections.Num() > 0; });
+			bMade = FMantleGarmentOutfit::MakeFromWork(*Work, BodyName, Folder, Meshes, Result, RefusalCode, Refusal, bCut);
+		}
+		// Its own mesh can't be split cleanly: Convert's note says it uploads as a fixed avatar.
+		if (RefusalCode == TEXT("not_splittable"))
+		{
+			ConvertContext->Notes.AddUnique(Refusal);
 		}
 		for (int32 Made = 0; Made < Indices.Num(); ++Made)
 		{

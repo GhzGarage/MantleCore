@@ -392,3 +392,30 @@ bool FMantleGarmentOutfitBareBodyRankTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a dressed body is not bare"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Nightwear"), 3, 1.0), -1);
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitSplitsCleanlyTest,
+	"Mantle.Editor.GarmentOutfit.SplitsCleanly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitSplitsCleanlyTest::RunTest(const FString& Parameters)
+{
+	// Vampire's numbers: her merged mesh's skin folded 1706 of 47664 MetaHuman triangles (not splittable); her separate bare
+	// body 522 (at the toes, in her heels) and Ida Faber's none (both splittable).
+	TestFalse(TEXT("the merged Vampire doesn't split cleanly"), FMantleGarmentOutfit::SplitsCleanly(1706, 47664));
+	TestTrue(TEXT("her separate bare body does"), FMantleGarmentOutfit::SplitsCleanly(522, 47664));
+	TestTrue(TEXT("no folds splits"), FMantleGarmentOutfit::SplitsCleanly(0, 47664));
+	TestFalse(TEXT("no body is not clean"), FMantleGarmentOutfit::SplitsCleanly(0, 0));
+
+	// Turned triangles: one of two folded through the shared edge.
+	FMantleGlbMesh Mesh;
+	Mesh.Positions = { FVector3f(0, 0, 0), FVector3f(1, 0, 0), FVector3f(0, 1, 0), FVector3f(1, 1, 0) };
+	FMantleGlbPrimitive& Primitive = Mesh.Primitives.AddDefaulted_GetRef();
+	Primitive.NumVertices = 4;
+	Primitive.Indices = { 0, 1, 2, 1, 3, 2 };
+	const TArray<FVector3f> Before = Mesh.Positions;
+	TestEqual(TEXT("unmoved, none turned"), FMantleGarmentOutfit::TurnedTriangles(Before, Mesh), 0);
+	Mesh.Positions[3] = FVector3f(0.25f, 0.25f, 0.0f);
+	TestEqual(TEXT("the folded one turned"), FMantleGarmentOutfit::TurnedTriangles(Before, Mesh), 1);
+	return true;
+}

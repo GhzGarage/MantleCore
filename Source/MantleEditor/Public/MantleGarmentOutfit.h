@@ -140,6 +140,20 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * face and the rest stay MetaHuman's own.
 	 */
 	static constexpr double ShapeNearCm = 2.0;
+
+	/**
+	 * Clothing cut from a character's own mesh (#55) is refused when shaping the MetaHuman like the skin under it turns over
+	 * more than this share of the MetaHuman's triangles: that skin isn't a whole body (Vampire's merged mesh: 3.6%; her
+	 * separate bare body: 1.1%, at the toes in her heels), and the resize would carry its folds into the clothing. The
+	 * character then uploads as a fixed avatar (owner's call).
+	 */
+	static constexpr double MaxFoldShare = 0.025;
+
+	/** Pure (tested): whether a shaping that turned over Turned of Triangles triangles is clean enough to make Outfits on (MaxFoldShare). */
+	static bool SplitsCleanly(int32 Turned, int32 Triangles);
+
+	/** Pure (tested): Mesh's triangles whose normal is more than 90 degrees from what it was at Before (its positions before a step). */
+	static int32 TurnedTriangles(TConstArrayView<FVector3f> Before, const FMantleGlbMesh& Mesh);
 	static constexpr double ShapeFarCm = 8.0;
 	static constexpr int32 ShapeSmoothIters = 10;
 
@@ -219,9 +233,11 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * names the body in messages; everything is saved under Folder. Fills OutResult's Character, InputScale and the rest,
 	 * leaving its Notes; false with OutRefusal ("code" and a sentence) when the MetaHuman can't be read or the body can't
 	 * be posed as it was.
+	 * bCutFromOwnMesh: the garments were cut from the character's own mesh (#55); refused ("not_splittable") when its skin
+	 * doesn't shape cleanly (SplitsCleanly), so the character uploads as a fixed avatar.
 	 */
 	static bool MakeFromWork(const FMantleConvertMetaHumanWork& Work, const FString& BodyName, const FString& Folder, TConstArrayView<USkeletalMesh*> Garments,
-		FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal);
+		FMantleGarmentOutfitResult& OutResult, FString& OutRefusalCode, FString& OutRefusal, bool bCutFromOwnMesh = false);
 
 	/**
 	 * Pure (tested): the garment slot a mesh beside a body is ("top", "bottom", "footwear"), from its name's words, else
