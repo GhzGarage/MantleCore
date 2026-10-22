@@ -362,7 +362,8 @@ USkeletalMesh* FMantleGarmentOutfit::SaveCopy(USkeletalMesh& Source, const FStri
 const FName FMantleGarmentOutfit::MadeFromGarmentKey(TEXT("MantleMadeFromGarment"));
 const FName FMantleGarmentOutfit::MadeVersionKey(TEXT("MantleMadeFromGarmentVersion"));
 // 3: the garment is carried with the skin onto the MetaHuman (CarryWithSkin), and skin coming through it between its vertices is covered (CoverSkin); 4: CoverSkin only answers skin a little through it.
-const TCHAR* const FMantleGarmentOutfit::MadeVersion = TEXT("4");
+const TCHAR* const FMantleGarmentOutfit::MadeVersion = TEXT("5");
+const FName FMantleGarmentOutfit::HeelKey(TEXT("MantleHeelCm"));
 
 const TArray<TPair<FName, FName>>& FMantleGarmentOutfit::Limbs()
 {
@@ -387,11 +388,67 @@ TArray<FTransform> FMantleGarmentOutfit::ComponentPose(const FReferenceSkeleton&
 	return Out;
 }
 
+const TArray<TPair<FName, FName>>& FMantleGarmentOutfit::Feet()
+{
+	static const TArray<TPair<FName, FName>> Pairs = { { FName(TEXT("foot_l")), FName(TEXT("ball_l")) }, { FName(TEXT("foot_r")), FName(TEXT("ball_r")) } };
+	return Pairs;
+}
+
+const TArray<FName>& FMantleGarmentOutfit::Toes()
+{
+	static const TArray<FName> Bones = { FName(TEXT("ball_l")), FName(TEXT("ball_r")) };
+	return Bones;
+}
+
+FVector3f FMantleGarmentOutfit::BoneSkinDirection(const FMantleGlbMesh& Mesh, const FName Bone, const FVector3f& Joint)
+{
+	const int32 Wanted = Mesh.Joints.IndexOfByPredicate([Bone](const FMantleGlbJoint& Entry) { return Entry.Name == Bone; });
+	if (Wanted == INDEX_NONE || Mesh.NumInfluences <= 0)
+	{
+		return FVector3f::ZeroVector;
+	}
+	// Bone and every bone below it (a skeleton with toe bones has its toes on them).
+	TBitArray<> Below(false, Mesh.Joints.Num());
+	for (int32 Joint = 0; Joint < Mesh.Joints.Num(); ++Joint)
+	{
+		for (int32 Up = Joint, Steps = 0; Up != INDEX_NONE && Mesh.Joints.IsValidIndex(Up) && Steps <= Mesh.Joints.Num(); Up = Mesh.Joints[Up].Parent, ++Steps)
+		{
+			if (Up == Wanted)
+			{
+				Below[Joint] = true;
+				break;
+			}
+		}
+	}
+	FVector3d Sum(0.0);
+	int32 Count = 0;
+	for (int32 Vertex = 0; Vertex < Mesh.Positions.Num(); ++Vertex)
+	{
+		int32 Best = INDEX_NONE;
+		float BestWeight = 0.0f;
+		for (int32 Slot = 0; Slot < Mesh.NumInfluences; ++Slot)
+		{
+			const int32 Index = Vertex * Mesh.NumInfluences + Slot;
+			if (Mesh.InfluenceWeights.IsValidIndex(Index) && Mesh.InfluenceWeights[Index] > BestWeight)
+			{
+				BestWeight = Mesh.InfluenceWeights[Index];
+				Best = Mesh.InfluenceJoints[Index];
+			}
+		}
+		if (Mesh.Joints.IsValidIndex(Best) && Below[Best])
+		{
+			Sum += FVector3d(Mesh.Positions[Vertex]);
+			++Count;
+		}
+	}
+	return Count > 0 ? (FVector3f(Sum / Count) - Joint).GetSafeNormal() : FVector3f::ZeroVector;
+}
+
 TArray<FTransform> FMantleGarmentOutfit::TurnToTemplate(const FReferenceSkeleton& Reference, TConstArrayView<FTransform> Component,
-	const FReferenceSkeleton& Template, TConstArrayView<FTransform> TemplateComponent, TArray<FString>& OutLines)
+	const FReferenceSkeleton& Template, TConstArrayView<FTransform> TemplateComponent, TArray<FString>& OutLines, const TArray<TPair<FName, FName>>& Pairs)
 {
 	TArray<FTransform> Out(Component.GetData(), Component.Num());
-	for (const TPair<FName, FName>& Limb : Limbs())
+	for (const TPair<FName, FName>& Limb : Pairs)
 	{
 		const int32 Bone = Reference.FindRawBoneIndex(Limb.Key);
 		const int32 Child = Reference.FindRawBoneIndex(Limb.Value);
@@ -835,6 +892,86 @@ FString FMantleGarmentOutfit::DescribeClearance(TConstArrayView<FVector3f> Point
 		Sum / Tracked.Num(), Percentile(10), Percentile(50), Percentile(90), FMath::RoundToInt32(100.0 * Within / Tracked.Num()));
 }
 
+FString FMantleGarmentOutfit::DescribeShapeChange(TConstArrayView<FVector3f> Before, const FMantleGlbMesh& Mesh)
+{
+	if (Before.Num() != Mesh.Positions.Num())
+	{
+		return TEXT("not measured: the vertex count changed");
+	}
+	TArray<float> Changes;
+	TMap<FName, TPair<double, int32>> ByBone;
+	int32 Turned = 0;
+	int32 Triangles = 0;
+	const auto HeaviestBone = [&Mesh](const int32 Vertex)
+	{
+		int32 Best = INDEX_NONE;
+		float BestWeight = 0.0f;
+		for (int32 Slot = 0; Slot < Mesh.NumInfluences; ++Slot)
+		{
+			const int32 Index = Vertex * Mesh.NumInfluences + Slot;
+			if (Mesh.InfluenceWeights.IsValidIndex(Index) && Mesh.InfluenceWeights[Index] > BestWeight)
+			{
+				BestWeight = Mesh.InfluenceWeights[Index];
+				Best = Mesh.InfluenceJoints[Index];
+			}
+		}
+		return Mesh.Joints.IsValidIndex(Best) ? Mesh.Joints[Best].Name : NAME_None;
+	};
+	for (const FMantleGlbPrimitive& Primitive : Mesh.Primitives)
+	{
+		for (int32 First = 0; First + 2 < Primitive.Indices.Num(); First += 3)
+		{
+			int32 Corners[3];
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				Corners[Corner] = Primitive.FirstVertex + static_cast<int32>(Primitive.Indices[First + Corner]);
+			}
+			if (!Before.IsValidIndex(Corners[0]) || !Before.IsValidIndex(Corners[1]) || !Before.IsValidIndex(Corners[2]))
+			{
+				continue;
+			}
+			++Triangles;
+			const FVector3f NormalBefore = FVector3f::CrossProduct(Before[Corners[1]] - Before[Corners[0]], Before[Corners[2]] - Before[Corners[0]]);
+			const FVector3f NormalAfter = FVector3f::CrossProduct(Mesh.Positions[Corners[1]] - Mesh.Positions[Corners[0]], Mesh.Positions[Corners[2]] - Mesh.Positions[Corners[0]]);
+			Turned += FVector3f::DotProduct(NormalBefore, NormalAfter) < 0.0f ? 1 : 0;
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				const int32 A = Corners[Corner];
+				const int32 B = Corners[(Corner + 1) % 3];
+				const float Length = FVector3f::Dist(Before[A], Before[B]);
+				if (Length < 1.e-3f)
+				{
+					continue;
+				}
+				const float Change = FMath::Abs(FVector3f::Dist(Mesh.Positions[A], Mesh.Positions[B]) - Length) / Length;
+				Changes.Add(Change);
+				TPair<double, int32>& Entry = ByBone.FindOrAdd(HeaviestBone(A));
+				Entry.Key += Change;
+				++Entry.Value;
+			}
+		}
+	}
+	if (Changes.IsEmpty())
+	{
+		return TEXT("no edges");
+	}
+	Changes.Sort();
+	const auto Percentile = [&Changes](const int32 Percent) { return 100.0f * Changes[FMath::Min(Changes.Num() - 1, Changes.Num() * Percent / 100)]; };
+	TArray<TPair<FName, double>> Means;
+	for (const TPair<FName, TPair<double, int32>>& Entry : ByBone)
+	{
+		if (Entry.Value.Value >= 20) { Means.Emplace(Entry.Key, 100.0 * Entry.Value.Key / Entry.Value.Value); }
+	}
+	Means.Sort([](const TPair<FName, double>& A, const TPair<FName, double>& B) { return A.Value > B.Value; });
+	TArray<FString> Lines;
+	for (int32 Index = 0; Index < Means.Num() && Index < 6; ++Index)
+	{
+		Lines.Add(FString::Printf(TEXT("%s %.0f%%"), *Means[Index].Key.ToString(), Means[Index].Value));
+	}
+	return FString::Printf(TEXT("edge length change p50 %.0f%% p90 %.0f%% largest %.0f%%, %d of %d triangles turned over; by bone (mean): %s"), Percentile(50), Percentile(90),
+		100.0f * Changes.Last(), Turned, Triangles, *FString::Join(Lines, TEXT(", ")));
+}
+
 bool FMantleGarmentOutfit::Make(USkeletalMesh& InBody, TConstArrayView<USkeletalMesh*> Garments, const FString& TurnOff, const FString& Confirm,
 	FMantleGarmentOutfitResult& OutResult, FString& OutConvertJson, FString& OutRefusalCode, FString& OutRefusal)
 {
@@ -1099,6 +1236,70 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 	UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT k=%.5f offset=%s body gap %.3f cm"), OutResult.InputScale, *OutResult.Offset.ToString(), OutResult.BodyGapCm);
 	OutResult.Notes.Add(FString::Printf(TEXT("The MetaHuman's skin is on average %.2f cm from the original body's (after the A-pose and the scale %.4f)."), OutResult.BodyGapCm, OutResult.InputScale));
 
+	// Its feet turned to the MetaHuman's (a character in heels stands on tiptoe, the MetaHuman on flat feet), then its toes
+	// to the MetaHuman's: its clothing is posed so, and a shoe turns with its foot instead of being pressed flat onto the
+	// MetaHuman's. What a heel then reaches below the MetaHuman's sole is measured per piece (HeelCm).
+	{
+		const FReferenceSkeleton& BodyReference = Work.SkinOnly->GetRefSkeleton();
+		TArray<FTransform> Clip;
+		for (int32 Bone = 0; Bone < BodyReference.GetRawBoneNum(); ++Bone)
+		{
+			const FTransform* Found = ClipBones.Find(BodyReference.GetBoneName(Bone));
+			Clip.Add(Found ? *Found : FTransform::Identity);
+		}
+		TArray<FString> FootLines;
+		Clip = TurnToTemplate(BodyReference, Clip, ConformedReference, ConformedPose, FootLines, Feet());
+		const auto Repose = [&]()
+		{
+			for (int32 Bone = 0; Bone < Clip.Num(); ++Bone)
+			{
+				if (ClipBones.Contains(BodyReference.GetBoneName(Bone)))
+				{
+					ClipBones[BodyReference.GetBoneName(Bone)] = Clip[Bone];
+				}
+			}
+			PosedBody = FMantleGlbMesh();
+			return FMantleCosmeticExport::ReadSkeletalMesh(Work.SkinOnly.Get(), 0, PosedBody, BodyMaterials, Triangles, Error)
+				&& PoseMesh(PosedBody, GarmentPosedJoints(PosedBody.Joints, ClipBones, Matched), Work.InputScale, Error);
+		};
+		bool bPosed = Repose();
+		for (const FName Toe : Toes())
+		{
+			const int32 Bone = BodyReference.FindRawBoneIndex(Toe);
+			const int32 TemplateBone = ConformedReference.FindRawBoneIndex(Toe);
+			if (!bPosed || !Clip.IsValidIndex(Bone) || !ConformedPose.IsValidIndex(TemplateBone))
+			{
+				continue;
+			}
+			const FVector Joint = Clip[Bone].GetLocation();
+			const FVector3f Now = BoneSkinDirection(PosedBody, Toe, FVector3f(Joint * Work.InputScale));
+			const FVector3f Wanted = BoneSkinDirection(MetaHumanSkin, Toe, FVector3f(ConformedPose[TemplateBone].GetLocation()));
+			if (Now.IsNearlyZero() || Wanted.IsNearlyZero())
+			{
+				continue;
+			}
+			const FQuat Turn = FQuat::FindBetweenNormals(FVector(Now), FVector(Wanted));
+			FootLines.Add(FString::Printf(TEXT("%s %.1f"), *Toe.ToString(), FMath::RadiansToDegrees(Turn.GetAngle())));
+			for (int32 Other = 0; Other < Clip.Num(); ++Other)
+			{
+				if (Other == Bone || BodyReference.BoneIsChildOf(Other, Bone))
+				{
+					Clip[Other].SetRotation((Turn * Clip[Other].GetRotation()).GetNormalized());
+					Clip[Other].SetLocation(Joint + Turn.RotateVector(Clip[Other].GetLocation() - Joint));
+				}
+			}
+			bPosed = Repose();
+		}
+		if (!bPosed)
+		{
+			OutRefusalCode = TEXT("pose_failed");
+			OutRefusal = FString::Printf(TEXT("The body could not be posed with its feet turned to the MetaHuman's: %s."), *Error);
+			return false;
+		}
+		OutResult.FeetTurns = FString::Join(FootLines, TEXT(", "));
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT feet turned to the MetaHuman's (degrees): %s"), *OutResult.FeetTurns);
+	}
+
 	// The original body (posed, on the MetaHuman) and the conformed MetaHuman as surfaces, for the fit log: how far the
 	// original skin is outside the MetaHuman's, by the bone it follows (positive: the MetaHuman is smaller there).
 	FMantleGlbMesh OriginalBody = PosedBody;
@@ -1185,6 +1386,7 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the original body: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, OriginalSurface));
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman as posed: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, TwinSurface));
 		// The MetaHuman is the body's shape only roughly (a fuller bust, a rounder seat): the garment follows its skin onto it.
+		const TArray<FVector3f> AsPosed = Geometry->Positions;
 		double CarriedCm = 0.0;
 		if (!CarryWithSkin(Geometry->Positions, OriginalSurface, TwinSurface, CarriedCm, Error))
 		{
@@ -1193,6 +1395,7 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		}
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s carried with the skin (%.2f cm on average): %s"), *Garment->GetName(), CarriedCm,
 			*DescribeClearance(Geometry->Positions, TwinSurface));
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_SHAPE %s carried with the skin: %s"), *Garment->GetName(), *DescribeShapeChange(AsPosed, *Geometry));
 		if (!TransferWeights(*Geometry, MetaHumanSkin, Piece.FarVertices, Piece.MeanSkinCm, Error))
 		{
 			Piece.Error = Error;
@@ -1205,14 +1408,24 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 			continue;
 		}
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s over the MetaHuman in its A-pose: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, AuthoringSurface));
+		const TArray<FVector3f> BeforePush = Geometry->Positions;
 		FMantleRefitPushOut Pushed;
 		if (!GarmentPushOut(*Geometry, AuthoringSurface, Pushed, Error))
 		{
 			Piece.Error = Error;
 			continue;
 		}
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_SHAPE %s pushed out: %s"), *Garment->GetName(), *DescribeShapeChange(BeforePush, *Geometry));
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_FIT %s pushed out: %s"), *Garment->GetName(), *DescribeClearance(Geometry->Positions, AuthoringSurface));
 		Piece.PushOut = Pushed.ToString();
+		{
+			float SoleZ = TNumericLimits<float>::Max();
+			float LowestZ = TNumericLimits<float>::Max();
+			for (const FVector3f& Position : AuthoringSurface.Positions) { SoleZ = FMath::Min(SoleZ, Position.Z); }
+			for (const FVector3f& Position : Geometry->Positions) { LowestZ = FMath::Min(LowestZ, Position.Z); }
+			Piece.HeelCm = FMath::Max(0.0, static_cast<double>(SoleZ - LowestZ));
+			UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT %s reaches %.2f cm below the MetaHuman's sole"), *Garment->GetName(), Piece.HeelCm);
+		}
 		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT push out %s: %s"), *Garment->GetName(), *Piece.PushOut);
 		Piece.Vertices = Geometry->Positions.Num();
 		FMantleOutfitAuthoredSource Source;
@@ -1233,6 +1446,10 @@ bool FMantleGarmentOutfit::MakeFromWork(const FMantleConvertMetaHumanWork& Work,
 		FAssetRegistryModule::AssetCreated(Outfit);
 		Package->GetMetaData().SetValue(Outfit, MadeFromGarmentKey, *Garment->GetPathName());
 		Package->GetMetaData().SetValue(Outfit, MadeVersionKey, MadeVersion);
+		if (Piece.HeelCm >= HeelMinCm)
+		{
+			Package->GetMetaData().SetValue(Outfit, HeelKey, *FString::Printf(TEXT("%.1f"), Piece.HeelCm));
+		}
 		if (!GarmentSave(Outfit))
 		{
 			Piece.Error = FString::Printf(TEXT("the Outfit was made but %s could not be saved"), *PackageName);

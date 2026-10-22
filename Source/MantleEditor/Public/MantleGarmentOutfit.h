@@ -29,6 +29,12 @@ struct MANTLEEDITOR_API FMantleGarmentOutfitPiece
 
 	/** What pushing it out of the MetaHuman's skin did (FMantleRefitPushOut::ToString). */
 	FString PushOut;
+
+	/**
+	 * How far it reaches below the MetaHuman's sole (cm, 0 when it doesn't): a high heel, made for a foot on tiptoe, once its
+	 * foot is turned flat. Worn as made, the heel goes into the ground by this much; it is kept on the Outfit (HeelKey).
+	 */
+	double HeelCm = 0.0;
 };
 
 /** What FMantleGarmentOutfit::Make did. */
@@ -51,6 +57,9 @@ struct MANTLEEDITOR_API FMantleGarmentOutfitResult
 	/** The conformed MetaHuman's limbs turned onto MetaHuman's A-pose: "upperarm_l 7.4, ..." (degrees). */
 	FString APoseTurns;
 
+	/** The body's feet and toes turned to the MetaHuman's before its clothing is posed: "foot_l 24.0, ..." (degrees). */
+	FString FeetTurns;
+
 	TArray<FMantleGarmentOutfitPiece> Pieces;
 	TArray<FString> Notes;
 };
@@ -63,7 +72,9 @@ struct MANTLEEDITOR_API FMantleGarmentOutfitResult
  *      conformed to the body in MetaHuman's A-pose at the default height. A body with no USkeleton gets one first, on a copy.
  *   2. Each garment is posed the way the body was: its vertices skinned by the A-pose clip's bones (by name; a garment bone
  *      the body lacks follows its parent), scaled by the same k, and moved by the offset that puts the posed body on the
- *      MetaHuman's skin (PoseMesh, AlignTranslation).
+ *      MetaHuman's skin (PoseMesh, AlignTranslation); with the body's feet and toes turned to the MetaHuman's first (Feet,
+ *      Toes), so a high heel turns with its foot rather than being pressed onto a flat one. Then it follows the skin from the
+ *      original body onto the MetaHuman (CarryWithSkin).
  *   3. Its skin weights are taken from the MetaHuman's merged body and head (TransferWeights), so it is on MetaHuman's bones.
  *   4. The MetaHuman's arms and legs are turned onto MetaHuman's own A-pose (TurnToTemplate), body and garment alike, and
  *      the garment is pushed out of the skin where it sits under it (FMantleAvatarRefit::PushOutOfBody, as the refit does).
@@ -83,10 +94,16 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * garment is reused only when it is this version, so a fit fix remakes the Outfits made before it.
 	 */
 	static const FName MadeVersionKey;
+
+	/** Package metadata key on an Outfit whose piece reaches below the MetaHuman's sole (FMantleGarmentOutfitPiece::HeelCm, "%.1f"). */
+	static const FName HeelKey;
 	static const TCHAR* const MadeVersion;
 
 	/** A garment vertex further than this from every MetaHuman skin vertex is counted as far (FarVertices). */
 	static constexpr double NearCm = 10.0;
+
+	/** A piece reaching this far below the MetaHuman's sole (cm) or further is a heel (HeelKey). */
+	static constexpr double HeelMinCm = 1.0;
 
 	/** The posed body must land within this of the A-pose step's own posed copy (bounds, cm), or the garment's pose is not the body's. */
 	static constexpr double PoseCheckCm = 1.0;
@@ -139,6 +156,13 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	static FString DescribeClearance(TConstArrayView<FVector3f> Points, const FMantleSkinnedMeshLOD& Surface);
 
 	/**
+	 * Pure (tested): how a step changed Mesh's shape, from Before (its positions before the step) to its positions now, for the
+	 * log: each triangle edge's length change (p50, p90, largest, as a share of its length), the triangles turned over (normal
+	 * more than 90 degrees from before), and the bones (Mesh's heaviest weight per vertex) whose edges changed most.
+	 */
+	static FString DescribeShapeChange(TConstArrayView<FVector3f> Before, const FMantleGlbMesh& Mesh);
+
+	/**
 	 * Steps 1 to 4 for Body and each of Garments. TurnOff and Confirm are Convert's fix keys (comma-separated), as the
 	 * toolset's ConvertCosmetic takes them; "keep the face, choose a body" never applies here (the garment needs its own body).
 	 * OutConvertJson is the converter's fix list and result (FMantleAvatarConverter::ToJson). False with OutRefusal ("code"
@@ -163,10 +187,24 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 * limb bone, degrees.
 	 */
 	static TArray<FTransform> TurnToTemplate(const FReferenceSkeleton& Reference, TConstArrayView<FTransform> Component,
-		const FReferenceSkeleton& Template, TConstArrayView<FTransform> TemplateComponent, TArray<FString>& OutLines);
+		const FReferenceSkeleton& Template, TConstArrayView<FTransform> TemplateComponent, TArray<FString>& OutLines,
+		const TArray<TPair<FName, FName>>& Pairs = Limbs());
 
 	/** The limb bones TurnToTemplate lines up, each with the child it points at, root to leaf (MetaHuman's names). */
 	static const TArray<TPair<FName, FName>>& Limbs();
+
+	/**
+	 * The foot bones, each with the child it points at: a character in high heels stands on tiptoe, and the MetaHuman made
+	 * of it on flat feet. Its feet are turned to the MetaHuman's (TurnToTemplate with these) before its clothing is carried
+	 * onto it, so a shoe turns with its foot instead of being pressed flat onto the MetaHuman's.
+	 */
+	static const TArray<TPair<FName, FName>>& Feet();
+
+	/** The toe bones (MetaHuman's names), each turned so its toes point as the MetaHuman's do (BoneSkinDirection). */
+	static const TArray<FName>& Toes();
+
+	/** Pure (tested): the direction from Joint to the middle of Mesh's vertices whose heaviest bone is Bone or one below it (unit); zero when it has none. */
+	static FVector3f BoneSkinDirection(const FMantleGlbMesh& Mesh, FName Bone, const FVector3f& Joint);
 
 	/** Component-space transforms of Reference's raw bones in their reference pose. */
 	static TArray<FTransform> ComponentPose(const FReferenceSkeleton& Reference);

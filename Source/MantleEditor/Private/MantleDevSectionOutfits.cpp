@@ -4,7 +4,9 @@
 // #55 step 2 end to end, as the Cosmetics panel runs it: Convert <Body> (the bare-skin line confirmed, the Triangles, Atlas and Bake fixes
 // off unless TurnOff says otherwise), then the clothing in the body's own material sections is cut into pieces
 // (FMantleGarmentOutfit::MakeSectionMeshes) and made into MetaHuman Outfits on the MetaHuman Convert made (MakeFromWork); each Outfit is
-// then drawn as the catalog thumbnail does (Mantle.Dev.RenderOutfitFits) into <Directory>. Needs a renderer. Saves what Convert and the
+// then drawn as the catalog thumbnail does (Mantle.Dev.RenderOutfitFits) into <Directory>. Before that, for telling where a piece goes
+// wrong: the character as it came (source_*), each cut piece alone and on the bare body Strip left (piece_<slot>_alone_*, _on_body_*),
+// and each Outfit at the size it was made on the MetaHuman it was made on (made_<slot>_*), front, side and back. Needs a renderer. Saves what Convert and the
 // Outfits write under <body folder>/Converted; uploads nothing. Logs MANTLE_SECTION_OUTFITS lines.
 #include "MantleAvatarConverter.h"
 #include "MantleCosmeticThumbnail.h"
@@ -13,8 +15,13 @@
 #include "MantleGarmentOutfit.h"
 #include "MantleMetaHumanPose.h"
 
+#include "Animation/Skeleton.h"
+#include "ChaosOutfitAsset/OutfitAsset.h"
 #include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
+#include "Modules/ModuleManager.h"
+#include "SkinnedAssetCompiler.h"
+#include "UObject/StrongObjectPtr.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -24,6 +31,21 @@ DEFINE_LOG_CATEGORY_STATIC(LogMantleSectionOutfits, Log, All);
 // Named, not anonymous: MantleEditor builds as a unity build.
 namespace MantleDevSectionOutfitsPrivate
 {
+	/** Mesh on Body (none: alone) as the catalog thumbnail draws it, front, side and back, into <Directory>/<Name>_<view>.png. */
+	void Draw(USkeletalMesh* Mesh, USkeletalMesh* Body, const FString& Directory, const FString& Name)
+	{
+		FMantleThumbnailSubject Subject = FMantleCosmeticThumbnail::GarmentSubject(Mesh, Body, nullptr);
+		for (const TPair<const TCHAR*, float> View : { TPair<const TCHAR*, float>(TEXT("front"), -90.0f), TPair<const TCHAR*, float>(TEXT("side"), 0.0f), TPair<const TCHAR*, float>(TEXT("back"), 90.0f) })
+		{
+			Subject.View = FRotator(-4.0f, View.Value, 0.0f);
+			TArray<FColor> Pixels;
+			FString CaptureError;
+			const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("%s_%s.png"), *Name, View.Key));
+			const bool bWritten = FMantleCosmeticThumbnail::Capture(Subject, 1024, Pixels, CaptureError) && FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(1024, 1024, Pixels), *File);
+			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS picture %s %s"), *File, bWritten ? TEXT("") : *CaptureError);
+		}
+	}
+
 	void Run(const TArray<FString>& Args)
 	{
 		if (Args.Num() < 2)
@@ -91,26 +113,19 @@ namespace MantleDevSectionOutfitsPrivate
 			}
 		}
 		UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS cut %d pieces"), Cut);
-		// Each cut piece as it is before the fit: alone, and on the bare body Strip left (the body it was made for), front and side. A piece
+		if (Context.Parts[0].Original.IsValid())
+		{
+			Draw(Context.Parts[0].Original.Get(), nullptr, Args[1], TEXT("source"));
+		}
+		// Each cut piece as it is before the fit: alone, and on the bare body Strip left (the body it was made for). A piece
 		// that is wrong here was cut wrong; one that is right here and wrong in the Outfit was changed by the fit.
 		for (const int32 Index : Indices)
 		{
 			const FMantleConvertGarment& Garment = Context.Garments[Index];
 			USkeletalMesh* PieceMesh = Garment.Mesh.Get();
 			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS piece %s: bounds %s (%d material slots)"), *Garment.Name, *PieceMesh->GetBounds().GetBox().ToString(), PieceMesh->GetMaterials().Num());
-			for (const bool bOnBody : { false, true })
-			{
-				FMantleThumbnailSubject Subject = FMantleCosmeticThumbnail::GarmentSubject(PieceMesh, bOnBody ? Work->SkinOnly.Get() : nullptr, nullptr);
-				for (const TPair<const TCHAR*, float> View : { TPair<const TCHAR*, float>(TEXT("front"), -90.0f), TPair<const TCHAR*, float>(TEXT("side"), 0.0f) })
-				{
-					Subject.View = FRotator(-4.0f, View.Value, 0.0f);
-					TArray<FColor> Pixels;
-					FString CaptureError;
-					const FString File = FPaths::Combine(Args[1], FString::Printf(TEXT("piece_%s_%s_%s.png"), *Garment.Slot, bOnBody ? TEXT("on_body") : TEXT("alone"), View.Key));
-					const bool bWritten = FMantleCosmeticThumbnail::Capture(Subject, 1024, Pixels, CaptureError) && FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(1024, 1024, Pixels), *File);
-					UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS piece picture %s %s"), *File, bWritten ? TEXT("") : *CaptureError);
-				}
-			}
+			Draw(PieceMesh, nullptr, Args[1], FString::Printf(TEXT("piece_%s_alone"), *Garment.Slot));
+			Draw(PieceMesh, Work->SkinOnly.Get(), Args[1], FString::Printf(TEXT("piece_%s_on_body"), *Garment.Slot));
 		}
 		if (Meshes.Num() == 0)
 		{
@@ -128,8 +143,29 @@ namespace MantleDevSectionOutfitsPrivate
 		{
 			const FMantleConvertGarment& Garment = Context.Garments[Indices[Piece]];
 			const FMantleGarmentOutfitPiece* Result2 = bMade && Made.Pieces.IsValidIndex(Piece) ? &Made.Pieces[Piece] : nullptr;
-			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS %s (%s): outfit=%s error=%s far=%d mean=%.2f cm"), *Garment.Name, *Garment.Slot,
-				Result2 ? *Result2->Outfit : TEXT(""), Result2 ? *Result2->Error : *Refusal, Result2 ? Result2->FarVertices : 0, Result2 ? Result2->MeanSkinCm : 0.0);
+			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS %s (%s): outfit=%s error=%s far=%d mean=%.2f cm heel=%.2f cm"), *Garment.Name, *Garment.Slot,
+				Result2 ? *Result2->Outfit : TEXT(""), Result2 ? *Result2->Error : *Refusal, Result2 ? Result2->FarVertices : 0, Result2 ? Result2->MeanSkinCm : 0.0, Result2 ? Result2->HeelCm : 0.0);
+			// The Outfit at the size it was made, on the MetaHuman it was made on (before any resize onto Epic's bodies).
+			USkeletalMesh* Authoring = LoadObject<USkeletalMesh>(nullptr, *Made.AuthoringBody, nullptr, LOAD_NoWarn | LOAD_Quiet);
+			UChaosOutfitAsset* Outfit = Result2 && !Result2->Outfit.IsEmpty() ? LoadObject<UChaosOutfitAsset>(nullptr, *Result2->Outfit, nullptr, LOAD_NoWarn | LOAD_Quiet) : nullptr;
+			if (Authoring && Outfit)
+			{
+				FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("ChaosClothAssetTools"));
+				TStrongObjectPtr<USkeletalMesh> Exported(NewObject<USkeletalMesh>());
+				TStrongObjectPtr<USkeleton> Skeleton;
+				if (Outfit->ExportToSkeletalMesh(*Exported.Get()))
+				{
+					USkinnedAsset* Compiling[] = { Exported.Get() };
+					FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
+					if (!Exported->GetSkeleton())
+					{
+						Skeleton.Reset(NewObject<USkeleton>());
+						Skeleton->MergeAllBonesToBoneTree(Exported.Get(), false);
+						Exported->SetSkeleton(Skeleton.Get());
+					}
+					Draw(Exported.Get(), Authoring, Args[1], FString::Printf(TEXT("made_%s"), *Garment.Slot));
+				}
+			}
 			if (Result2 && !Result2->Outfit.IsEmpty() && GEngine)
 			{
 				GEngine->Exec(nullptr, *FString::Printf(TEXT("Mantle.Dev.RenderOutfitFits %s %s auto"), *Result2->Outfit, *Args[1]));

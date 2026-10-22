@@ -275,6 +275,14 @@ bool FMantleGarmentOutfitClearanceTest::RunTest(const FString& Parameters)
 	const FString Line = FMantleGarmentOutfit::DescribeClearance({ FVector3f(0.5f, 0.2f, 0.0f), FVector3f(0.2f, 0.2f, 2.0f), FVector3f(0.7f, 0.7f, -1.0f) }, SkinSheet(4, 0.0f));
 	TestTrue(TEXT("all three are tracked"), Line.StartsWith(TEXT("tracked 3/3, under 1,")));
 	TestTrue(TEXT("the share within 1 cm"), Line.Contains(TEXT("within 1 cm 67%")));
+
+	// The shape change: unmoved, nothing changed; the far corner pulled through the shared edge, its triangle turns over.
+	const TArray<FVector3f> Before = Mesh.Positions;
+	TestTrue(TEXT("an unmoved mesh did not change"), FMantleGarmentOutfit::DescribeShapeChange(Before, Mesh).StartsWith(TEXT("edge length change p50 0% p90 0% largest 0%, 0 of 2")));
+	Mesh.Positions[5] = FVector3f(0.25f, 0.25f, 0.0f);
+	const FString Shape = FMantleGarmentOutfit::DescribeShapeChange(Before, Mesh);
+	TestTrue(TEXT("the folded triangle is counted"), Shape.Contains(TEXT("1 of 2 triangles turned over")));
+	TestTrue(TEXT("a changed vertex count is not measured"), FMantleGarmentOutfit::DescribeShapeChange({ FVector3f::ZeroVector }, Mesh).StartsWith(TEXT("not measured")));
 	return true;
 }
 
@@ -366,3 +374,28 @@ bool FMantleGarmentOutfitSlotTest::RunTest(const FString& Parameters)
 }
 
 #endif
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitBoneSkinDirectionTest,
+	"Mantle.Editor.GarmentOutfit.BoneSkinDirection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitBoneSkinDirectionTest::RunTest(const FString& Parameters)
+{
+	// A foot, its ball and a toe bone below the ball: the toes are the ball's skin and the toe bone's together.
+	FMantleGlbMesh Mesh;
+	Mesh.Joints.SetNum(3);
+	Mesh.Joints[0].Name = TEXT("foot_l");
+	Mesh.Joints[1].Name = TEXT("ball_l");
+	Mesh.Joints[1].Parent = 0;
+	Mesh.Joints[2].Name = TEXT("bigtoe_01_l");
+	Mesh.Joints[2].Parent = 1;
+	Mesh.NumInfluences = 1;
+	Mesh.Positions = { FVector3f(0, 0, 10), FVector3f(4, 0, 0), FVector3f(8, 0, 0) };
+	Mesh.InfluenceJoints = { 0, 1, 2 };
+	Mesh.InfluenceWeights = { 1.0f, 1.0f, 1.0f };
+	const FVector3f Toes = FMantleGarmentOutfit::BoneSkinDirection(Mesh, TEXT("ball_l"), FVector3f(0, 0, 0));
+	TestTrue(TEXT("the toes point forward, past the toe bone's skin too"), Toes.Equals(FVector3f(1, 0, 0), 1.e-4f));
+	TestTrue(TEXT("a bone with no skin has no direction"), FMantleGarmentOutfit::BoneSkinDirection(Mesh, TEXT("calf_l"), FVector3f::ZeroVector).IsZero());
+	return true;
+}
