@@ -160,6 +160,10 @@ namespace MantleDevSectionOutfitsPrivate
 			UE_LOG(LogMantleSectionOutfits, Error, TEXT("MANTLE_SECTION_OUTFITS failed: %s"), *Error);
 			return;
 		}
+		for (const FString& Note : Context.Notes)
+		{
+			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS convert note: %s"), *Note);
+		}
 		TArray<FString> Off;
 		(Args.Num() > 2 ? Args[2] : FString(TEXT("Triangles.0.Mesh,Atlas.0.0,Bake.0.Mesh"))).ParseIntoArray(Off, TEXT(","), true);
 		TArray<FMantleConvertFix> Fixes = FMantleAvatarConverter::Analyze(Context);
