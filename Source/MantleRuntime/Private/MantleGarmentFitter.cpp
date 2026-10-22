@@ -6,6 +6,7 @@
 #include "MantleRBFInterpolation.h"
 #include "MantleRuntime.h"
 #include "Async/ParallelFor.h"
+#include "Misc/ScopeLock.h"
 
 // Named, not anonymous: MantleRuntime builds as a unity build.
 namespace MantleGarmentFitterPrivate
@@ -411,7 +412,24 @@ bool FMantleGarmentFitter::Rebind(FMantleSkinnedMesh& Garment, const FMantleRefe
 		}
 		if (AncestorRemapped > 0)
 		{
-			UE_LOG(LogMantle, Warning, TEXT("MANTLE_GARMENTFIT remapped %d helper-bone influences to their nearest wearer ancestors (%s)"), AncestorRemapped, *FString::Join(AncestorPairs, TEXT(", ")));
+			// A refit or the builder's second rebind repeats the same remap: warn once per distinct remap, then Verbose.
+			const FString Pairs = FString::Join(AncestorPairs, TEXT(", "));
+			static FCriticalSection RemapLoggedLock;
+			static TSet<FString> RemapLogged;
+			bool bFirst = false;
+			{
+				FScopeLock Lock(&RemapLoggedLock);
+				RemapLogged.Add(Pairs, &bFirst);
+			}
+			bFirst = !bFirst;
+			if (bFirst)
+			{
+				UE_LOG(LogMantle, Warning, TEXT("MANTLE_GARMENTFIT remapped %d helper-bone influences to their nearest wearer ancestors (%s)"), AncestorRemapped, *Pairs);
+			}
+			else
+			{
+				UE_LOG(LogMantle, Verbose, TEXT("MANTLE_GARMENTFIT remapped %d helper-bone influences to their nearest wearer ancestors (%s)"), AncestorRemapped, *Pairs);
+			}
 		}
 	}
 
