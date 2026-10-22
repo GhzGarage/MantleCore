@@ -601,6 +601,10 @@ USkeletalMesh* FMantleRuntimeSkeletalMeshBuilder::Build(const FMantleSkinnedMesh
 	{
 		return Refuse(OutError, TEXT("could not make a skeleton of the mesh's own bones"));
 	}
+	// A cooked build finds sockets only through the mesh's socket map, which a loaded asset builds in PostLoad and a
+	// built one never does: without this, an uploaded avatar has no acc_* socket in Shipping (the editor walks the
+	// skeleton's sockets instead). After the reference skeleton, which the map's bone indices come from.
+	Built->RebuildSocketMap();
 
 	// Material slots, padded so every section's slot exists on every built LOD. A padded slot takes the material
 	// name of a section drawn with it (MSK1 carries one per section, and a slot means the same on every LOD), so
