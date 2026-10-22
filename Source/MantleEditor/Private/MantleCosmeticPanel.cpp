@@ -976,9 +976,13 @@ void SMantleCosmeticPanel::Construct(const FArguments& InArgs)
 				]
 
 				// #124: the thumbnail, the same section in every uploader.
-				+ SVerticalBox::Slot().AutoHeight()
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
 				[
-					MakeSection(FMantleThumbnailText::Heading(), MakeThumbnailSection(), Thumbnailable)
+					// The section carries its own heading, so it is not wrapped in MakeSection's.
+					SNew(SBox).Visibility(Thumbnailable)
+					[
+						MakeThumbnailSection()
+					]
 				]
 
 				// The one button.

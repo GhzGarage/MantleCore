@@ -1409,6 +1409,7 @@ bool FMantleEmoteCheck::ThumbnailSubject(TConstArrayView<uint8> ClipBytes, FMant
 	{
 		PoseOnBody(Scene, Components, KeepDriver.Get(), KeepRetargeter.Get(), Played, Time);
 	};
+	OutSubject.Describe.ReplaceInline(TEXT(", headshot"), TEXT(", full body"));
 	OutSubject.Describe += FString::Printf(TEXT(", emote at %.2f s"), Time);
 	OutHow = FString::Printf(TEXT("%s, the emote at %.2f s of %.2f s"), *Describe, Time, Read.Clip.GetDuration());
 	return true;
