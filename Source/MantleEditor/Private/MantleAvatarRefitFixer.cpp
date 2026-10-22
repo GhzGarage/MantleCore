@@ -194,8 +194,8 @@ const TCHAR* LexToString(const EMantleRefitCorrespondence Path)
 
 FString FMantleRefitPushOut::ToString() const
 {
-	const FString Line = FString::Printf(TEXT("%d of %d under the skin (deepest %.2f cm), %d moved (largest %.2f cm), %d left under (%d deeper than %.0f cm)"),
-		InsideBefore, Tracked, DeepestCm, Moved, MaxMoveCm, InsideAfter, TooDeep, FMantleAvatarRefit::MaxPushDepthCm);
+	const FString Line = FString::Printf(TEXT("%d of %d under the skin (deepest %.2f cm), %d moved (largest %.2f cm), %d left under (%d deeper than %.0f cm, %d under their own shell)"),
+		InsideBefore, Tracked, DeepestCm, Moved, MaxMoveCm, InsideAfter, TooDeep, FMantleAvatarRefit::MaxPushDepthCm, UnderShell);
 	return SkinThroughBefore < 0 ? Line : FString::Printf(TEXT("%s; skin through it between vertices %d, covered to %d"), *Line, SkinThroughBefore, SkinThroughAfter);
 }
 
@@ -905,6 +905,13 @@ bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMa
 		return false;
 	}
 	Target.UntrackBoundary(Body);
+	// #153: an inner layer under its own shell (its layer twin outside the skin) is left where it is. The restore couples a
+	// vertex and its twin to the larger push, so pushing a padded cup's lining out of the bust pushed the whole cup out and
+	// folded it (Vampire's corset: 124 vertices under, 1465 moved, up to 5 cm). The client's coverage hides the skin under
+	// the shell. Read on the clearances as measured, before any target is raised.
+	TArray<int32> Twin;
+	FMantleLayerCrossing::FindTwins(Garment, Twin);
+	const TArray<float> Measured = Target.ClearanceCm;
 	for (int32 Vertex = 0; Vertex < Garment.NumVertices(); ++Vertex)
 	{
 		if (!Target.IsTracked(Vertex))
@@ -912,7 +919,7 @@ bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMa
 			continue;
 		}
 		++Out.Tracked;
-		const float Clearance = Target.ClearanceCm[Vertex];
+		const float Clearance = Measured[Vertex];
 		if (Clearance < 0.0f)
 		{
 			++Out.InsideBefore;
@@ -921,6 +928,13 @@ bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMa
 		if (Clearance < -MaxPushDepthCm)
 		{
 			++Out.TooDeep;
+			Target.Untrack(Vertex);
+			continue;
+		}
+		const int32 Other = Twin.IsValidIndex(Vertex) ? Twin[Vertex] : INDEX_NONE;
+		if (Clearance < 0.0f && Other != INDEX_NONE && Target.IsTracked(Other) && Measured[Other] >= 0.0f)
+		{
+			++Out.UnderShell;
 			Target.Untrack(Vertex);
 			continue;
 		}

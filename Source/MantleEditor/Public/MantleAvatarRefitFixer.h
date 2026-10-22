@@ -38,6 +38,13 @@ struct MANTLEEDITOR_API FMantleRefitPushOut
 	/** Vertices deeper than FMantleAvatarRefit::MaxPushDepthCm, left where they are (the client's coverage hides the skin there). */
 	int32 TooDeep = 0;
 
+	/**
+	 * #153: vertices under the skin whose layer twin (FMantleLayerCrossing) is outside it, left where they are: the inner layer
+	 * of a padded cup or a lined piece, under its own shell. Pushed, the twin coupling would push the shell with it and fold the piece;
+	 * left, the client's coverage hides the skin under the shell.
+	 */
+	int32 UnderShell = 0;
+
 	/** Vertices moved, and the largest move, cm. */
 	int32 Moved = 0;
 	double MaxMoveCm = 0.0;
@@ -222,7 +229,8 @@ public:
 	 * After the warp: every vertex of Mesh under Body's skin (FMantleGarmentClearance, the open neck ring left out) is
 	 * pushed out to PushOutCm, and every vertex at the skin up to it, by the client's clearance restore
 	 * (FMantleClearanceRestore: a smoothed push field, layer twins moved together, triangles never turned over). Vertices
-	 * deeper than MaxPushDepthCm stay. Positions only. False with why on bad inputs.
+	 * deeper than MaxPushDepthCm stay, and so does an inner layer under its own shell (#153, FMantleRefitPushOut::UnderShell:
+	 * a vertex under the skin whose layer twin is outside it). Positions only. False with why on bad inputs.
 	 */
 	static bool PushOutOfBody(FMeshDescription& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError, bool bCoverSkin = false);
 
