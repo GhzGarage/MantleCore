@@ -6,16 +6,9 @@
 
 #include "CanvasItem.h"
 #include "CanvasTypes.h"
-#include "Editor.h"
-#include "EditorViewportClient.h"
 #include "Engine/Engine.h"
-#include "PrimitiveDrawingUtils.h"
 #include "SceneManagement.h"
 #include "SceneView.h"
-#include "UnrealEdGlobals.h"
-
-// The seat's marker, drawn in the overlay gizmo's look (MantleGizmoStyle): a box where the hips sit, an arrow for the
-// way the body faces, a green up line, and a yellow line down to the floor with the hip height beside it.
 
 // Named, not anonymous: MantleEditor builds as a unity build.
 namespace MantleSeatSpotVisualizerPrivate
@@ -23,40 +16,82 @@ namespace MantleSeatSpotVisualizerPrivate
 	/** The seated hips' footprint in centimetres: X is forward, Y is sideways, Z is up. */
 	const FVector HipHalfExtent(20.0, 20.0, 10.0);
 	constexpr double FacingLength = 60.0;
+	constexpr double ArrowHeadLength = 12.0;
 	constexpr double UpLength = 30.0;
+	constexpr double FloorCrossHalf = 8.0;
+	constexpr double DashLength = 6.0;
+
+	void Add(TArray<FMantleSeatGizmoLine>& Out, const FVector& Start, const FVector& End, const FLinearColor& Color)
+	{
+		Out.Add(FMantleSeatGizmoLine{ Start, End, Color });
+	}
+}
+
+void FMantleSeatSpotVisualizer::Lines(const FVector& Hip, double Yaw, const TOptional<double>& HipHeight, TArray<FMantleSeatGizmoLine>& Out)
+{
+	using namespace MantleSeatSpotVisualizerPrivate;
+	const FQuat Heading = FRotator(0.0, Yaw, 0.0).Quaternion();
+	const FVector Forward = Heading.GetForwardVector(), Right = Heading.GetRightVector(), Up = FVector::UpVector;
+
+	// The hips: a flat box, its twelve edges.
+	const FVector X = Forward * HipHalfExtent.X, Y = Right * HipHalfExtent.Y, Z = Up * HipHalfExtent.Z;
+	for (const double SZ : { -1.0, 1.0 })
+	{
+		const FVector Corners[4] = { Hip - X - Y + Z * SZ, Hip + X - Y + Z * SZ, Hip + X + Y + Z * SZ, Hip - X + Y + Z * SZ };
+		for (int32 i = 0; i < 4; ++i)
+		{
+			Add(Out, Corners[i], Corners[(i + 1) % 4], MantleGizmoStyle::Reach);
+		}
+	}
+	for (const FVector& Corner : { -X - Y, X - Y, X + Y, -X + Y })
+	{
+		Add(Out, Hip + Corner - Z, Hip + Corner + Z, MantleGizmoStyle::Reach);
+	}
+
+	// The way the body faces: a shaft and a four-line head.
+	const FVector Tip = Hip + Forward * FacingLength;
+	Add(Out, Hip, Tip, MantleGizmoStyle::Facing);
+	for (const FVector& Side : { Right, -Right, Up, -Up })
+	{
+		Add(Out, Tip, Tip - Forward * ArrowHeadLength + Side * ArrowHeadLength * 0.5, MantleGizmoStyle::Facing);
+	}
+
+	Add(Out, Hip, Hip + Up * UpLength, MantleGizmoStyle::Up);
+
+	// The hip height: down to the floor, solid while a place can hold it and dashed when Check this place would refuse it.
+	if (HipHeight.IsSet())
+	{
+		const FVector Floor = Hip - Up * HipHeight.GetValue();
+		if (FMantleSeatExport::HeightProblem(true, HipHeight.GetValue()).IsEmpty())
+		{
+			Add(Out, Hip, Floor, MantleGizmoStyle::Outline);
+		}
+		else
+		{
+			for (double Along = 0.0; Along < HipHeight.GetValue(); Along += DashLength * 2.0)
+			{
+				Add(Out, Hip - Up * Along, Hip - Up * FMath::Min(Along + DashLength, HipHeight.GetValue()), MantleGizmoStyle::Outline);
+			}
+		}
+		Add(Out, Floor - Forward * FloorCrossHalf, Floor + Forward * FloorCrossHalf, MantleGizmoStyle::Outline);
+		Add(Out, Floor - Right * FloorCrossHalf, Floor + Right * FloorCrossHalf, MantleGizmoStyle::Outline);
+	}
 }
 
 void FMantleSeatSpotVisualizer::DrawVisualization(const UActorComponent* Component, const FSceneView* View, FPrimitiveDrawInterface* PDI)
 {
-	using namespace MantleSeatSpotVisualizerPrivate;
 	const UMantleSeatSpotComponent* Seat = Cast<UMantleSeatSpotComponent>(Component);
 	if (!Seat)
 	{
 		return;
 	}
-	// Only the heading counts, so the marker is drawn flat: the box and the arrow follow the yaw alone.
-	const FVector Hip = Seat->GetComponentLocation();
-	const FQuat Yaw = FRotator(0.0, Seat->GetComponentRotation().Yaw, 0.0).Quaternion();
-	const FVector Forward = Yaw.GetForwardVector(), Right = Yaw.GetRightVector(), Up = FVector::UpVector;
-
-	DrawOrientedWireBox(PDI, Hip, Forward, Right, Up, HipHalfExtent, MantleGizmoStyle::Reach, SDPG_Foreground);
-	DrawDirectionalArrow(PDI, FRotationMatrix::MakeFromX(Forward) * FTranslationMatrix(Hip), MantleGizmoStyle::Facing, FacingLength, 1.f, SDPG_Foreground);
-	PDI->DrawLine(Hip, Hip + Up * UpLength, MantleGizmoStyle::Up, SDPG_Foreground, 0.f);
-
 	double HipHeight = 0.0;
-	if (FMantleSeatExport::FloorBelow(Seat, HipHeight))
+	TArray<FMantleSeatGizmoLine> Drawn;
+	Lines(Seat->GetComponentLocation(), Seat->GetComponentRotation().Yaw,
+		FMantleSeatExport::FloorBelow(Seat, HipHeight) ? TOptional<double>(HipHeight) : TOptional<double>(), Drawn);
+	for (const FMantleSeatGizmoLine& Line : Drawn)
 	{
-		// Solid while the height is one a place can hold, dashed when Check this place would refuse it.
-		const FVector Floor = Hip - Up * HipHeight;
-		if (FMantleSeatExport::HeightProblem(true, HipHeight).IsEmpty())
-		{
-			PDI->DrawLine(Hip, Floor, MantleGizmoStyle::Outline, SDPG_Foreground, 0.f);
-		}
-		else
-		{
-			DrawDashedLine(PDI, Hip, Floor, MantleGizmoStyle::Outline, 6.0, SDPG_Foreground);
-		}
-		DrawWireDiamond(PDI, FTranslationMatrix(Floor), 6.f, MantleGizmoStyle::Outline, SDPG_Foreground);
+		PDI->DrawLine(Line.Start, Line.End, Line.Color, SDPG_Foreground, 0.f);
 	}
 }
 
