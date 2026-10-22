@@ -372,8 +372,15 @@ namespace MantleMetaHumanConformPrivate
 		FMantleMetaHumanConformResult Result;
 		if (bDone)
 		{
+			// The source's build seeds the body sliders; a build that can't be read leaves them at the default (said in the log).
+			FMantleSilhouette Build;
+			FString BuildError;
+			if (!FMantleMetaHumanHeadOnly::MeasureBuild(*Source, Clean.SourceHeightCm, Build, BuildError))
+			{
+				UE_LOG(LogMantle, Warning, TEXT("MANTLE_CONVERT_FACEONLY %s: its build was not read (%s); the body sliders keep their defaults"), *Name, *BuildError);
+			}
 			bDone = FMantleMetaHumanConform::ConformHeadOnly(*Clean.Mesh.Get(), Clean.HeadJoint, TargetCm, Work.bFeminineBody, CharacterFolder, Name,
-				Result, OutError);
+				Result, OutError, &Build);
 			Made.Append(Result.Created);
 		}
 		FString Dirtied;
