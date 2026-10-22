@@ -82,6 +82,12 @@ public:
 	 */
 	static void DevConvertShot(const TArray<FString>& Args);
 
+	/**
+	 * #124: maintainer command Mantle.Dev.CosmeticPanelShot <File.png> [Exit]: opens the panel and renders it offscreen, to show the shared
+	 * Thumbnail section as the cosmetic uploader has it.
+	 */
+	static void DevPanelShot(const TArray<FString>& Args);
+
 private:
 	void SetClass(EMantleCosmeticClass Class);
 	void SetSource(UObject* Source);

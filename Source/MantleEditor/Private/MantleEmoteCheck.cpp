@@ -1224,6 +1224,66 @@ namespace MantleEmoteCheckPrivate
 		TEXT("with wrists, only the wrists' constant twist and bend error is removed (MatchWristsInPlace); with save, the asset is saved."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunMatchCommand));
 
+	/**
+	 * #124: the emote's thumbnail in each choice, through the panel's own export (Build): Automatic (the posed body at the clip's most expressive
+	 * moment), Choose the angle (from behind and to the right) and a Custom image. One PNG each in Directory; saves and uploads nothing.
+	 */
+	void RunThumbnailSamples(const TArray<FString>& Args)
+	{
+		if (Args.Num() < 3)
+		{
+			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_THUMBNAIL_SAMPLES usage: Mantle.Dev.ThumbnailSamples <AnimSequence> <Directory> <Custom.png> [Exit]"));
+			return;
+		}
+		const FString Directory = Args[1];
+		IFileManager::Get().MakeDirectory(*Directory, true);
+		FString Path = Args[0];
+		if (!FPackageName::GetShortName(Path).Contains(TEXT(".")))
+		{
+			Path += TEXT(".") + FPackageName::GetShortName(Path);
+		}
+		UAnimSequence* Sequence = LoadObject<UAnimSequence>(nullptr, *Path);
+		FString Error;
+		const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&Error);
+		if (!Sequence || !Contract)
+		{
+			UE_LOG(LogMantleCheckEmote, Error, TEXT("MANTLE_THUMBNAIL_SAMPLES failed: %s"), Sequence ? *Error : *FString::Printf(TEXT("%s did not load"), *Path));
+			return;
+		}
+		struct FSample { const TCHAR* Name; EMantleThumbnailMode Mode; };
+		for (const FSample& Sample : { FSample{ TEXT("automatic"), EMantleThumbnailMode::Automatic }, FSample{ TEXT("angle"), EMantleThumbnailMode::Angle },
+			FSample{ TEXT("custom"), EMantleThumbnailMode::Custom } })
+		{
+			FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Emote, Sequence, TEXT("emote"), TEXT("sample"), *Contract, EMantleFitSex::Auto);
+			Draft.Thumbnail.Mode = Sample.Mode;
+			Draft.Thumbnail.Angle = FRotator(-10.0, 150.0, 0.0);
+			Draft.Thumbnail.ImageFile.FilePath = Args[2];
+			const FMantleCosmeticPackage Package = FMantleCosmeticExport::Build(Draft, *Contract);
+			const FMantleCosmeticUploadAsset* Picture = Package.ThumbnailKey.IsEmpty() ? nullptr : Package.FindAsset(Package.ThumbnailKey);
+			const FString File = FPaths::Combine(Directory, FString::Printf(TEXT("emote_thumbnail_%s.png"), Sample.Name));
+			const bool bSaved = Picture && FFileHelper::SaveArrayToFile(Picture->Bytes, *File);
+			FString Note;
+			for (const FString& N : Package.Notes)
+			{
+				if (N.StartsWith(TEXT("Thumbnail")))
+				{
+					Note = N;
+				}
+			}
+			UE_LOG(LogMantleCheckEmote, Display, TEXT("MANTLE_THUMBNAIL_SAMPLES %s %s errors=%d note=\"%s\""), *File, bSaved ? TEXT("saved") : TEXT("NOT saved"), Package.HasErrors() ? 1 : 0, *Note);
+		}
+		if (Args.Num() > 3 && Args[3].Equals(TEXT("Exit"), ESearchCase::IgnoreCase))
+		{
+			FPlatformMisc::RequestExit(false);
+		}
+	}
+
+	FAutoConsoleCommand GMantleDevThumbnailSamplesCommand(
+		TEXT("Mantle.Dev.ThumbnailSamples"),
+		TEXT("Mantle.Dev.ThumbnailSamples <AnimSequence> <Directory> <Custom.png> [Exit] -- the emote's thumbnail in each choice (Automatic, Choose the angle, ")
+		TEXT("Custom image) through the panel's export, one PNG each. Saves and uploads nothing."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&RunThumbnailSamples));
+
 	FAutoConsoleCommand GMantleDevCheckEmoteCommand(
 		TEXT("Mantle.Dev.CheckEmote"),
 		TEXT("Mantle.Dev.CheckEmote <AnimSequence> <Directory> [Label] [female|male|<SkeletalMesh>] [size] -- runs the emote export as the Cosmetics panel ")

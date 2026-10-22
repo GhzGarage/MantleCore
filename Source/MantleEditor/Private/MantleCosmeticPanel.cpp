@@ -4073,6 +4073,38 @@ namespace MantleCosmeticPanelDevShot
 		FConsoleCommandWithArgsDelegate::CreateStatic(&SMantleCosmeticPanel::DevConvertShot));
 }
 
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleCosmeticPanelDevShot
+{
+	FAutoConsoleCommand PanelShotCommand(
+		TEXT("Mantle.Dev.CosmeticPanelShot"),
+		TEXT("Mantle.Dev.CosmeticPanelShot <File.png> [Exit]: renders the Cosmetics panel offscreen, to show its Thumbnail section. Uploads nothing."),
+		FConsoleCommandWithArgsDelegate::CreateStatic(&SMantleCosmeticPanel::DevPanelShot));
+}
+
+void SMantleCosmeticPanel::DevPanelShot(const TArray<FString>& Args)
+{
+	using namespace MantleCosmeticPanelDevShot;
+	if (Args.IsEmpty())
+	{
+		UE_LOG(LogMantle, Error, TEXT("MANTLE_PANEL_SHOT usage: Mantle.Dev.CosmeticPanelShot <File.png> [Exit]"));
+		return;
+	}
+	const TSharedPtr<SDockTab> Tab = FGlobalTabmanager::Get()->TryInvokeTab(TabName);
+	if (Tab.IsValid())
+	{
+		Save(Tab->GetContent(), Args[0], 640.0f, 6000.0f);
+	}
+	else
+	{
+		UE_LOG(LogMantle, Error, TEXT("MANTLE_PANEL_SHOT failed: the panel did not open"));
+	}
+	if (Args.Num() > 1 && Args[1].Equals(TEXT("Exit"), ESearchCase::IgnoreCase))
+	{
+		FPlatformMisc::RequestExit(false);
+	}
+}
+
 void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 {
 	using namespace MantleCosmeticPanelDevShot;
