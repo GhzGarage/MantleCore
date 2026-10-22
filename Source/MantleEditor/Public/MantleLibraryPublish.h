@@ -18,6 +18,12 @@ struct MANTLEEDITOR_API FMantleVehicleLibraryChoice
 	/** The creator ticked the declaration (MantleRights::DeclarationVersion's text). Only meaningful when bPublic. */
 	bool bRightsDeclared = false;
 
+	/**
+	 * Set when bPublic is false only because no one can make the declaration (an agent's or a blocking publish), not because the creator chose
+	 * private: an item that already exists keeps the visibility it has, and only a new item is created private.
+	 */
+	bool bKeepExistingVisibility = false;
+
 	/** True when the choice can be sent: Private, or Public with the declaration ticked. */
 	bool IsReady() const { return !bPublic || bRightsDeclared; }
 };
@@ -159,6 +165,15 @@ public:
 
 	/** True when an item's visibility is a known one that is not the choice (an unknown or empty one is left alone). */
 	static bool VisibilityDiffers(const FString& ItemVisibility, bool bWantPublic);
+
+	/**
+	 * Whether an existing item should be public after this publish: the item's own visibility when Choice.bKeepExistingVisibility and it is a known one,
+	 * otherwise the choice. A new item has no visibility yet (pass empty), so it takes the choice.
+	 */
+	static bool ResolveExistingItemPublic(const FString& ItemVisibility, const FMantleVehicleLibraryChoice& Choice);
+
+	/** PATCH /library/items/{id} body that sets only the card's picture and leaves the item's visibility alone. */
+	static FString MakeThumbnailPatchBody(const FString& ThumbnailAssetId);
 
 	/** True for status "delisted": the owner removed the item, so it takes no versions and no edits. */
 	static bool IsDelisted(const FString& ItemStatus);

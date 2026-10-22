@@ -93,9 +93,11 @@ namespace MantleAgentToolsPrivate
 		if (Session.IsValid())
 		{
 			// An agent cannot make the rights declaration a public library item needs for the creator (as UploadCosmetic
-			// forces private), so vehicles it publishes are private. Without this the Library step would wait forever.
+			// forces private), so new vehicles it publishes are private. Without this the Library step would wait forever.
+			// An item the creator already made public keeps that: the agent must not undo their choice.
 			Session->VehicleChoice.bPublic = false;
-			UE_LOG(LogMantle, Log, TEXT("Mantle toolset: PublishPlace publishes any vehicles as private library items (an agent cannot make the rights declaration)."));
+			Session->VehicleChoice.bKeepExistingVisibility = true;
+			UE_LOG(LogMantle, Log, TEXT("Mantle toolset: PublishPlace publishes new vehicles as private library items (an agent cannot make the rights declaration) and leaves existing items' visibility alone."));
 		}
 		return Session;
 	}

@@ -53,8 +53,9 @@ public:
 	 * This is a public action: players can join the result.
 	 * This should ONLY be called after getting explicit direction or permission from the user,
 	 * for this specific publish. Refused, with nothing sent, when the creator is not signed in, no
-	 * level is open, or a publish is already running. Vehicles in the level become PRIVATE library
-	 * items stored in the place (an agent cannot make the rights declaration a public one needs).
+	 * level is open, or a publish is already running. New vehicles in the level become PRIVATE library
+	 * items stored in the place (an agent cannot make the rights declaration a public one needs); an
+	 * item the creator already made public stays public, and the creator can make others public from the panel.
 	 * @param Notes Revision notes shown with this version. Always pass it; "" for none.
 	 * @return JSON: {"ok", "placeId", "revision", "live", "waitingForReview", "cancelled",
 	 * "message", "issues": [{"severity", "actor", "message", "remedy"}]}, or a refusal.
@@ -166,7 +167,8 @@ public:
 	 * Upload a cosmetic to Mantle as a new item, exactly as the Cosmetics panel's Upload to Mantle
 	 * does: checks it (as CheckCosmetic), uploads the files Mantle does not have, waits for them to
 	 * be processed, creates the item and follows it through screening. This call completes when
-	 * that ends. This is a public action: other players can see and wear the item.
+	 * that ends. The item uploads PRIVATE: an agent cannot make the rights declaration a public item needs.
+	 * The creator can make it public from the Cosmetics panel, so tell them it is private.
 	 * This should ONLY be called after getting explicit direction or permission from the user,
 	 * for this specific upload. A MetaHuman Outfit uploads with garment variants fitted to Epic's standard body types,
 	 * made automatically (as CheckCosmetic says); no converted MetaHuman is needed. Refused, with nothing sent, when the creator is not signed in, the

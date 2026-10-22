@@ -344,6 +344,22 @@ bool FMantleLibraryPublishExistingItemTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("an unknown visibility is left alone"), FMantleLibraryPublish::VisibilityDiffers(FString(), true));
 	TestFalse(TEXT("ids and enum-like words are case sensitive"), FMantleLibraryPublish::VisibilityDiffers(TEXT("Public"), true));
 
+	// An agent's publish is private because it cannot declare rights, not because the creator chose private.
+	FMantleVehicleLibraryChoice AgentChoice;
+	AgentChoice.bPublic = false;
+	AgentChoice.bKeepExistingVisibility = true;
+	FMantleVehicleLibraryChoice PanelPrivate;
+	PanelPrivate.bPublic = false;
+	TestTrue(TEXT("an existing public item stays public for an agent"), FMantleLibraryPublish::ResolveExistingItemPublic(TEXT("public"), AgentChoice));
+	TestFalse(TEXT("so no visibility change is sent"), FMantleLibraryPublish::VisibilityDiffers(TEXT("public"), FMantleLibraryPublish::ResolveExistingItemPublic(TEXT("public"), AgentChoice)));
+	TestFalse(TEXT("an existing private item stays private for an agent"), FMantleLibraryPublish::ResolveExistingItemPublic(TEXT("private"), AgentChoice));
+	TestFalse(TEXT("a new item (no visibility yet) is created private for an agent"), FMantleLibraryPublish::ResolveExistingItemPublic(FString(), AgentChoice));
+	TestFalse(TEXT("the panel choosing private still makes an existing public item private"), FMantleLibraryPublish::ResolveExistingItemPublic(TEXT("public"), PanelPrivate));
+	TestTrue(TEXT("which is a change"), FMantleLibraryPublish::VisibilityDiffers(TEXT("public"), FMantleLibraryPublish::ResolveExistingItemPublic(TEXT("public"), PanelPrivate)));
+	const TSharedPtr<FJsonObject> PictureOnly = ReadObject(FMantleLibraryPublish::MakeThumbnailPatchBody(TEXT("ast_x")));
+	TestTrue(TEXT("a picture-only edit names the picture"), PictureOnly.IsValid() && PictureOnly->HasField(TEXT("thumbnailAssetId")));
+	TestTrue(TEXT("and not the visibility or a declaration"), PictureOnly.IsValid() && !PictureOnly->HasField(TEXT("visibility")) && !PictureOnly->HasField(TEXT("rightsDeclarationVersion")));
+
 	TestTrue(TEXT("delisted is delisted"), FMantleLibraryPublish::IsDelisted(TEXT("delisted")));
 	TestFalse(TEXT("active is not"), FMantleLibraryPublish::IsDelisted(TEXT("active")));
 	TestFalse(TEXT("nor is an empty status"), FMantleLibraryPublish::IsDelisted(FString()));

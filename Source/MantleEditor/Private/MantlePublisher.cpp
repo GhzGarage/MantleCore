@@ -198,7 +198,8 @@ FMantlePublishResult FMantlePublisher::Run(UWorld* World, bool bGoLive, const FS
 	// A blocking run has nobody to make the rights declaration a public library item needs, so vehicles it publishes are
 	// private (as UploadCosmetic's are). Without this the Library step would wait for a choice no one can make.
 	Session->VehicleChoice.bPublic = false;
-	UE_LOG(LogMantle, Log, TEXT("Publish: no one can make the rights declaration here, so any vehicles become private library items."));
+	Session->VehicleChoice.bKeepExistingVisibility = true;
+	UE_LOG(LogMantle, Log, TEXT("Publish: no one can make the rights declaration here, so new vehicles become private library items and existing ones keep their visibility."));
 	// This run blocks the editor, so nothing else collects garbage while a big level converts (the panel's publish runs
 	// under the editor's own ticks and leaves it at 0). The session's source pins what the steps still need.
 	Session->Timing.CollectGarbageEverySteps = CollectGarbageEverySteps;
