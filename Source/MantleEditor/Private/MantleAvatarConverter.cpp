@@ -444,7 +444,12 @@ bool FMantleAvatarConverter::MakeContext(UObject* Selection, const FMantleConver
 		TArray<FString> NotOffered;
 		FMantleGarmentOutfit::FindGarments(*Mesh, OutContext.Garments, NotOffered);
 		// #55: the clothing in the character's own sections, cut into pieces when the Outfits are made.
-		FMantleGarmentOutfit::FindSectionGarments(*Mesh, OutContext.Garments);
+		FString SplitNote;
+		FMantleGarmentOutfit::FindSectionGarments(*Mesh, OutContext.Garments, &SplitNote);
+		if (!SplitNote.IsEmpty())
+		{
+			OutContext.Notes.Add(SplitNote);
+		}
 		if (NotOffered.Num() > 0)
 		{
 			OutContext.Notes.Add(FString::Printf(TEXT("Only tops, bottoms and footwear become Outfits; not offered: %s."), *FString::Join(NotOffered, TEXT(", "))));

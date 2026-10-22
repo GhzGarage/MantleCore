@@ -76,7 +76,7 @@ namespace MantleDevSectionOutfitsPrivate
 	}
 
 	/**
-	 * Mantle.Dev.GarmentOutfits <Body> <Directory> <Garment,Garment,...>: the separate-mesh route (#102, "Make Outfit from garment")
+	 * Mantle.Dev.GarmentOutfits <Body|bare-of:Mesh> <Directory> <Garment,Garment,...>: the separate-mesh route (#102, "Make Outfit from garment")
 	 * for Body and its garments, drawn as SectionOutfits draws its pieces (piece_<garment>_on_body_*, made_<garment>_*), then as the
 	 * catalog thumbnail does (Mantle.Dev.RenderOutfitFits). Logs MANTLE_SECTION_OUTFITS lines.
 	 */
@@ -87,7 +87,15 @@ namespace MantleDevSectionOutfitsPrivate
 			UE_LOG(LogMantleSectionOutfits, Error, TEXT("MANTLE_SECTION_OUTFITS usage: Mantle.Dev.GarmentOutfits <Body> <Directory> <Garment,Garment,...>"));
 			return;
 		}
-		USkeletalMesh* Body = LoadObject<USkeletalMesh>(nullptr, *Args[0], nullptr, LOAD_NoWarn | LOAD_Quiet);
+		// "bare-of:<Mesh>": the bare body the pack has beside that character (FMantleGarmentOutfit::FindBareBody).
+		const bool bBareOf = Args[0].StartsWith(TEXT("bare-of:"));
+		USkeletalMesh* Body = LoadObject<USkeletalMesh>(nullptr, bBareOf ? *Args[0].RightChop(8) : *Args[0], nullptr, LOAD_NoWarn | LOAD_Quiet);
+		if (Body && bBareOf)
+		{
+			FString Why;
+			Body = FMantleGarmentOutfit::FindBareBody(*Body, Why);
+			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS bare body: %s"), Body ? *Why : TEXT("none in the pack"));
+		}
 		TArray<FString> Paths;
 		Args[2].ParseIntoArray(Paths, TEXT(","), true);
 		TArray<USkeletalMesh*> Garments;
@@ -166,6 +174,13 @@ namespace MantleDevSectionOutfitsPrivate
 			{
 				Fixes[Index].bEnabled = true;
 			}
+		}
+		// The pieces in the body's own sections even when the pack has its bare body and separate clothing (which Convert prefers):
+		// this command is the merged-mesh route, for comparing the two.
+		if (!Context.Garments.ContainsByPredicate([](const FMantleConvertGarment& Garment) { return Garment.Sections.Num() > 0; }) && Context.Parts[0].Original.IsValid())
+		{
+			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS the pack's separate clothing would be used; cutting the sections anyway, for comparison"));
+			FMantleGarmentOutfit::FindSectionGarments(*Context.Parts[0].Original.Get(), Context.Garments);
 		}
 		const FMantleConvertResult Result = FMantleAvatarConverter::Convert(Context, Fixes, Options, *Contract);
 		UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS convert: %d applied, %d failed"), Result.Applied.Num(), Result.Failed.Num());

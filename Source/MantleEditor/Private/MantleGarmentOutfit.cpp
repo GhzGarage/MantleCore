@@ -1507,7 +1507,9 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 	Assets.Sort([](const FAssetData& A, const FAssetData& B) { return A.PackageName.LexicalLess(B.PackageName); });
 	const FReferenceSkeleton& BodyBones = Body.GetRefSkeleton();
 	const FString Worn = WornClothing(Body);
-	FString BareBody;
+	FString BareWhy;
+	const USkeletalMesh* Bare = Worn.IsEmpty() ? nullptr : FindBareBody(Body, BareWhy);
+	const FString BareBody = Bare ? FMantleAvatarAssemblyFixer::DisplayName(Bare->GetName()) : FString();
 	for (const FAssetData& Asset : Assets)
 	{
 		// Convert's output (Converted folders) is never the creator's clothing.
@@ -1522,6 +1524,12 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 		}
 		TArray<int32> Slots;
 		const TArray<FMantleOutfitSection> Sections = FMantleCosmeticExport::ReadOutfitSections(Mesh, 0, Slots);
+		// Another whole body (the character dressed, in its nightwear): its skin says it isn't a garment.
+		const bool bSkin = Sections.ContainsByPredicate([](const FMantleOutfitSection& Section) { return FMantleOutfitSections::Classify(Section) == EMantleOutfitPiece::Skin; });
+		if (bSkin && Mesh->GetBounds().BoxExtent.Z >= BareHeightShare * Body.GetBounds().BoxExtent.Z)
+		{
+			continue;
+		}
 		FString Why;
 		const FString Slot = GarmentSlot(Mesh->GetName(), Sections, Why);
 		const FString Name = FMantleAvatarAssemblyFixer::DisplayName(Mesh->GetName());
@@ -1541,10 +1549,7 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 			const bool bNude = Words.Contains(TEXT("nude")) || Words.Contains(TEXT("naked"));
 			if (bNude || (bAllSkin && !bHead))
 			{
-				if (BareBody.IsEmpty() || bNude)
-				{
-					BareBody = Name;
-				}
+				// Another body, or a part of one: unsaid (FindBareBody names the bare body).
 			}
 			else if (FMantleOutfitSections::Classify(ByName) != EMantleOutfitPiece::Skin)
 			{
@@ -1593,8 +1598,24 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 	});
 }
 
-void FMantleGarmentOutfit::FindSectionGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments)
+void FMantleGarmentOutfit::FindSectionGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, FString* OutNote)
 {
+	// A bare body and separate clothing in the pack come first; the clothing in Body's own sections is cut only without them.
+	FString BareWhy;
+	const USkeletalMesh* Bare = OutNote && !WornClothing(Body).IsEmpty() ? FindBareBody(Body, BareWhy) : nullptr;
+	const bool bSeparate = Bare && OutGarments.ContainsByPredicate([](const FMantleConvertGarment& Garment) { return Garment.Sections.IsEmpty() && Garment.Mesh.IsValid(); });
+	if (bSeparate)
+	{
+		*OutNote = FString::Printf(TEXT("The character's bare body and its clothing as separate meshes are in the pack (%s), so those are used: convert %s to make its clothing Outfits. The clothing in this mesh isn't cut out."),
+			*BareWhy, *FMantleAvatarAssemblyFixer::DisplayName(Bare->GetName()));
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_SPLIT %s: source = the separate meshes (%s)"), *Body.GetName(), *BareWhy);
+		return;
+	}
+	if (OutNote)
+	{
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_SPLIT %s: source = its own sections (%s)"), *Body.GetName(),
+			Bare ? TEXT("no separate clothing beside its bare body") : TEXT("no bare body beside it"));
+	}
 	FMantleSplitSource Source;
 	if (!FMantleCharacterSplit::Gather(Body, Source))
 	{
@@ -1693,6 +1714,78 @@ FString FMantleGarmentOutfit::WornClothing(const USkeletalMesh& Body)
 		}
 	}
 	return FString::Join(Worn, TEXT(", "));
+}
+
+int32 FMantleGarmentOutfit::BareBodyRank(const FString& MeshName, const int32 WornSlots, const double HeightShare)
+{
+	if (HeightShare < BareHeightShare)
+	{
+		return -1;
+	}
+	const TArray<FString> Words = FMantleOutfitSections::Words(MeshName);
+	const bool bNude = Words.Contains(TEXT("nude")) || Words.Contains(TEXT("naked"));
+	const bool bUnderwear = Words.Contains(TEXT("underwear")) || Words.Contains(TEXT("lingerie")) || Words.Contains(TEXT("bare"));
+	if (WornSlots > 0 && !bNude && !bUnderwear)
+	{
+		return -1;
+	}
+	return (WornSlots == 0 ? 100 : 0) + (bNude ? 20 : 0) + (bUnderwear ? 10 : 0) - FMath::Min(WornSlots, 9);
+}
+
+USkeletalMesh* FMantleGarmentOutfit::FindBareBody(const USkeletalMesh& Body, FString& OutWhy)
+{
+	OutWhy.Reset();
+	const FString Folder = FPackageName::GetLongPackagePath(Body.GetPackage()->GetName());
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	FARFilter Filter;
+	Filter.PackagePaths.Add(*Folder);
+	Filter.bRecursivePaths = true;
+	Filter.ClassPaths.Add(USkeletalMesh::StaticClass()->GetClassPathName());
+	TArray<FAssetData> Assets;
+	Registry.GetAssets(Filter, Assets);
+	Assets.Sort([](const FAssetData& A, const FAssetData& B) { return A.PackageName.LexicalLess(B.PackageName); });
+	const double Height = 2.0 * Body.GetBounds().BoxExtent.Z;
+	const FReferenceSkeleton& BodyBones = Body.GetRefSkeleton();
+	USkeletalMesh* Best = nullptr;
+	int32 BestRank = -1;
+	int32 BestWorn = 0;
+	for (const FAssetData& Asset : Assets)
+	{
+		if (Asset.PackageName == Body.GetPackage()->GetFName() || (Asset.PackagePath.ToString() + TEXT("/")).Contains(TEXT("/Converted/")))
+		{
+			continue;
+		}
+		USkeletalMesh* Mesh = Cast<USkeletalMesh>(Asset.GetAsset());
+		if (!Mesh || Height <= UE_SMALL_NUMBER)
+		{
+			continue;
+		}
+		const FReferenceSkeleton& Bones = Mesh->GetRefSkeleton();
+		int32 Shared = 0;
+		for (int32 Bone = 0; Bone < Bones.GetRawBoneNum(); ++Bone)
+		{
+			Shared += BodyBones.FindRawBoneIndex(Bones.GetBoneName(Bone)) != INDEX_NONE ? 1 : 0;
+		}
+		if (Shared * 2 < Bones.GetRawBoneNum())
+		{
+			continue;
+		}
+		TArray<FString> WornSlots;
+		WornClothing(*Mesh).ParseIntoArray(WornSlots, TEXT(", "), true);
+		const int32 Rank = BareBodyRank(Mesh->GetName(), WornSlots.Num(), 2.0 * Mesh->GetBounds().BoxExtent.Z / Height);
+		if (Rank > BestRank)
+		{
+			Best = Mesh;
+			BestRank = Rank;
+			BestWorn = WornSlots.Num();
+		}
+	}
+	if (Best)
+	{
+		OutWhy = BestWorn == 0 ? FString::Printf(TEXT("%s is %s's whole body with nothing on"), *Best->GetName(), *Body.GetName())
+			: FString::Printf(TEXT("%s is %s's whole body in underwear, which Convert takes off"), *Best->GetName(), *Body.GetName());
+	}
+	return Best;
 }
 
 FString FMantleGarmentOutfit::RunForAgent(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff, const FString& Confirm)

@@ -235,9 +235,11 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	/**
 	 * #55: the pieces of clothing in Body's own mesh (its material sections), when the character splits into a bare body and
 	 * clothing (FMantleCharacterSplit::Propose): one entry per garment piece, appended to OutGarments with SourceMesh and Sections
-	 * set and no Mesh yet (MakeSectionMeshes cuts them). Nothing is appended when the character stays a fixed avatar.
+	 * set and no Mesh yet (MakeSectionMeshes cuts them). Nothing is appended when the character stays a fixed avatar, or, with
+	 * OutNote, when the pack has its bare body (FindBareBody) and OutGarments already holds separate clothing: those come first,
+	 * and OutNote says which source was chosen and why. Without OutNote the sections are always read (a maintainer's comparison).
 	 */
-	static void FindSectionGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments);
+	static void FindSectionGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, FString* OutNote = nullptr);
 
 	/**
 	 * #55: cuts each section piece of Context.Garments that has no Mesh yet from its SourceMesh (FMantleAvatarStrip::WriteSlots)
@@ -256,6 +258,25 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 
 	/** The material slots of Body that are clothing (a top, bottom or footwear), comma-separated; empty for a bare body. */
 	static FString WornClothing(const USkeletalMesh& Body);
+
+	/**
+	 * #55: the character's bare body beside Body (its folder and below; Convert's output never), when the pack has one: a whole
+	 * body (at least BareHeightShare of Body's height, on Body's bones) that wears nothing, or whose name says it is nude or in
+	 * underwear (Convert's Strip takes that off). The best by BareBodyRank; null when none. OutWhy says which and why, plainly.
+	 * When there is one, its clothing in separate meshes is used, and Body's own sections are not cut (the owner's rule: a
+	 * bare body and separate garments first, the merged mesh only when there is nothing separate).
+	 */
+	static USkeletalMesh* FindBareBody(const USkeletalMesh& Body, FString& OutWhy);
+
+	/** A bare body is at least this share of the character's height (a torso, hands or feet alone are parts, not a body). */
+	static constexpr double BareHeightShare = 0.9;
+
+	/**
+	 * Pure (tested): how good a bare body MeshName is (higher is better), or -1 when it is not one: WornSlots of its material
+	 * slots are clothing, HeightShare its height over the character's. Wearing nothing is best, then a name saying nude or
+	 * naked, then underwear (or lingerie, or bare); a mesh that wears clothing and isn't named so is not a bare body.
+	 */
+	static int32 BareBodyRank(const FString& MeshName, int32 WornSlots, double HeightShare);
 
 	/** The toolset's MakeOutfitFromGarment: Make for asset paths (Garments comma-separated), as one JSON object. */
 	static FString RunForAgent(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff, const FString& Confirm);

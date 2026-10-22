@@ -374,3 +374,21 @@ bool FMantleGarmentOutfitSlotTest::RunTest(const FString& Parameters)
 }
 
 #endif
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleGarmentOutfitBareBodyRankTest,
+	"Mantle.Editor.GarmentOutfit.BareBodyRank",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleGarmentOutfitBareBodyRankTest::RunTest(const FString& Parameters)
+{
+	// A whole body wearing nothing beats one in underwear; a part, or a dressed body not named bare, is no bare body.
+	const int32 Bare = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Girl_Body"), 0, 1.0);
+	const int32 Underwear = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 2, 0.99);
+	TestTrue(TEXT("nothing on is best"), Bare > Underwear);
+	TestTrue(TEXT("underwear is a bare body"), Underwear >= 0);
+	TestTrue(TEXT("a nude name beats underwear"), FMantleGarmentOutfit::BareBodyRank(TEXT("Nude"), 1, 1.0) > Underwear);
+	TestEqual(TEXT("a torso alone is a part"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Torso"), 0, 0.45), -1);
+	TestEqual(TEXT("a dressed body is not bare"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Nightwear"), 3, 1.0), -1);
+	return true;
+}
