@@ -311,6 +311,47 @@ bool FMantleHairCardsFitRunTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleHairCardsFitClearFaceTest,
+	"Mantle.Editor.HairCardsFit.HairOverTheFaceMovesAsideAndTheCrownStays",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleHairCardsFitClearFaceTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleHairCapSplitTestPrivate;
+	TArray<FVector3f> HeadP; TArray<uint32> HeadI;
+	CapTestSphere(9.f, 16, 24, HeadP, HeadI);
+	FMantleHairHeadSamples Head; FString Error;
+	if (!TestTrue(TEXT("head samples build"), Head.Build(HeadP, HeadI, Error))) { AddError(Error); return false; }
+
+	// The head's centre is wherever CapTestSphere puts it; take its top and measure from there.
+	const double Top = Head.TopCm();
+	const double CentreZ = Top - 9.0;
+	TArray<FVector3f> P;
+	P.Add(FVector3f(0.f, 8.f, static_cast<float>(CentreZ - 5.0)));   // 0: in front of the face, just off the skin
+	P.Add(FVector3f(2.f, 8.f, static_cast<float>(CentreZ - 5.0)));   // 1: the same, right of the middle
+	P.Add(FVector3f(-2.f, 8.f, static_cast<float>(CentreZ - 5.0)));  // 2: the same, left of the middle
+	P.Add(FVector3f(0.f, 0.f, static_cast<float>(Top + 0.1)));         // 3: on the crown
+	P.Add(FVector3f(0.f, 12.f, static_cast<float>(CentreZ - 5.0)));   // 4: well clear of the face already
+	const TArray<FVector3f> Before = P;
+	const int32 Moved = FMantleHairCardsFit::ClearFace(Head, TArray<int32>({0, 1, 2, 3, 4}), P);
+	TestEqual(TEXT("three vertices covered the face"), Moved, 3);
+	TestTrue(TEXT("the crown stays"), P[3].Equals(Before[3], 1.e-4f));
+	TestTrue(TEXT("hair already clear stays"), P[4].Equals(Before[4], 1.e-4f));
+	TestTrue(TEXT("right of the middle goes right"), P[1].X > Before[1].X + 0.4f && P[0].X > Before[0].X + 0.4f);
+	TestTrue(TEXT("left of the middle goes left"), P[2].X < Before[2].X - 0.4f);
+	TestTrue(TEXT("and back"), P[1].Y < Before[1].Y);
+	for (const int32 V : {0, 1, 2})
+	{
+		int32 Id = INDEX_NONE; double D2 = 0.0;
+		Head.Nearest(FVector(P[V].X, P[V].Y, P[V].Z), Id, D2);
+		const bool bFace = Head.Normal(Id).Y > 0.3 && Top - Head.Point(Id).Z > FMantleHairCardsFit::FaceClearTopCm;
+		const double Out = (FVector(P[V].X, P[V].Y, P[V].Z) - Head.Point(Id)) | Head.Normal(Id);
+		TestTrue(FString::Printf(TEXT("vertex %d is clear of the face"), V), !bFace || Out >= FMantleHairCardsFit::FaceClearMarginCm);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMantleHairCardsFitCapGuardTest,
 	"Mantle.Editor.HairCardsFit.ABigSheetFarFromTheSkinIsHairNotACap",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

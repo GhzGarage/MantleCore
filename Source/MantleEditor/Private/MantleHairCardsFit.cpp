@@ -29,6 +29,33 @@ bool FMantleHairCardsFit::CoversScalp(TConstArrayView<FVector3f> HeadPositions, 
 	return CapSize.X >= CapMinScalpSpan * ScalpSize.X && CapSize.Y >= CapMinScalpSpan * ScalpSize.Y;
 }
 
+int32 FMantleHairCardsFit::ClearFace(const FMantleHairHeadSamples& Head, TConstArrayView<int32> Vertices, TArray<FVector3f>& Positions)
+{
+	const double Top = Head.TopCm();
+	const auto Covers = [&](const FVector& Q)
+	{
+		int32 Id = INDEX_NONE;
+		double D2 = 0.0;
+		Head.Nearest(Q, Id, D2);
+		if (Id == INDEX_NONE || Head.Normal(Id).Y <= 0.3 || Top - Head.Point(Id).Z <= FaceClearTopCm) return false;
+		return ((Q - Head.Point(Id)) | Head.Normal(Id)) < FaceClearMarginCm;
+	};
+	int32 Moved = 0;
+	for (const int32 V : Vertices)
+	{
+		if (!Positions.IsValidIndex(V)) continue;
+		FVector Q(Positions[V].X, Positions[V].Y, Positions[V].Z);
+		if (!Covers(Q)) continue;
+		// Away from the middle and back; hair dead centre goes to the right.
+		const double Side = Q.X < 0.0 ? -1.0 : 1.0;
+		const FVector Step = FVector(Side * 0.8, -0.6, 0.0) * FaceClearStepCm;
+		for (int32 N = 0; N < FaceClearMaxSteps && Covers(Q); ++N) Q += Step;
+		Positions[V] = FVector3f(static_cast<float>(Q.X), static_cast<float>(Q.Y), static_cast<float>(Q.Z));
+		++Moved;
+	}
+	return Moved;
+}
+
 FVector3f FMantleHairCardsFit::RotateUpright(const FVector3f& P, int32 QuarterTurns)
 {
 	// +1: Y-up to Z-up (up becomes +Z, the file's +Z becomes -Y); -1: the other way.
@@ -188,6 +215,17 @@ FMantleHairCardsFit::FResult FMantleHairCardsFit::Run(const FInput& Input)
 	{
 		if (bCapVertex[V] && Scalp.CapPositions.IsValidIndex(V)) Out.Positions[V] = Scalp.CapPositions[V];
 		else if (!bCapVertex[V] && Scalp.CardPositions.IsValidIndex(V)) Out.Positions[V] = Scalp.CardPositions[V];
+	}
+	// Hair that hangs over the face parts around it; the cap hugs the scalp and stays.
+	{
+		TArray<int32> CardVertexIds;
+		for (const uint32 V : TSet<uint32>(Split.CardIndices)) CardVertexIds.Add(static_cast<int32>(V));
+		CardVertexIds.Sort();
+		Out.FaceVerticesMoved = ClearFace(Samples, CardVertexIds, Out.Positions);
+		if (Out.FaceVerticesMoved > 0)
+		{
+			Out.Notes.Add(FString::Printf(TEXT("Hair over the face: %d hair vertices were covering it and were moved aside to the sides or behind the ears."), Out.FaceVerticesMoved));
+		}
 	}
 	const FMantleScalpFit::FMetrics& M = Scalp.Metrics;
 	Out.Notes.Add(FString::Printf(TEXT("Hair scalp fit: %d cards, roots within 5 mm of the skin %.0f%% to %.0f%%, %d vertices lifted off the skin (largest %.1f cm)"),

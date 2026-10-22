@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "MantleHairFitReport.h"
+#include "MantleHairPieceFit.h"
 #include "MantleHairScalpFit.h"
 
 /**
@@ -27,6 +28,20 @@ struct MANTLEEDITOR_API FMantleHairCardsFit
 	/** The turn's other effect: normals and tangents must turn with the positions (RotateUpright). */
 	static FVector3f RotateUpright(const FVector3f& P, int32 QuarterTurns);
 
+	/**
+	 * Hair must not cover the face (#106). The face is the head's skin facing forward (normal Y above 0.3) more than
+	 * FaceClearTopCm below the top (the eyebrows and down); a hair vertex within FaceClearMarginCm in front of it, or inside it,
+	 * is moved sideways (away from the middle) and back, FaceClearStepCm at a time, until it is clear: locks that hang over
+	 * the face part around it, to the sides or behind the ears. Roots on the scalp never move.
+	 */
+	static constexpr double FaceClearTopCm = 10.0;
+	static constexpr double FaceClearMarginCm = 1.5;
+	static constexpr double FaceClearStepCm = 0.5;
+	static constexpr int32 FaceClearMaxSteps = 60;
+
+	/** Moves the vertices (ids into Positions) that cover the face aside; returns how many moved. */
+	static int32 ClearFace(const FMantleHairHeadSamples& Head, TConstArrayView<int32> Vertices, TArray<FVector3f>& Positions);
+
 	struct FInput
 	{
 		/** The head's skin triangles, in cm. */
@@ -48,6 +63,8 @@ struct MANTLEEDITOR_API FMantleHairCardsFit
 		bool bCapFound = false;
 		/** 0 when the hair was upright; +1 or -1 when it was turned a quarter about X (RotateUpright): normals and tangents must turn the same way. */
 		int32 QuarterTurns = 0;
+		/** Hair vertices moved aside because they covered the face. */
+		int32 FaceVerticesMoved = 0;
 		FMantleHairFitReport::FResult Report;
 		/** Lines for the package's notes and warnings the creator should read (a failure sentence each). */
 		TArray<FString> Notes;
