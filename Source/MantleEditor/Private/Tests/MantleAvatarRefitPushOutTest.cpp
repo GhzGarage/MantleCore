@@ -120,6 +120,38 @@ bool FMantleAvatarRefitPushOutTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// Distance to an opening, along the surface: a 6 cm sheet's middle is 3 cm from its edge, its corners 0.
+	{
+		const FMantleSkinnedMeshLOD Garment = Sheet(6, 6.0f, -1.0f, 1.0f);
+		const TArray<float> Opening = FMantleAvatarRefit::DistanceToOpenings(Garment);
+		TestEqual(TEXT("openings: one distance per vertex"), Opening.Num(), Garment.NumVertices());
+		TestEqual(TEXT("openings: a corner is on an opening"), Opening[0], 0.0f, 1.e-4f);
+		TestEqual(TEXT("openings: the middle is 3 cm from the edge"), Opening[3 * 7 + 3], 3.0f, 1.e-3f);
+	}
+
+	// A wide piece 1 cm under the skin: its rim (within OpeningReachCm of the edge) is pushed out, its middle is under
+	// cover and stays, so the piece is not stretched from the middle out.
+	{
+		FMantleSkinnedMeshLOD Garment = Sheet(20, 20.0f, -1.0f, 1.0f);
+		const TArray<float> Opening = FMantleAvatarRefit::DistanceToOpenings(Garment);
+		int32 Covered = 0;
+		for (const float D : Opening) { Covered += D > FMantleAvatarRefit::OpeningReachCm ? 1 : 0; }
+		FMantleRefitPushOut Out;
+		FString Error;
+		if (!TestTrue(TEXT("wide: the push out runs"), FMantleAvatarRefit::PushOutOfBody(Garment, Skin, Out, Error)))
+		{
+			AddError(Error);
+			return false;
+		}
+		TestTrue(TEXT("wide: some of it is under cover"), Covered > 0);
+		TestEqual(TEXT("wide: the covered middle is left"), Out.UnderCover, Covered);
+		TestTrue(TEXT("wide: the rim moved"), Out.Moved > 0);
+		TestTrue(TEXT("wide: the middle stayed under"), Out.InsideAfter >= Covered / 2);
+		// The rim's push is smoothed inward a little; the middle, 10 cm from any edge, stays put to within a millimetre.
+		TestTrue(TEXT("wide: the middle vertex stayed"), Garment.Positions[10 * 21 + 10].Equals(FVector3f(0, 0, -1.0f), 0.1f));
+		TestFalse(TEXT("wide: the detail names the depths"), Out.Detail.IsEmpty());
+	}
+
 	// The same lining with no shell over it (its twin is under the skin too) is pushed as before.
 	{
 		FMantleSkinnedMeshLOD Garment = Join(Sheet(6, 6.0f, -1.2f, -1.0f), Sheet(6, 6.0f, -0.4f, 1.0f));
