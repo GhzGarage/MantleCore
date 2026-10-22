@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "SMantleOverlayPlaceViewport.h"
+#include "MantleGizmoStyle.h"
 
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/CollisionProfile.h"
@@ -144,19 +145,19 @@ public:
 		const FVector Look = Rotation.GetForwardVector(), Right = Rotation.GetRightVector(), Up = Rotation.GetUpVector();
 		const double HalfWidth = Placement.WidthCm * 0.5, HalfHeight = HalfWidth * Aspect;
 		// The reach: a box the picture's size, Depth either side.
-		DrawOrientedWireBox(PDI, Origin, Look, Right, Up, FVector(Placement.DepthCm, HalfWidth, HalfHeight), FLinearColor(0.2f, 0.7f, 1.f), SDPG_Foreground);
+		DrawOrientedWireBox(PDI, Origin, Look, Right, Up, FVector(Placement.DepthCm, HalfWidth, HalfHeight), MantleGizmoStyle::Reach, SDPG_Foreground);
 		// The picture's own outline, where it meets the surface plane.
 		const FVector Corners[4] = {
 			Origin - Right * HalfWidth + Up * HalfHeight, Origin + Right * HalfWidth + Up * HalfHeight,
 			Origin + Right * HalfWidth - Up * HalfHeight, Origin - Right * HalfWidth - Up * HalfHeight };
 		for (int32 Corner = 0; Corner < 4; ++Corner)
 		{
-			PDI->DrawLine(Corners[Corner], Corners[(Corner + 1) % 4], FLinearColor(1.f, 0.9f, 0.1f), SDPG_Foreground, 0.f);
+			PDI->DrawLine(Corners[Corner], Corners[(Corner + 1) % 4], MantleGizmoStyle::Outline, SDPG_Foreground, 0.f);
 		}
 		// Which way it looks, and which way is up in the picture.
 		DrawDirectionalArrow(PDI, FRotationMatrix::MakeFromX(Look) * FTranslationMatrix(Origin - Look * Placement.DepthCm),
-			FLinearColor(1.f, 0.5f, 0.05f), Placement.DepthCm * 2.f, 1.f, SDPG_Foreground);
-		PDI->DrawLine(Origin, Origin + Up * HalfHeight * 1.3, FLinearColor(0.1f, 0.85f, 0.2f), SDPG_Foreground, 0.f);
+			MantleGizmoStyle::Facing, Placement.DepthCm * 2.f, 1.f, SDPG_Foreground);
+		PDI->DrawLine(Origin, Origin + Up * HalfHeight * 1.3, MantleGizmoStyle::Up, SDPG_Foreground, 0.f);
 	}
 
 	virtual void ProcessClick(FSceneView& View, HHitProxy* HitProxy, FKey Key, EInputEvent Event, uint32 HitX, uint32 HitY) override
