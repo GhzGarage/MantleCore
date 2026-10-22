@@ -19,6 +19,7 @@
 #include "ChaosOutfitAsset/OutfitAsset.h"
 #include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
+#include "Materials/MaterialInterface.h"
 #include "Modules/ModuleManager.h"
 #include "SkinnedAssetCompiler.h"
 #include "UObject/StrongObjectPtr.h"
@@ -115,6 +116,12 @@ namespace MantleDevSectionOutfitsPrivate
 		UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS cut %d pieces"), Cut);
 		if (Context.Parts[0].Original.IsValid())
 		{
+			const TArray<FSkeletalMaterial>& Slots = Context.Parts[0].Original->GetMaterials();
+			for (int32 Slot = 0; Slot < Slots.Num(); ++Slot)
+			{
+				UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS material slot %d: %s (%s)"), Slot, *Slots[Slot].MaterialSlotName.ToString(),
+					Slots[Slot].MaterialInterface ? *Slots[Slot].MaterialInterface->GetName() : TEXT("none"));
+			}
 			Draw(Context.Parts[0].Original.Get(), nullptr, Args[1], TEXT("source"));
 		}
 		// Each cut piece as it is before the fit: alone, and on the bare body Strip left (the body it was made for). A piece
