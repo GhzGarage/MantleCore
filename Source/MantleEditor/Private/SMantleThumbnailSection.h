@@ -37,7 +37,7 @@ public:
 		/** The "Use this view" button's text; a place says "Use current view" for the level viewport. */
 		SLATE_ARGUMENT(FText, UseViewLabel)
 		/** Under Choose the angle: the orbit preview, when the kind has one. */
-		SLATE_NAMED_SLOT(FArguments, AngleContent)
+		SLATE_DEFAULT_SLOT(FArguments, AngleContent)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);

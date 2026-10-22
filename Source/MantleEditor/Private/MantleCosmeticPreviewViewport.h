@@ -82,6 +82,9 @@ public:
 	/** The body shown, for filtering animations by skeleton; null when nothing is shown. */
 	USkeletalMesh* GetShownBody() const;
 
+	/** #124: the direction the preview camera looks along now, for the thumbnail's "Use this view". */
+	FRotator GetViewRotation() const;
+
 	// FGCObject
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
 	virtual FString GetReferencerName() const override { return TEXT("SMantleCosmeticPreviewViewport"); }

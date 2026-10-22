@@ -6,6 +6,7 @@
 #include "MantleCosmeticPackage.h"
 #include "MantleGlbWriter.h"
 #include "MantleOutfitSections.h"
+#include "MantleThumbnailChoice.h"
 #include "UObject/WeakObjectPtrTemplates.h"
 
 class FMantleAvatarContract;
@@ -225,6 +226,12 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	 * in a process that cannot render (-NullRHI), a plain one is used.
 	 */
 	bool bRenderThumbnail = true;
+
+	/**
+	 * #124: how the thumbnail is made, the choice every Mantle uploader offers: Automatic (the render above), Choose the angle (the same
+	 * render from the angle the creator took) or a Custom image (a PNG or a texture, cut square and resized to 512 x 512).
+	 */
+	FMantleThumbnailChoice Thumbnail;
 
 	/**
 	 * #849: a converted avatar reads its weight, muscle, chest and hips shapes off its MetaHuman Creator character (about

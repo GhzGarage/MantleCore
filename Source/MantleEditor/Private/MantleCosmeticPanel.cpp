@@ -10,6 +10,10 @@
 #include "MantleCosmeticPreviewRetarget.h"
 #include "MantleCosmeticPreviewViewport.h"
 #include "MantleCosmeticThumbnail.h"
+#include "MantleThumbnailStore.h"
+#include "SMantleThumbnailSection.h"
+#include "IImageWrapper.h"
+#include "IImageWrapperModule.h"
 #include "MantleCosmeticUpload.h"
 #include "MantleCosmeticValidation.h"
 #include "MantleClothingColorPreview.h"
@@ -273,6 +277,12 @@ void SMantleCosmeticPanel::Construct(const FArguments& InArgs)
 	const TAttribute<EVisibility> Previewable = TAttribute<EVisibility>::CreateLambda([this]
 	{
 		return Draft.Class == EMantleCosmeticClass::Garment || Draft.Class == EMantleCosmeticClass::Hair || Draft.Class == EMantleCosmeticClass::Avatar || Draft.Class == EMantleCosmeticClass::Accessory || Draft.Class == EMantleCosmeticClass::Overlay ? EVisibility::Visible : EVisibility::Collapsed;
+	});
+
+	// #124: every class but an overlay (its thumbnail is its mask) takes the shared Thumbnail section.
+	const TAttribute<EVisibility> Thumbnailable = TAttribute<EVisibility>::CreateLambda([this]
+	{
+		return Draft.Class == EMantleCosmeticClass::Overlay ? EVisibility::Collapsed : EVisibility::Visible;
 	});
 
 	ChildSlot
@@ -965,6 +975,12 @@ void SMantleCosmeticPanel::Construct(const FArguments& InArgs)
 					MakeSection(LOCTEXT("PreviewTitle", "Preview"), MakePreviewSection(), Previewable)
 				]
 
+				// #124: the thumbnail, the same section in every uploader.
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					MakeSection(FMantleThumbnailText::Heading(), MakeThumbnailSection(), Thumbnailable)
+				]
+
 				// The one button.
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 6)
 				[
@@ -1266,6 +1282,7 @@ void SMantleCosmeticPanel::SetSlot(const FString& Slot)
 		Draft.OverlayNormalFile.Reset();
 	}
 	bAccessoryPlacementInitialized = FMantleAccessorySettings::Load(Draft, AccessorySettingsFile());
+	LoadThumbnailChoice();
 	RefreshAccessoryPreview();
 	// #483: the sections the new slot takes.
 	RefreshOutfitSections();
@@ -1307,6 +1324,7 @@ void SMantleCosmeticPanel::SetSource(UObject* Source)
 	ClothingMaterialNames = FMantleCosmeticExport::SectionMaterialNames(Cast<USkeletalMesh>(Source), 0);
 	RefreshClothingColors();
 	bAccessoryPlacementInitialized = FMantleAccessorySettings::Load(Draft, AccessorySettingsFile());
+	LoadThumbnailChoice();
 	Draft.CardsEntry = INDEX_NONE;
 	Draft.SourceSection = INDEX_NONE;
 	Draft.SectionRoles.Reset();
@@ -2151,6 +2169,7 @@ void SMantleCosmeticPanel::ShowHairHeadFit()
 FReply SMantleCosmeticPanel::OnCheck()
 {
 	BuildPackage();
+	if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
 	return FReply::Handled();
 }
 
@@ -2158,8 +2177,10 @@ FReply SMantleCosmeticPanel::OnUpload()
 {
 	if (!BuildPackage())
 	{
+		if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
 		return FReply::Handled();
 	}
+	if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
 	if (!FMantleCreatorSignIn::EnsureSignedIn(LOCTEXT("UploadSignInReason", "Sign in to publish this item to Mantle.")))
 	{
 		return FReply::Handled();
@@ -2413,6 +2434,71 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakePreviewSection()
 				SAssignNew(PreviewViewport, SMantleCosmeticPreviewViewport)
 			]
 		];
+}
+
+TSharedRef<SWidget> SMantleCosmeticPanel::MakeThumbnailSection()
+{
+	return SAssignNew(ThumbnailSection, SMantleThumbnailSection)
+		.Target(FMantleThumbnailTarget::Square())
+		.Choice_Lambda([this] { return Draft.Thumbnail; })
+		.OnChoiceChanged_Raw(this, &SMantleCosmeticPanel::ThumbnailChoiceChanged)
+		.OnUseView_Raw(this, &SMantleCosmeticPanel::UseThumbnailView)
+		.Render(FMantleThumbnailResolver::FRender([this](const FMantleThumbnailChoice&, TArray<FColor>& OutPixels, int32& OutWidth, int32& OutHeight, FString& OutError)
+		{
+			// The picture the upload carries is the one the check just exported, so it is shown from the package.
+			const FMantleCosmeticUploadAsset* Asset = Package.IsSet() && !Package->ThumbnailKey.IsEmpty() ? Package->FindAsset(Package->ThumbnailKey) : nullptr;
+			if (!Asset)
+			{
+				OutError = TEXT("Choose Check only to draw this picture.");
+				return false;
+			}
+			IImageWrapperModule& Wrappers = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+			const TSharedPtr<IImageWrapper> Wrapper = Wrappers.CreateImageWrapper(EImageFormat::PNG);
+			TArray64<uint8> Raw;
+			if (!Wrapper.IsValid() || !Wrapper->SetCompressed(Asset->Bytes.GetData(), Asset->Bytes.Num()) || !Wrapper->GetRaw(ERGBFormat::BGRA, 8, Raw))
+			{
+				OutError = TEXT("The exported thumbnail could not be shown.");
+				return false;
+			}
+			OutWidth = Wrapper->GetWidth();
+			OutHeight = Wrapper->GetHeight();
+			OutPixels.SetNumUninitialized(static_cast<int32>(Raw.Num() / sizeof(FColor)));
+			FMemory::Memcpy(OutPixels.GetData(), Raw.GetData(), OutPixels.Num() * sizeof(FColor));
+			return true;
+		}))
+		[
+			SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			.Text(LOCTEXT("ThumbnailAngleHint", "Turn the preview above to the angle you want, then choose Use this view. Choose Check only to see the picture."))
+		];
+}
+
+void SMantleCosmeticPanel::LoadThumbnailChoice()
+{
+	const UObject* Source = Draft.Source.Get();
+	FMantleThumbnailStore::Load(Source ? Source->GetPathName() : FString(), FString::FromInt(static_cast<int32>(Draft.Class)), Draft.Thumbnail, FMantleThumbnailStore::DefaultConfigFile());
+	if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
+}
+
+void SMantleCosmeticPanel::ThumbnailChoiceChanged(const FMantleThumbnailChoice& Choice)
+{
+	Draft.Thumbnail = Choice;
+	Package.Reset();
+	const UObject* Source = Draft.Source.Get();
+	FMantleThumbnailStore::Save(Source ? Source->GetPathName() : FString(), FString::FromInt(static_cast<int32>(Draft.Class)), Choice, FMantleThumbnailStore::DefaultConfigFile());
+}
+
+FText SMantleCosmeticPanel::UseThumbnailView()
+{
+	if (!PreviewViewport.IsValid() || !PreviewViewport->GetShownBody())
+	{
+		return LOCTEXT("ThumbnailNoPreview", "Show the item in the preview above first, turn it to the angle you want, then choose Use this view again.");
+	}
+	const FRotator View = PreviewViewport->GetViewRotation();
+	FMantleThumbnailChoice Choice = Draft.Thumbnail;
+	Choice.Mode = EMantleThumbnailMode::Angle;
+	Choice.Angle = FRotator(View.Pitch, View.Yaw, 0.0);
+	ThumbnailChoiceChanged(Choice);
+	return FText::GetEmpty();
 }
 
 bool SMantleCosmeticPanel::IsOutfitAuthoringCandidate(const FAssetData& Asset, bool bFace) const

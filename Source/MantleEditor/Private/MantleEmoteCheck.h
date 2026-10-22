@@ -5,6 +5,8 @@
 
 class UAnimSequence;
 struct FMantleAnimClip;
+struct FMantleThumbnailSubject;
+class USkeletalMesh;
 struct FReferenceSkeleton;
 
 /** How an emote moves the character as a whole, read from its MAN1 clip (FMantleEmoteCheck::Measure). */
@@ -130,4 +132,21 @@ struct FMantleEmoteCheck
 	 * nothing could be checked (no such animation, no contract); a refused emote is a finished check (its notes say why).
 	 */
 	static bool Run(UAnimSequence* Sequence, const FString& Directory, const FString& Label, const FString& Body, int32 TileSize, FString& OutError);
+
+	/** How many moments of an emote are tried for its thumbnail. */
+	static constexpr int32 ThumbnailMoments = 13;
+
+	/**
+	 * #124: which of several moments shows an emote at its most expressive: PositionsPerMoment holds, per moment, where the same key joints
+	 * (hands, head, feet) are; the moment whose joints are farthest in total from where they are on average. The first on a tie, 0 when
+	 * there is nothing to compare. Pure.
+	 */
+	static int32 MostExpressiveMoment(TConstArrayView<TArray<FVector>> PositionsPerMoment);
+
+	/**
+	 * #124: an emote's Automatic thumbnail subject: Mantle's standard body posed as players see it (the UEFN mannequin plays the clip, the body
+	 * copies it through the client's retargeter) at the clip's most expressive moment, full standing body on the thumbnail scene's floor.
+	 * ClipBytes is the exported clip (what the upload carries). False with a reason when it cannot be posed (no body, no retarget node).
+	 */
+	static bool ThumbnailSubject(TConstArrayView<uint8> ClipBytes, FMantleThumbnailSubject& OutSubject, FString& OutHow, FString& OutError);
 };

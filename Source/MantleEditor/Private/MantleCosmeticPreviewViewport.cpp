@@ -133,6 +133,11 @@ USkeletalMesh* SMantleCosmeticPreviewViewport::GetShownBody() const
 	return BodyComponent && BodyComponent->IsVisible() ? BodyComponent->GetSkeletalMeshAsset() : nullptr;
 }
 
+FRotator SMantleCosmeticPreviewViewport::GetViewRotation() const
+{
+	return Client.IsValid() ? Client->GetViewRotation() : FRotator::ZeroRotator;
+}
+
 void SMantleCosmeticPreviewViewport::Show(const FMantlePreviewView& View)
 {
 	if (!BodyComponent || !FaceComponent || !GarmentComponent)

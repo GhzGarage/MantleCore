@@ -1,7 +1,9 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantlePlaceThumbnail.h"
 #include "MantlePng.h"
+#include "MantleEmoteCheck.h"
 #include "MantleThumbnailChoice.h"
+#include "MantleThumbnailStore.h"
 
 #include "Engine/World.h"
 #include "HAL/PlatformFileManager.h"
@@ -214,6 +216,53 @@ bool FMantleThumbnailPlaceChoiceTest::RunTest(const FString&)
 	TestTrue(TEXT("no level is automatic"), FMantlePlaceThumbnail::ChoiceFor(nullptr).Mode == EMantleThumbnailMode::Automatic);
 	TestEqual(TEXT("a place's picture is 1280 wide"), FMantlePlaceThumbnail::Target().Width, 1280);
 	TestEqual(TEXT("and 720 tall"), FMantlePlaceThumbnail::Target().Height, 720);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleThumbnailStoreTest, "Mantle.Editor.Thumbnail.Store",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FMantleThumbnailStoreTest::RunTest(const FString&)
+{
+	const FString File = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), TEXT("MantleThumbnailStoreTest.ini"));
+	IFileManager::Get().Delete(*File);
+	FMantleThumbnailChoice Choice;
+	TestFalse(TEXT("nothing is saved at first"), FMantleThumbnailStore::Load(TEXT("/Game/A.A"), TEXT("1"), Choice, File));
+	TestTrue(TEXT("and the choice is Automatic"), Choice == FMantleThumbnailChoice());
+
+	FMantleThumbnailChoice Saved;
+	Saved.Mode = EMantleThumbnailMode::Angle;
+	Saved.Angle = FRotator(-15.0, 140.0, 0.0);
+	Saved.Zoom = 1.5f;
+	Saved.ImageFile.FilePath = TEXT("C:/pictures/a.png");
+	FMantleThumbnailStore::Save(TEXT("/Game/A.A"), TEXT("1"), Saved, File);
+	TestTrue(TEXT("a saved choice loads"), FMantleThumbnailStore::Load(TEXT("/Game/A.A"), TEXT("1"), Choice, File));
+	TestTrue(TEXT("exactly as saved"), Choice == Saved);
+	TestFalse(TEXT("another source has none"), FMantleThumbnailStore::Load(TEXT("/Game/B.B"), TEXT("1"), Choice, File));
+	TestFalse(TEXT("another class of the same source has none"), FMantleThumbnailStore::Load(TEXT("/Game/A.A"), TEXT("2"), Choice, File));
+
+	// Going back to Automatic removes the entry.
+	FMantleThumbnailStore::Save(TEXT("/Game/A.A"), TEXT("1"), FMantleThumbnailChoice(), File);
+	TestFalse(TEXT("Automatic is not kept"), FMantleThumbnailStore::Load(TEXT("/Game/A.A"), TEXT("1"), Choice, File));
+	IFileManager::Get().Delete(*File);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMantleThumbnailEmoteMomentTest, "Mantle.Editor.Thumbnail.EmoteMoment",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+bool FMantleThumbnailEmoteMomentTest::RunTest(const FString&)
+{
+	// Two joints; the third moment has them thrown farthest from where they are on average.
+	const TArray<TArray<FVector>> Moments = {
+		{ FVector(0, 0, 100), FVector(0, 0, 150) },
+		{ FVector(0, 0, 101), FVector(0, 0, 149) },
+		{ FVector(40, 0, 180), FVector(-40, 0, 190) },
+		{ FVector(0, 0, 100), FVector(0, 0, 150) },
+	};
+	TestEqual(TEXT("the moment with the joints farthest from average"), FMantleEmoteCheck::MostExpressiveMoment(Moments), 2);
+	// A clip that does not move: the first moment.
+	const TArray<TArray<FVector>> Still = { { FVector(0, 0, 100) }, { FVector(0, 0, 100) }, { FVector(0, 0, 100) } };
+	TestEqual(TEXT("a still clip picks the first moment"), FMantleEmoteCheck::MostExpressiveMoment(Still), 0);
+	TestEqual(TEXT("nothing to compare is the first moment"), FMantleEmoteCheck::MostExpressiveMoment(TArray<TArray<FVector>>()), 0);
 	return true;
 }
 

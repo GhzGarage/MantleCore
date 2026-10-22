@@ -1231,3 +1231,125 @@ namespace MantleEmoteCheckPrivate
 		TEXT("moments with the catalog thumbnail capture: <Label>_notes.txt and <Label>_sheet.png in Directory. Saves and uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&RunCommand));
 }
+
+int32 FMantleEmoteCheck::MostExpressiveMoment(TConstArrayView<TArray<FVector>> PositionsPerMoment)
+{
+	if (PositionsPerMoment.IsEmpty() || PositionsPerMoment[0].IsEmpty())
+	{
+		return 0;
+	}
+	const int32 Joints = PositionsPerMoment[0].Num();
+	TArray<FVector> Mean;
+	Mean.Init(FVector::ZeroVector, Joints);
+	for (const TArray<FVector>& Moment : PositionsPerMoment)
+	{
+		if (Moment.Num() != Joints)
+		{
+			return 0;
+		}
+		for (int32 Joint = 0; Joint < Joints; ++Joint)
+		{
+			Mean[Joint] += Moment[Joint];
+		}
+	}
+	for (FVector& Joint : Mean)
+	{
+		Joint /= PositionsPerMoment.Num();
+	}
+	int32 Best = 0;
+	double BestScore = -1.0;
+	for (int32 Index = 0; Index < PositionsPerMoment.Num(); ++Index)
+	{
+		double Score = 0.0;
+		for (int32 Joint = 0; Joint < Joints; ++Joint)
+		{
+			Score += FVector::Dist(PositionsPerMoment[Index][Joint], Mean[Joint]);
+		}
+		if (Score > BestScore + 1e-6)
+		{
+			Best = Index;
+			BestScore = Score;
+		}
+	}
+	return Best;
+}
+
+bool FMantleEmoteCheck::ThumbnailSubject(TConstArrayView<uint8> ClipBytes, FMantleThumbnailSubject& OutSubject, FString& OutHow, FString& OutError)
+{
+	using namespace MantleEmoteCheckPrivate;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&OutError);
+	if (!Contract)
+	{
+		return false;
+	}
+	const FMantleAnimClipReadResult Read = FMantleAnimClipReader::Read(ClipBytes);
+	if (!Read.bSuccess)
+	{
+		OutError = Read.Error;
+		return false;
+	}
+	USkeletalMesh* Driver = FMantleBuiltInMannequin::UEFNMannequin(*Contract, &OutError);
+	if (!Driver)
+	{
+		return false;
+	}
+	USkeletalMesh* BodyMesh = nullptr;
+	USkeletalMesh* FaceMesh = nullptr;
+	FString Describe;
+	FString SkeletonId;
+	FMantleAvatarPreviewPlan Plan;
+	if (!ResolveBody(FString(), BodyMesh, FaceMesh, Describe, OutError)
+		|| !FMantleCosmeticExport::AvatarSkeletonId(BodyMesh, *Contract, SkeletonId, OutError)
+		|| !FMantleAvatarPreviewPlan::ForSkeleton(SkeletonId, FaceMesh != nullptr, Plan, OutError))
+	{
+		return false;
+	}
+	const FMantleAvatarPreviewInputs Inputs = FMantleAvatarPreviewInputs::Gather(Plan, Driver, FString(), OutError);
+	FString NodeWhy;
+	if (!Inputs.Retargeter || !UMantlePreviewRetargetAnimInstance::IsRetargetNodeAvailable(&NodeWhy))
+	{
+		OutError = FString::Printf(TEXT("the body cannot be posed (%s%s)"), *FString::Join(Inputs.Missing, TEXT("; ")), *NodeWhy);
+		return false;
+	}
+	FaceMesh = Plan.bShowFace ? FaceMesh : nullptr;
+	const TSharedRef<const FMantleAnimClip> Played = WithoutRoot(Read.Clip, Driver->GetRefSkeleton().GetBoneName(0));
+	const TArray<float> Times = Moments(Read.Clip.GetDuration(), ThumbnailMoments);
+	UObject* const Retargeter = Inputs.Retargeter;
+	const TArray<TArray<FTransform>> Poses = BodyPosesAt(BodyMesh, Driver, Retargeter, Played, Times);
+	// Where the hands, head and feet are at each moment, in the body's component space.
+	const FReferenceSkeleton& Bones = BodyMesh->GetRefSkeleton();
+	TArray<int32> KeyBones;
+	for (const TCHAR* Name : { TEXT("hand_l"), TEXT("hand_r"), TEXT("head"), TEXT("foot_l"), TEXT("foot_r") })
+	{
+		const int32 Bone = Bones.FindRawBoneIndex(FName(Name));
+		if (Bone != INDEX_NONE)
+		{
+			KeyBones.Add(Bone);
+		}
+	}
+	TArray<TArray<FVector>> Positions;
+	for (const TArray<FTransform>& Pose : Poses)
+	{
+		TArray<FVector>& Moment = Positions.AddDefaulted_GetRef();
+		for (const int32 Bone : KeyBones)
+		{
+			Moment.Add(Pose.IsValidIndex(Bone) ? Pose[Bone].GetLocation() : FVector::ZeroVector);
+		}
+	}
+	const int32 Best = Times.IsValidIndex(MostExpressiveMoment(Positions)) ? MostExpressiveMoment(Positions) : 0;
+	const float Time = Times.IsValidIndex(Best) ? Times[Best] : 0.0f;
+
+	OutSubject = FMantleCosmeticThumbnail::AvatarSubject(BodyMesh, FaceMesh);
+	OutSubject.Frame = StandingFrame(BodyMesh);
+	OutSubject.bFloor = true;
+	// The pose lives as long as the subject: the retargeter and the mannequin are held until it is dropped.
+	const TStrongObjectPtr<UObject> KeepRetargeter(Retargeter);
+	const TStrongObjectPtr<USkeletalMesh> KeepDriver(Driver);
+	OutSubject.Pose = [KeepRetargeter, KeepDriver, Played, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox&)
+	{
+		PoseOnBody(Scene, Components, KeepDriver.Get(), KeepRetargeter.Get(), Played, Time);
+	};
+	OutSubject.Describe += FString::Printf(TEXT(", emote at %.2f s"), Time);
+	OutHow = FString::Printf(TEXT("%s, the emote at %.2f s of %.2f s"), *Describe, Time, Read.Clip.GetDuration());
+	return true;
+}

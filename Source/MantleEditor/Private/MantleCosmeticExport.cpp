@@ -14,6 +14,7 @@
 #include "MantleCatalogGarmentFit.h"
 #include "MantleClothingColorMeasure.h"
 #include "MantleCosmeticThumbnail.h"
+#include "MantleEmoteCheck.h"
 #include "MantleEmoteRetarget.h"
 #include "MantleGarmentFitter.h"
 #include "MantleHairCards.h"
@@ -2822,8 +2823,22 @@ namespace MantleCosmeticExportPrivate
 	 * with KeepSlots shows only those sections, framed on GarmentFrame (the kept vertices) when it is valid.
 	 */
 	TArray<uint8> MakeThumbnail(const FMantleCosmeticDraft& Draft, UObject* Source, USkeletalMesh* AuthoringBody, int32 Size, FString& OutNote,
-		const FBox& GarmentFrame = FBox(ForceInit))
+		FString& OutProblem, const FBox& GarmentFrame = FBox(ForceInit), TConstArrayView<uint8> EmoteClip = TConstArrayView<uint8>())
 	{
+		const FMantleThumbnailChoice& Choice = Draft.Thumbnail;
+		if (Choice.Mode == EMantleThumbnailMode::Custom)
+		{
+			// #124: the creator's own picture, cut square and resized; needs no renderer.
+			const FMantleThumbnailTarget Target{ Size, Size };
+			const FMantleThumbnailResult Picture = FMantleThumbnailResolver::Resolve(Choice, Target, FMantleThumbnailResolver::FRender());
+			if (!Picture.Succeeded())
+			{
+				OutProblem = Picture.Error;
+				return TArray<uint8>();
+			}
+			OutNote = Picture.Warning.IsEmpty() ? Picture.Source : FString::Printf(TEXT("%s (%s)"), *Picture.Source, *Picture.Warning);
+			return FMantleThumbnailResolver::ToPng(Picture, Target);
+		}
 		if (!Draft.bRenderThumbnail)
 		{
 			return RenderThumbnail(Source, Size, false, OutNote);
@@ -2841,8 +2856,34 @@ namespace MantleCosmeticExportPrivate
 		case EMantleCosmeticClass::Accessory:
 			Subject = FMantleCosmeticThumbnail::AccessorySubject(Cast<UStaticMesh>(Source), Draft.AccessoryWorn, Draft.bAccessoryBackFaces);
 			break;
+		case EMantleCosmeticClass::Emote:
+			// #124: Mantle's standard body posed as players see it, at the emote's most expressive moment.
+			if (!EmoteClip.IsEmpty() && FMantleCosmeticThumbnail::CanCapture())
+			{
+				FString How;
+				FString WhyNot;
+				if (FMantleEmoteCheck::ThumbnailSubject(EmoteClip, Subject, How, WhyNot))
+				{
+					UE_LOG(LogMantle, Log, TEXT("MANTLE_COSMETIC_THUMBNAIL emote %s"), *How);
+				}
+				else
+				{
+					UE_LOG(LogMantle, Log, TEXT("MANTLE_COSMETIC_THUMBNAIL emote fallback=thumbnail-renderer reason=\"%s\""), *WhyNot);
+				}
+			}
+			break;
 		default:
 			break;
+		}
+		if (!Subject.IsEmpty() && Choice.Mode == EMantleThumbnailMode::Angle)
+		{
+			// #124: the same picture from the angle the creator chose; the zoom closes in on (or backs away from) the framed box.
+			Subject.View = FRotator(Choice.Angle.Pitch, Choice.Angle.Yaw, 0.0);
+			if (Subject.Frame.IsValid && !FMath::IsNearlyEqual(Choice.Zoom, 1.0f))
+			{
+				Subject.Frame = FBox::BuildAABB(Subject.Frame.GetCenter(), Subject.Frame.GetExtent() / FMath::Max(Choice.Zoom, 0.1f));
+			}
+			Subject.Describe += TEXT(", chosen angle");
 		}
 		if (!Subject.IsEmpty())
 		{
@@ -6585,7 +6626,16 @@ FMantleCosmeticPackage FMantleCosmeticExport::BuildPrepared(const FMantleCosmeti
 	}
 
 	FString ThumbnailNote;
-	TArray<uint8> Thumbnail = MakeThumbnail(Draft, ThumbnailOf, ThumbnailBody, Contract.ThumbnailSize, ThumbnailNote, ThumbnailFrame);
+	FString ThumbnailProblem;
+	const FMantleCosmeticUploadAsset* EmoteClipAsset = Package.ClipKey.IsEmpty() ? nullptr : Package.FindAsset(Package.ClipKey);
+	TArray<uint8> Thumbnail = MakeThumbnail(Draft, ThumbnailOf, ThumbnailBody, Contract.ThumbnailSize, ThumbnailNote, ThumbnailProblem, ThumbnailFrame,
+		EmoteClipAsset ? TConstArrayView<uint8>(EmoteClipAsset->Bytes) : TConstArrayView<uint8>());
+	if (!ThumbnailProblem.IsEmpty())
+	{
+		Issues.Add(FMantleCosmeticChecks::Error(FString::Printf(TEXT("the thumbnail's custom image could not be used: %s"), *ThumbnailProblem),
+			TEXT("Choose another picture in the Thumbnail section, or go back to Automatic.")));
+		return Package;
+	}
 	FMantleAssetUploadOptions ThumbnailOptions;
 	ThumbnailOptions.Kind = TEXT("texture");
 	Package.AddAsset(TEXT("thumbnail"), TEXT("Thumbnail"), ThumbnailOptions, MoveTemp(Thumbnail));

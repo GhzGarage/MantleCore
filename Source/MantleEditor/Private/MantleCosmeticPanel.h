@@ -172,6 +172,17 @@ private:
 	 * body it was made on, or a catalog avatar by id (#283). Avatars: the body posed by its retargeter (OnPreviewAvatar).
 	 */
 	TSharedRef<SWidget> MakePreviewSection();
+
+	/** #124: the Thumbnail section every uploader shows, on this draft's choice. */
+	TSharedRef<SWidget> MakeThumbnailSection();
+	/** Reads the saved thumbnail choice for the draft's source and class (Automatic when none) and redraws the section. */
+	void LoadThumbnailChoice();
+	/** The creator changed the choice: kept on the draft and saved for this source; the package is built again. */
+	void ThumbnailChoiceChanged(const FMantleThumbnailChoice& Choice);
+	/** "Use this view": the preview camera's angle becomes the thumbnail's; the reason it could not, or empty. */
+	FText UseThumbnailView();
+	/** The thumbnail section, to redraw it after a check. */
+	TSharedPtr<class SMantleThumbnailSection> ThumbnailSection;
 	FReply OnPreview();
 	FText GetPreviewStatusText() const;
 	void ApplyPreviewAnimation();
