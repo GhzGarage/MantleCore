@@ -3184,6 +3184,16 @@ namespace MantleCosmeticExportPrivate
 		Package.HairHeadFitMeshes.HeadPositions = Face.Glb.Positions;
 		Package.HairHeadFitMeshes.HeadTriangles = HeadIndices;
 		Cards.Glb.Positions = Fit.Positions;
+		// Hair turned upright (a Y-up OBJ): its shading directions turn with it.
+		if (Fit.QuarterTurns != 0)
+		{
+			for (FVector3f& N : Cards.Glb.Normals) N = FMantleHairCardsFit::RotateUpright(N, Fit.QuarterTurns);
+			for (FVector4f& T : Cards.Glb.Tangents)
+			{
+				const FVector3f Turned = FMantleHairCardsFit::RotateUpright(FVector3f(T.X, T.Y, T.Z), Fit.QuarterTurns);
+				T = FVector4f(Turned.X, Turned.Y, Turned.Z, T.W);
+			}
+		}
 		Package.HairHeadFit = Fit.Report;
 		Package.bHairHeadFitted = true;
 		Cards.Bounds = FBox3f(ForceInit);

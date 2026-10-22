@@ -279,6 +279,21 @@ bool FMantleHairCardsFitRunTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("the cap reached the scalp fit (%s)"), *FString::Join(Plain.Notes, TEXT(" | "))), Plain.bCapFound);
 	TestTrue(TEXT("and the notes say so"), Plain.Notes.ContainsByPredicate([](const FString& N) { return N.Contains(TEXT("found 1 cap")); }));
 	TestFalse(TEXT("no built-in head"), Plain.Report.bBakedHead);
+	TestEqual(TEXT("upright hair is not turned"), Plain.QuarterTurns, 0);
+
+	// The same hair lying on its side (a Y-up file, either way round) is found, turned upright and lands where the upright one did.
+	for (const int32 Lying : {-1, 1})
+	{
+		TArray<FVector3f> Sideways = P;
+		for (FVector3f& V : Sideways) V = FMantleHairCardsFit::RotateUpright(V, Lying);
+		FMantleHairCardsFit::FInput Turned = Input;
+		Turned.HairPositions = Sideways;
+		const FMantleHairCardsFit::FResult Fixed = FMantleHairCardsFit::Run(Turned);
+		TestEqual(TEXT("sideways hair is turned back"), Fixed.QuarterTurns, -Lying);
+		bool bBack = Fixed.Positions.Num() == P.Num();
+		for (int32 V = 0; bBack && V < P.Num(); ++V) bBack &= Fixed.Positions[V].Equals(Plain.Positions[V], 1.e-2f);
+		TestTrue(TEXT("and fits as the upright hair did"), bBack);
+	}
 
 	TArray<FVector3f> P2 = P; TArray<uint32> I2 = I; TArray<int32> Sections2 = Sections;
 	CapTestSphere(80.f, 12, 16, P2, I2);

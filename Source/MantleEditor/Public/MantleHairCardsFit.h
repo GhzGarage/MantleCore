@@ -18,6 +18,15 @@ struct MANTLEEDITOR_API FMantleHairCardsFit
 	/** ... and, after the piece fit, span at least this share of the scalp's width (X) and depth (Y). */
 	static constexpr float CapMinScalpSpan = 0.5f;
 
+	/**
+	 * Bought hair imported from an OBJ keeps the file's Y-up axes, so it lies on its side. Before the piece fit, the fit
+	 * tries the hair as imported and turned a quarter either way about X, and keeps a turn only when the roots seat on the
+	 * scalp clearly better (OrientMinGain), so hair that was upright is never touched.
+	 */
+	static constexpr double OrientMinGain = 0.10;
+	/** The turn's other effect: normals and tangents must turn with the positions (RotateUpright). */
+	static FVector3f RotateUpright(const FVector3f& P, int32 QuarterTurns);
+
 	struct FInput
 	{
 		/** The head's skin triangles, in cm. */
@@ -37,6 +46,8 @@ struct MANTLEEDITOR_API FMantleHairCardsFit
 		TArray<FVector3f> Positions;
 		bool bFitted = false;
 		bool bCapFound = false;
+		/** 0 when the hair was upright; +1 or -1 when it was turned a quarter about X (RotateUpright): normals and tangents must turn the same way. */
+		int32 QuarterTurns = 0;
 		FMantleHairFitReport::FResult Report;
 		/** Lines for the package's notes and warnings the creator should read (a failure sentence each). */
 		TArray<FString> Notes;
