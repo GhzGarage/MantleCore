@@ -34,6 +34,7 @@
 #include "Widgets/Input/SSpinBox.h"
 #include "MantleModelThumbnail.h"
 #include "MantleThumbnailStore.h"
+#include "MantleVehicleThumbnail.h"
 #include "SMantleThumbnailSection.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -310,6 +311,10 @@ void SMantleVehicleBuilder::PickPreset(const FString& PresetId, const FText& Nam
 	DriveStatus = FText::GetEmpty();
 	GreyPlaceNote.Reset();
 	BuiltSource.Reset();
+	if (ThumbnailSection.IsValid())
+	{
+		ThumbnailSection->Refresh();
+	}
 	bHaveLastBuild = false;
 	SuggestedSize.Reset();
 	SaveStatus = FText::GetEmpty();
@@ -920,7 +925,7 @@ TSharedRef<SWidget> SMantleVehicleBuilder::MakeModelStep()
 					.DefaultAngle(FMantleModelThumbnail::DefaultView())
 					.Choice_Lambda([this] { return ThumbnailChoice; })
 					.OnChoiceChanged_Raw(this, &SMantleVehicleBuilder::ThumbnailChoiceChanged)
-					.Render(FMantleModelThumbnail::RenderFor([this]() -> UObject* { return Mesh.Get(); }))
+					.Render(FMantleVehicleThumbnail::PreviewFor([this]() -> const UMantleVehicleSource* { return BuiltSource.Get(); }, [this]() -> UObject* { return Mesh.Get(); }))
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 12)
 			[
@@ -1001,6 +1006,10 @@ bool SMantleVehicleBuilder::CanBuild() const
 void SMantleVehicleBuilder::ForgetBuild()
 {
 	BuiltSource.Reset();
+	if (ThumbnailSection.IsValid())
+	{
+		ThumbnailSection->Refresh();
+	}
 	LastBuild = FMantleVehicleBuildResult();
 	bHaveLastBuild = false;
 	SuggestedSize.Reset();
@@ -1447,6 +1456,11 @@ FReply SMantleVehicleBuilder::OnBuild()
 			: bSaveFailed ? FText::Format(LOCTEXT("NotSavedBuild", "Not saved: {0}"), FText::FromString(Result.SaveProblem))
 			: FText::GetEmpty();
 		SuggestedSize = Result.Fit.IsSet() ? TOptional<float>(static_cast<float>(Result.Fit->Scale)) : TOptional<float>();
+		if (ThumbnailSection.IsValid())
+		{
+			// Automatic shows the picture this build took.
+			ThumbnailSection->Refresh();
+		}
 	}
 	// The step shows the notes and the Size again when it is opened again; the vehicle itself it reaches through BuiltSource, which does not dangle.
 	LastBuild = Result;

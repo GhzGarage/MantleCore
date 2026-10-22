@@ -2,6 +2,7 @@
 #include "MantleLibraryPublish.h"
 #include "MantlePlaceAssetConverter.h"
 #include "MantlePng.h"
+#include "MantleThumbnailChoice.h"
 #include "MantleSkinnedMesh.h"
 #include "MantleVehicleAsset.h"
 #include "MantleVehicleBuilder.h"
@@ -259,6 +260,55 @@ bool FMantleVehicleThumbnailPublishTest::RunTest(const FString& Parameters)
 		}
 		const TSharedPtr<FJsonObject> PlainPatch = ReadObject(FMantleLibraryPublish::MakeVisibilityPatchBody(false));
 		TestTrue(TEXT("an edit with no picture names none"), PlainPatch.IsValid() && !PlainPatch->HasField(TEXT("thumbnailAssetId")));
+	}
+	DiscardBuild(Built);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleVehicleThumbnailPreviewTest,
+	"Mantle.Vehicle.Thumbnail.AutomaticPreviewIsTheUpload",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FMantleVehicleThumbnailPreviewTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleVehicleThumbnailTestPrivate;
+	const FMantleThumbnailChoice Automatic;
+	const FMantleThumbnailTarget Square = FMantleThumbnailTarget::Square();
+
+	// Before a build there is no picture to show, only the note that it is taken when the vehicle is built.
+	{
+		const UMantleVehicleSource* Nothing = nullptr;
+		const FMantleThumbnailResult Unbuilt = FMantleThumbnailResolver::Resolve(Automatic, Square,
+			FMantleVehicleThumbnail::PreviewFor([&Nothing] { return Nothing; }, []() -> UObject* { return nullptr; }));
+		TestFalse(TEXT("an unbuilt vehicle has no preview picture"), Unbuilt.Succeeded());
+		TestEqual(TEXT("it says the picture is taken when you build"), Unbuilt.Error, FMantleVehicleThumbnail::TakenWhenBuiltNote());
+	}
+
+	FMantleVehicleBuildResult Built = BuildSedan(TEXT("ThumbPreview"));
+	if (!TestTrue(TEXT("the sedan builds"), Built.bOk && Built.Source != nullptr) || !TestFalse(TEXT("with a picture"), Built.Source->ThumbnailPng.IsEmpty()))
+	{
+		DiscardBuild(Built);
+		return false;
+	}
+
+	// The preview on Automatic is the bytes publishing uploads.
+	const UMantleVehicleSource* Source = Built.Source;
+	const FMantleThumbnailResult Preview = FMantleThumbnailResolver::Resolve(Automatic, Square,
+		FMantleVehicleThumbnail::PreviewFor([Source] { return Source; }, []() -> UObject* { return nullptr; }));
+	if (TestTrue(*FString::Printf(TEXT("the built vehicle has a preview (%s)"), *Preview.Error), Preview.Succeeded()))
+	{
+		const TArray<uint8> PreviewPng = FMantleThumbnailResolver::ToPng(Preview, Square);
+		FMantlePlaceAssetConverter Converter;
+		FMantlePlaceAssetSet Set;
+		if (TestTrue(TEXT("the vehicle converts"), Converter.ConvertVehicle(Built.Source, Set) && Set.Vehicles.Num() == 1))
+		{
+			const FMantleConvertedTexture* Upload = Set.FindTexture(Set.Vehicles[0].ThumbnailKey);
+			if (TestNotNull(TEXT("and uploads its picture"), Upload))
+			{
+				TestTrue(TEXT("the Automatic preview's bytes are the uploaded bytes"), PreviewPng == Upload->Bytes);
+			}
+		}
 	}
 	DiscardBuild(Built);
 	return true;

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MantleThumbnailChoice.h"
 
 class UMantleVehicleSource;
 class USkeletalMesh;
@@ -38,4 +39,14 @@ struct MANTLEEDITOR_API FMantleVehicleThumbnail
 
 	/** Make, stored in Source.ThumbnailPng (one undo step with the build). False, with the reason in OutHow, when it could not be made. */
 	static bool Take(UMantleVehicleSource& Source, USkeletalMesh* Mesh, const FMantleSkinnedMesh& Body, FString& OutHow);
+
+	/** The words shown in place of the picture on Automatic until the vehicle has been built. */
+	static FString TakenWhenBuiltNote();
+
+	/**
+	 * The Thumbnail section's render for the vehicle builder. On Automatic it is the picture the upload sends: the built vehicle's saved picture
+	 * (Source.ThumbnailPng, as publishing uploads it), or, before a build, TakenWhenBuiltNote. Choose the angle renders the picked model (GetModel).
+	 * GetBuilt returns the built vehicle, or null.
+	 */
+	static FMantleThumbnailResolver::FRender PreviewFor(TFunction<const UMantleVehicleSource*()> GetBuilt, TFunction<UObject*()> GetModel);
 };
