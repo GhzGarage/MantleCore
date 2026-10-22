@@ -1996,7 +1996,7 @@ bool FMantleGarmentOutfit::IsUnderwearName(const FString& Name)
 	return false;
 }
 
-int32 FMantleGarmentOutfit::BareBodyRank(const FString& MeshName, const int32 WornSlots, const int32 UnderwearSlots, const double HeightShare)
+int32 FMantleGarmentOutfit::BareBodyRank(const FString& MeshName, const int32 CoveredSlots, const double HeightShare)
 {
 	if (HeightShare < BareHeightShare)
 	{
@@ -2004,13 +2004,12 @@ int32 FMantleGarmentOutfit::BareBodyRank(const FString& MeshName, const int32 Wo
 	}
 	const TArray<FString> Words = FMantleOutfitSections::Words(MeshName);
 	const bool bNude = Words.Contains(TEXT("nude")) || Words.Contains(TEXT("naked")) || Words.Contains(TEXT("bare"));
-	const bool bUnderwear = IsUnderwearName(MeshName) || UnderwearSlots > 0;
-	if (WornSlots > 0 && !bNude && !bUnderwear)
+	if (CoveredSlots == 0)
 	{
-		return -1;
+		return 100 + (bNude ? 1 : 0);
 	}
-	// Nothing on beats underwear, whatever the names say: underwear is something Convert has to take off.
-	return (WornSlots == 0 && !bUnderwear ? 100 : 0) + (bNude ? 20 : 0) + (bUnderwear ? 10 : 0) - FMath::Min(WornSlots + UnderwearSlots, 9);
+	// Something on it that isn't skin: still the bare body when its name says it is (nude, or underwear Convert takes off).
+	return bNude || IsUnderwearName(MeshName) ? 10 - FMath::Min(CoveredSlots, 9) : -1;
 }
 
 USkeletalMesh* FMantleGarmentOutfit::FindBareBody(const USkeletalMesh& Body, FString& OutWhy)
@@ -2051,28 +2050,32 @@ USkeletalMesh* FMantleGarmentOutfit::FindBareBody(const USkeletalMesh& Body, FSt
 		{
 			continue;
 		}
-		TArray<FString> WornSlots;
-		WornClothing(*Mesh).ParseIntoArray(WornSlots, TEXT(", "), true);
-		int32 UnderwearSlots = 0;
+		// Strip's own skin check, section by section: skin, or a face detail (eyes, mouth, lashes, hair), is the body;
+		// anything else covers it (clothing, underwear, armour).
+		TArray<FString> Covering;
 		TArray<int32> SlotIndices;
 		for (const FMantleOutfitSection& Section : FMantleCosmeticExport::ReadOutfitSections(Mesh, 0, SlotIndices))
 		{
-			UnderwearSlots += IsUnderwearName(Section.SlotName) || IsUnderwearName(Section.MaterialName) ? 1 : 0;
+			if (!FMantleAvatarStrip::LooksLikeSkin(Section.SlotName, Section.MaterialName, Section.BaseMaterialName)
+				&& !FMantleAvatarStrip::NamesFaceDetail(Section.SlotName, Section.MaterialName))
+			{
+				Covering.Add(Section.SlotName);
+			}
 		}
-		const int32 Rank = BareBodyRank(Mesh->GetName(), WornSlots.Num(), UnderwearSlots, 2.0 * Mesh->GetBounds().BoxExtent.Z / Height);
-		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_SPLIT bare body candidate %s: rank %d (worn %d, underwear %d)"), *Mesh->GetName(), Rank, WornSlots.Num(), UnderwearSlots);
+		const int32 Rank = BareBodyRank(Mesh->GetName(), Covering.Num(), 2.0 * Mesh->GetBounds().BoxExtent.Z / Height);
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_SPLIT bare body candidate %s: rank %d (covered by: %s)"), *Mesh->GetName(), Rank,
+			Covering.IsEmpty() ? TEXT("nothing") : *FString::Join(Covering, TEXT(", ")));
 		if (Rank > BestRank)
 		{
 			Best = Mesh;
 			BestRank = Rank;
-			BestWorn = WornSlots.Num() + UnderwearSlots;
+			BestWorn = Covering.Num();
 		}
 	}
 	if (Best)
 	{
-		const bool bUnderwear = BestWorn > 0 || IsUnderwearName(Best->GetName());
-		OutWhy = !bUnderwear ? FString::Printf(TEXT("%s is %s's whole body with nothing on"), *Best->GetName(), *Body.GetName())
-			: FString::Printf(TEXT("%s is %s's whole body in underwear, which Convert takes off"), *Best->GetName(), *Body.GetName());
+		OutWhy = BestWorn == 0 ? FString::Printf(TEXT("%s is %s's whole body, every part of it skin"), *Best->GetName(), *Body.GetName())
+			: FString::Printf(TEXT("%s is %s's whole body with %d piece%s on it that Convert takes off"), *Best->GetName(), *Body.GetName(), BestWorn, BestWorn == 1 ? TEXT("") : TEXT("s"));
 	}
 	return Best;
 }

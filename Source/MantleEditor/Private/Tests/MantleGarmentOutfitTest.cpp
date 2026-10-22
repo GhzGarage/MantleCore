@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleGarmentOutfit.h"
+#include "MantleAvatarStripFixer.h"
 #include "MantleAvatarRefitFixer.h"
 #include "MantleOutfitSections.h"
 #include "MantleSkinnedMesh.h"
@@ -383,17 +384,27 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FMantleGarmentOutfitBareBodyRankTest::RunTest(const FString& Parameters)
 {
 	// A whole body wearing nothing beats one in underwear; a part, or a dressed body not named bare, is no bare body.
-	const int32 Bare = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Girl_Body"), 0, 0, 1.0);
-	const int32 Underwear = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 0, 1, 0.99);
-	TestTrue(TEXT("nothing on is best"), Bare > Underwear);
-	TestTrue(TEXT("underwear is a bare body"), Underwear >= 0);
-	TestTrue(TEXT("a nude name beats underwear"), FMantleGarmentOutfit::BareBodyRank(TEXT("Nude"), 1, 0, 1.0) > Underwear);
-	TestEqual(TEXT("a torso alone is a part"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Torso"), 0, 0, 0.45), -1);
-	TestEqual(TEXT("a dressed body is not bare"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Nightwear"), 3, 0, 1.0), -1);
-	// Vampire's pack: her body with nothing on (SK_VampireGirl) beats the one in underwear, even when nothing reads its
-	// underwear as clothing (its name alone says it).
-	TestTrue(TEXT("nothing on beats an underwear name"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl"), 0, 0, 0.96)
-		> FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 0, 0, 1.0));
+	const int32 Bare = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Girl_Body"), 0, 1.0);
+	const int32 Underwear = FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 1, 0.99);
+	TestTrue(TEXT("all skin is best"), Bare > Underwear);
+	TestTrue(TEXT("a body in underwear is a bare body"), Underwear >= 0);
+	TestTrue(TEXT("a nude name is too"), FMantleGarmentOutfit::BareBodyRank(TEXT("Nude"), 1, 1.0) >= 0);
+	TestEqual(TEXT("a torso alone is a part"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_Torso"), 0, 0.45), -1);
+	TestEqual(TEXT("a dressed body is not bare"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Nightwear"), 3, 1.0), -1);
+	// Vampire's pack: her all-skin body (SK_VampireGirl: body, eyes, mouth, lashes, head) beats the one in underwear.
+	TestTrue(TEXT("all skin beats underwear"), FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl"), 0, 0.96)
+		> FMantleGarmentOutfit::BareBodyRank(TEXT("SK_VampireGirl_Underwear"), 1, 1.0));
+	// Strip's check, which FindBareBody counts by: her sections are skin or a face detail, her underwear is neither.
+	for (const TCHAR* Part : { TEXT("M_VG_Body"), TEXT("M_VG_Head") })
+	{
+		TestTrue(FString::Printf(TEXT("%s is skin"), Part), FMantleAvatarStrip::LooksLikeSkin(Part, Part, FString()));
+	}
+	for (const TCHAR* Part : { TEXT("M_VG_Eyes"), TEXT("M_VG_Mouth"), TEXT("M_VG_Lashes") })
+	{
+		TestTrue(FString::Printf(TEXT("%s is a face detail"), Part), FMantleAvatarStrip::NamesFaceDetail(Part, Part));
+	}
+	TestFalse(TEXT("underwear is not skin"), FMantleAvatarStrip::LooksLikeSkin(TEXT("M_VG_Underwear"), TEXT("M_VG_Underwear"), FString()));
+	TestFalse(TEXT("nor a face detail"), FMantleAvatarStrip::NamesFaceDetail(TEXT("M_VG_Underwear"), TEXT("M_VG_Underwear")));
 	TestTrue(TEXT("an underwear material is underwear"), FMantleGarmentOutfit::IsUnderwearName(TEXT("M_VG_Underwear")));
 	TestFalse(TEXT("a corset is not underwear"), FMantleGarmentOutfit::IsUnderwearName(TEXT("M_VG_Corset")));
 	return true;

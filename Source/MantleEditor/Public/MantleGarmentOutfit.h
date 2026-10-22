@@ -314,8 +314,8 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 
 	/**
 	 * #55: the character's bare body beside Body (its folder and below; Convert's output never), when the pack has one: a whole
-	 * body (at least BareHeightShare of Body's height, on Body's bones) that wears nothing, or whose name says it is nude or in
-	 * underwear (Convert's Strip takes that off). The best by BareBodyRank; null when none. OutWhy says which and why, plainly.
+	 * body (at least BareHeightShare of Body's height, on Body's bones) that is all skin by Strip's check, or whose name says
+	 * it is nude or in underwear (Convert's Strip takes that off). The best by BareBodyRank; null when none. OutWhy says which and why, plainly.
 	 * When there is one, its clothing in separate meshes is used, and Body's own sections are not cut (the owner's rule: a
 	 * bare body and separate garments first, the merged mesh only when there is nothing separate).
 	 */
@@ -325,12 +325,12 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	static constexpr double BareHeightShare = 0.9;
 
 	/**
-	 * Pure (tested): how good a bare body MeshName is (higher is better), or -1 when it is not one: WornSlots of its material
-	 * slots are clothing, UnderwearSlots underwear (IsUnderwearName), HeightShare its height over the character's. Wearing
-	 * nothing is best, whatever the names say; then a name saying nude, naked or bare; then underwear (by its name or its
-	 * slots), which Convert takes off. A mesh that wears clothing and isn't named so is not a bare body.
+	 * Pure (tested): how good a bare body MeshName is (higher is better), or -1 when it is not one: CoveredSlots of its
+	 * material slots are neither skin nor a face detail (Strip's own check, FMantleAvatarStrip::LooksLikeSkin and
+	 * NamesFaceDetail), HeightShare its height over the character's. All skin is best, whatever the names say; a body with
+	 * something on it is a bare body only when its name says nude, naked, bare or underwear (Convert takes it off).
 	 */
-	static int32 BareBodyRank(const FString& MeshName, int32 WornSlots, int32 UnderwearSlots, double HeightShare);
+	static int32 BareBodyRank(const FString& MeshName, int32 CoveredSlots, double HeightShare);
 
 	/** Pure (tested): whether a mesh, slot or material name says underwear (underwear, lingerie, bra, panties ...). */
 	static bool IsUnderwearName(const FString& Name);
