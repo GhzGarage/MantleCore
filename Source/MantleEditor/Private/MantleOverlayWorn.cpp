@@ -296,6 +296,7 @@ namespace MantleOverlayWornDevCommands
 			{
 				// Where the skin is along the row the offset asked for, so the next try can aim.
 				const FBox Box = Mesh->GetBounds().GetBox();
+				UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED mesh=%s triangles=%d bounds=%s"), *Mesh->GetName(), Triangles.Num(), *Box.ToString());
 				const double Z = Box.Min.Z + Box.GetSize().Z * 0.72 + FCString::Atof(*Args[4]);
 				for (double X = -60.0; X <= 60.0; X += 4.0)
 				{
