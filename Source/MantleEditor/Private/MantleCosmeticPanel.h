@@ -186,8 +186,6 @@ private:
 	void LoadThumbnailChoice();
 	/** The creator changed the choice: kept on the draft and saved for this source; the package is built again. */
 	void ThumbnailChoiceChanged(const FMantleThumbnailChoice& Choice);
-	/** "Use this view": the preview camera's angle becomes the thumbnail's; the reason it could not, or empty. */
-	FText UseThumbnailView();
 	/** The thumbnail section, to redraw it after a check. */
 	TSharedPtr<class SMantleThumbnailSection> ThumbnailSection;
 	FReply OnPreview();

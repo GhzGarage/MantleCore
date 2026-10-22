@@ -2447,7 +2447,8 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeThumbnailSection()
 		.Target(FMantleThumbnailTarget::Square())
 		.Choice_Lambda([this] { return Draft.Thumbnail; })
 		.OnChoiceChanged_Raw(this, &SMantleCosmeticPanel::ThumbnailChoiceChanged)
-		.OnUseView_Raw(this, &SMantleCosmeticPanel::UseThumbnailView)
+		.AngleSliders(true)
+		.DefaultAngle_Lambda([this] { return FMantleCosmeticThumbnail::DefaultView(Draft.Class == EMantleCosmeticClass::Accessory); })
 		.Render(FMantleThumbnailResolver::FRender([this](const FMantleThumbnailChoice&, TArray<FColor>& OutPixels, int32& OutWidth, int32& OutHeight, FString& OutError)
 		{
 			// The picture the upload carries is the one the check just exported, so it is shown from the package.
@@ -2473,7 +2474,7 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeThumbnailSection()
 		}))
 		[
 			SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
-			.Text(LOCTEXT("ThumbnailAngleHint", "Turn the preview above to the angle you want, then choose Use this view. Choose Check only to see the picture."))
+			.Text(LOCTEXT("ThumbnailAngleHint", "Choose Check only to see the picture from this angle."))
 		];
 }
 
@@ -2490,20 +2491,6 @@ void SMantleCosmeticPanel::ThumbnailChoiceChanged(const FMantleThumbnailChoice& 
 	Package.Reset();
 	const UObject* Source = Draft.Source.Get();
 	FMantleThumbnailStore::Save(Source ? Source->GetPathName() : FString(), FString::FromInt(static_cast<int32>(Draft.Class)), Choice, FMantleThumbnailStore::DefaultConfigFile());
-}
-
-FText SMantleCosmeticPanel::UseThumbnailView()
-{
-	if (!PreviewViewport.IsValid() || !PreviewViewport->GetShownBody())
-	{
-		return LOCTEXT("ThumbnailNoPreview", "Show the item in the preview above first, turn it to the angle you want, then choose Use this view again.");
-	}
-	const FRotator View = PreviewViewport->GetViewRotation();
-	FMantleThumbnailChoice Choice = Draft.Thumbnail;
-	Choice.Mode = EMantleThumbnailMode::Angle;
-	Choice.Angle = FRotator(View.Pitch, View.Yaw, 0.0);
-	ThumbnailChoiceChanged(Choice);
-	return FText::GetEmpty();
 }
 
 bool SMantleCosmeticPanel::IsOutfitAuthoringCandidate(const FAssetData& Asset, bool bFace) const

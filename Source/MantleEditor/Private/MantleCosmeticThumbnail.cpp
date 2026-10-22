@@ -150,6 +150,11 @@ namespace MantleCosmeticThumbnailPrivate
 	}
 }
 
+FRotator FMantleCosmeticThumbnail::DefaultView(bool bAccessory)
+{
+	return bAccessory ? AccessoryView : BodyView;
+}
+
 FMantleThumbnailSubject FMantleCosmeticThumbnail::AvatarSubject(USkeletalMesh* Body, USkeletalMesh* Face)
 {
 	using namespace MantleCosmeticThumbnailPrivate;

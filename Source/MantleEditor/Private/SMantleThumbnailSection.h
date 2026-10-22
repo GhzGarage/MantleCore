@@ -36,6 +36,13 @@ public:
 		SLATE_ARGUMENT(FMantleThumbnailResolver::FRender, Render)
 		/** The "Use this view" button's text; a place says "Use current view" for the level viewport. */
 		SLATE_ARGUMENT(FText, UseViewLabel)
+		/**
+		 * Choose the angle with turn, tilt and zoom sliders (for a kind with no orbit preview of its own, a model on its own): the preview redraws
+		 * as they move, and there is no "Use this view" button.
+		 */
+		SLATE_ARGUMENT(bool, AngleSliders)
+		/** With the sliders: the angle Choose the angle starts from the first time it is picked. */
+		SLATE_ATTRIBUTE(FRotator, DefaultAngle)
 		/** Under Choose the angle: the orbit preview, when the kind has one. */
 		SLATE_DEFAULT_SLOT(FArguments, AngleContent)
 	SLATE_END_ARGS()
@@ -54,6 +61,7 @@ private:
 	void SetMode(EMantleThumbnailMode Mode);
 	TSharedRef<SWidget> MakeModeRow(EMantleThumbnailMode Mode);
 	TSharedRef<SWidget> MakeCustomControls();
+	TSharedRef<SWidget> MakeAngleSliders();
 
 	TAttribute<FMantleThumbnailChoice> ChoiceAttribute;
 	FMantleThumbnailTarget Target;
@@ -61,6 +69,8 @@ private:
 	FOnUseView OnUseView;
 	FMantleThumbnailResolver::FRender Render;
 	FText UseViewLabel;
+	bool bAngleSliders = false;
+	TAttribute<FRotator> DefaultAngle;
 
 	FMantleThumbnailResult Result;
 	/** The last "Use this view" refusal, shown until the next change. */

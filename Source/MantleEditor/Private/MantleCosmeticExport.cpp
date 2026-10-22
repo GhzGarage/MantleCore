@@ -15,6 +15,7 @@
 #include "MantleClothingColorMeasure.h"
 #include "MantleCosmeticThumbnail.h"
 #include "MantleEmoteCheck.h"
+#include "MantleModelThumbnail.h"
 #include "MantleEmoteRetarget.h"
 #include "MantleGarmentFitter.h"
 #include "MantleHairCards.h"
@@ -2922,16 +2923,8 @@ namespace MantleCosmeticExportPrivate
 		default:
 			break;
 		}
-		if (!Subject.IsEmpty() && Choice.Mode == EMantleThumbnailMode::Angle)
-		{
-			// #124: the same picture from the angle the creator chose; the zoom closes in on (or backs away from) the framed box.
-			Subject.View = FRotator(Choice.Angle.Pitch, Choice.Angle.Yaw, 0.0);
-			if (Subject.Frame.IsValid && !FMath::IsNearlyEqual(Choice.Zoom, 1.0f))
-			{
-				Subject.Frame = FBox::BuildAABB(Subject.Frame.GetCenter(), Subject.Frame.GetExtent() / FMath::Max(Choice.Zoom, 0.1f));
-			}
-			Subject.Describe += TEXT(", chosen angle");
-		}
+		// #124: the same picture from the angle the creator chose.
+		FMantleModelThumbnail::ApplyChoice(Subject, Choice);
 		if (!Subject.IsEmpty())
 		{
 			FString WhyNot;

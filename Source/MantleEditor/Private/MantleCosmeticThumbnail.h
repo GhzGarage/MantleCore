@@ -83,6 +83,9 @@ struct FMantleThumbnailSubject
 class FMantleCosmeticThumbnail
 {
 public:
+	/** #124: the direction the camera looks along by default: a worn item's (a body, a garment, an avatar) or an accessory's. Choose the angle starts from it. */
+	static FRotator DefaultView(bool bAccessory);
+
 	/** The camera's field of view (degrees): narrow, so a body is not distorted. */
 	static constexpr float FieldOfViewDegrees = 30.0f;
 
