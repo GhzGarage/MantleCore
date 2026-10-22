@@ -7,6 +7,7 @@ class UObject;
 class USkeletalMesh;
 class UStaticMesh;
 struct FMantleStripPlan;
+struct FMantleSilhouette;
 
 /** What the clean head cut kept and how it was sized (FMantleMetaHumanHeadOnly::MakeCleanHead). */
 struct MANTLEEDITOR_API FMantleCleanHead
@@ -86,4 +87,9 @@ public:
 	 */
 	static bool MakeCleanHead(USkeletalMesh& Source, double TargetHeightCm, const FString& Folder, const FString& Name, FMantleCleanHead& Out,
 		TArray<TWeakObjectPtr<UObject>>& Created, FString& OutError);
+	/**
+	 * Source's build (#50): its LOD 0 (bind pose) torso widths and depths at the chest, waist and hips, as shares of StandingHeightCm
+	 * (a clean head's SourceHeightCm). False with why when the geometry can't be read or has no torso at those heights.
+	 */
+	static bool MeasureBuild(USkeletalMesh& Source, double StandingHeightCm, FMantleSilhouette& Out, FString& OutError);
 };

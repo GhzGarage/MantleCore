@@ -2,6 +2,7 @@
 #include "MantleMetaHumanHeadOnly.h"
 
 #include "MantleAvatarStripFixer.h"
+#include "MantleBodySilhouette.h"
 #include "MantleMetaHumanPose.h"
 #include "MantleRuntime.h"
 
@@ -447,5 +448,41 @@ bool FMantleMetaHumanHeadOnly::MakeCleanHead(USkeletalMesh& Source, const double
 	Static->MarkPackageDirty();
 	Out.Mesh = Static;
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_FACEONLY clean head %s from %s: %s"), *Static->GetPathName(), *Source.GetName(), *Out.Describe());
+	return true;
+}
+
+bool FMantleMetaHumanHeadOnly::MeasureBuild(USkeletalMesh& Source, const double StandingHeightCm, FMantleSilhouette& Out, FString& OutError)
+{
+	Out = FMantleSilhouette();
+	UDynamicMesh* Mesh = NewObject<UDynamicMesh>(GetTransientPackage());
+	const TStrongObjectPtr<UDynamicMesh> MeshHeld(Mesh);
+	FGeometryScriptMeshReadLOD Read;
+	Read.LODType = EGeometryScriptLODType::SourceModel;
+	Read.LODIndex = 0;
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+	UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshFromSkeletalMesh(&Source, Mesh, FGeometryScriptCopyMeshFromAssetOptions(), Read, Outcome);
+	if (Outcome != EGeometryScriptOutcomePins::Success || Mesh->GetTriangleCount() == 0)
+	{
+		OutError = FString::Printf(TEXT("%s's LOD 0 source geometry could not be read"), *Source.GetName());
+		return false;
+	}
+	TArray<FVector3f> Vertices;
+	double FeetZ = TNumericLimits<double>::Max();
+	Mesh->ProcessMesh([&](const UE::Geometry::FDynamicMesh3& Geometry)
+	{
+		for (const int32 Vertex : Geometry.VertexIndicesItr())
+		{
+			const FVector3f Position(Geometry.GetVertex(Vertex));
+			Vertices.Add(Position);
+			FeetZ = FMath::Min(FeetZ, static_cast<double>(Position.Z));
+		}
+	});
+	FMantleSilhouette Cm;
+	if (!FMantleBodySilhouette::Measure(Vertices, FeetZ, StandingHeightCm, Cm))
+	{
+		OutError = TEXT("no torso could be found at its chest, waist and hips");
+		return false;
+	}
+	Out = FMantleBodySilhouette::Normalised(Cm, StandingHeightCm);
 	return true;
 }
