@@ -677,6 +677,30 @@ void SMantleCosmeticPanel::Construct(const FArguments& InArgs)
 						EmoteOnly)
 				]
 
+				// Whether the emote loops until the player moves, or plays once.
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					MakeSection(LOCTEXT("EmotePlaybackTitle", "Playback"),
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(SCheckBox)
+							.IsChecked_Lambda([this] { return Draft.bEmoteLoop ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+							.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { Draft.bEmoteLoop = State == ECheckBoxState::Checked; Package.Reset(); })
+							[
+								SNew(STextBlock).Text(LOCTEXT("EmoteLoopToggle", "Loop until the player moves"))
+							]
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+						[
+							SNew(STextBlock)
+							.AutoWrapText(true)
+							.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+							.Text(LOCTEXT("EmoteLoopHelp", "On: the emote keeps playing until the player moves, jumps or is hit (a dance, a wave that keeps going). Off: it plays once and ends (a bow). To loop only part of it, add an anim notify named loop_start where the loop begins; with Loop on and no such notify, the whole clip loops."))
+						],
+						EmoteOnly)
+				]
+
 				// Avatar details.
 				+ SVerticalBox::Slot().AutoHeight()
 				[

@@ -139,6 +139,14 @@ struct MANTLEEDITOR_API FMantleAnimClipWriter
 	 */
 	static void CloseLoopSeam(FMantleAnimClipData& Clip, float LoopStartSeconds, float BlendSeconds);
 
+	/**
+	 * The creator's Loop choice for an emote (FMantleCosmeticDraft::bEmoteLoop). Players' clients loop a clip that has a
+	 * loop_start event, from that event to its end, and play any other once. bLoop: a clip without a loop_start event gets
+	 * one at 0, so it loops whole, and its end is joined to its first frame (CloseLoopSeam); a clip with one keeps it.
+	 * !bLoop: every loop_start event goes. Events stay sorted. True when it changed the clip. Pure.
+	 */
+	static bool ApplyLoopChoice(FMantleAnimClipData& Clip, bool bLoop);
+
 	/** 16-bit snorm as the worker quantizes it (round(clamp(v) * 32767)). */
 	static int16 QuantizeSnorm16(float Value);
 };

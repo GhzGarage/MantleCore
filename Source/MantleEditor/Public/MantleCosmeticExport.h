@@ -131,6 +131,13 @@ struct MANTLEEDITOR_API FMantleCosmeticDraft
 	TWeakObjectPtr<USkeletalMesh> EmoteBody;
 
 	/**
+	 * Emotes: whether the emote loops on players' screens until they move, jump or are hit (on), or plays once and ends (off).
+	 * On by default. On, a clip with a loop_start notify loops from it, and one without loops whole; off, any loop_start
+	 * notify is left out (FMantleAnimClipWriter::ApplyLoopChoice).
+	 */
+	bool bEmoteLoop = true;
+
+	/**
 	 * #736, overlays (scars, tattoos): Source is the mask, a UTexture2D; or leave Source empty and name a PNG file
 	 * (OverlayMaskFile). The optional normal map (scar slots only) is likewise OverlayNormal or OverlayNormalFile.
 	 * Each is checked by FMantleOverlayChecks; no mesh is uploaded.
