@@ -120,7 +120,9 @@ FMantleEffectLook FMantleEffects::DefaultLook(const EMantleEffectArchetype Arche
 		Look.Lifetime = 4.0;
 		break;
 	case EMantleEffectArchetype::Fire:
-		Look.Color = FLinearColor(1.0f, 0.45f, 0.1f);
+		// NS_MantleFire (#1028, from Vefects' Free Fire) is its own fire at these values: white keeps its flames' own
+		// colours (any other colour recolours them), and Size, Rate, Speed and Lifetime scale it from 40, 40, 120 and 1.
+		Look.Color = FLinearColor::White;
 		Look.Size = 40.0;
 		Look.Rate = 40.0;
 		Look.Speed = 120.0;

@@ -173,7 +173,7 @@ struct FMantleEffectLook
 {
 	/** Linear RGB, 0 to 1: User.Color. */
 	FLinearColor Color = FLinearColor::White;
-	/** Particle size, cm: User.Size2D, as (Size, Size). */
+	/** Particle size, cm: User.Size2D, as (Size, Size). Fire takes it as the whole fire's size, 40 being its own. */
 	double Size = 50.0;
 	/** Particles spawned a second: User.Rate. */
 	double Rate = 10.0;

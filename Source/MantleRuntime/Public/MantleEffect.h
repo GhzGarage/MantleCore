@@ -44,7 +44,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Effect")
 	EMantleEffectArchetype Archetype = EMantleEffectArchetype::Smoke;
 
-	/** The particles' tint, linear RGB (alpha is ignored). */
+	/** The particles' tint, linear RGB (alpha is ignored). Fire recolours its flames to it; white keeps their own colours. */
 	UPROPERTY(EditAnywhere, Category = "Effect", meta = (HideAlphaChannel))
 	FLinearColor Color;
 
