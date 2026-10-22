@@ -29,18 +29,20 @@ struct MANTLEEDITOR_API FMantleHairCardsFit
 	static FVector3f RotateUpright(const FVector3f& P, int32 QuarterTurns);
 
 	/**
-	 * Hair must not cover the face (#106). The face is the head's skin facing forward (normal Y above 0.3) more than
-	 * FaceClearTopCm below the top (the eyebrows and down); a hair vertex within FaceClearMarginCm in front of it, or inside it,
-	 * is moved sideways (away from the middle) and back, FaceClearStepCm at a time, until it is clear: locks that hang over
-	 * the face part around it, to the sides or behind the ears. Roots on the scalp never move.
+	 * Hair is left covering the face when it was made that way (a fringe, a lock over one eye), so only coverage the fit ADDED is
+	 * undone (#106). The face is the head's skin facing forward (normal Y above 0.3) more than FaceClearTopCm below the top (the
+	 * eyebrows and down); a vertex covers it when it is inside that skin or within FaceClearMarginCm in front of it. The hair
+	 * as the whole-piece fit left it (the rigid size and seat, which keeps the hair's own design) is the baseline: a vertex that
+	 * covers the face after the scalp fit but did not at the baseline goes back to its baseline position.
 	 */
 	static constexpr double FaceClearTopCm = 10.0;
 	static constexpr double FaceClearMarginCm = 1.5;
-	static constexpr double FaceClearStepCm = 0.5;
-	static constexpr int32 FaceClearMaxSteps = 60;
 
-	/** Moves the vertices (ids into Positions) that cover the face aside; returns how many moved. */
-	static int32 ClearFace(const FMantleHairHeadSamples& Head, TConstArrayView<int32> Vertices, TArray<FVector3f>& Positions);
+	/** True when P covers the face of Head (see above). */
+	static bool CoversFace(const FMantleHairHeadSamples& Head, const FVector& P);
+
+	/** Puts the vertices (ids into the arrays) that Fitted newly pushed onto the face back to their Baseline position; returns how many went back. */
+	static int32 ClearFaceAddedByTheFit(const FMantleHairHeadSamples& Head, TConstArrayView<int32> Vertices, TConstArrayView<FVector3f> Baseline, TArray<FVector3f>& Fitted);
 
 	struct FInput
 	{

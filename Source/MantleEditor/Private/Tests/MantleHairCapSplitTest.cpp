@@ -312,7 +312,7 @@ bool FMantleHairCardsFitRunTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMantleHairCardsFitClearFaceTest,
-	"Mantle.Editor.HairCardsFit.HairOverTheFaceMovesAsideAndTheCrownStays",
+	"Mantle.Editor.HairCardsFit.OnlyFaceCoverageTheFitAddedIsUndone",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
 bool FMantleHairCardsFitClearFaceTest::RunTest(const FString& Parameters)
@@ -323,31 +323,27 @@ bool FMantleHairCardsFitClearFaceTest::RunTest(const FString& Parameters)
 	FMantleHairHeadSamples Head; FString Error;
 	if (!TestTrue(TEXT("head samples build"), Head.Build(HeadP, HeadI, Error))) { AddError(Error); return false; }
 
-	// The head's centre is wherever CapTestSphere puts it; take its top and measure from there.
-	const double Top = Head.TopCm();
-	const double CentreZ = Top - 9.0;
-	TArray<FVector3f> P;
-	P.Add(FVector3f(0.f, 8.f, static_cast<float>(CentreZ - 5.0)));   // 0: in front of the face, just off the skin
-	P.Add(FVector3f(2.f, 8.f, static_cast<float>(CentreZ - 5.0)));   // 1: the same, right of the middle
-	P.Add(FVector3f(-2.f, 8.f, static_cast<float>(CentreZ - 5.0)));  // 2: the same, left of the middle
-	P.Add(FVector3f(0.f, 0.f, static_cast<float>(Top + 0.1)));         // 3: on the crown
-	P.Add(FVector3f(0.f, 12.f, static_cast<float>(CentreZ - 5.0)));   // 4: well clear of the face already
-	const TArray<FVector3f> Before = P;
-	const int32 Moved = FMantleHairCardsFit::ClearFace(Head, TArray<int32>({0, 1, 2, 3, 4}), P);
-	TestEqual(TEXT("three vertices covered the face"), Moved, 3);
-	TestTrue(TEXT("the crown stays"), P[3].Equals(Before[3], 1.e-4f));
-	TestTrue(TEXT("hair already clear stays"), P[4].Equals(Before[4], 1.e-4f));
-	TestTrue(TEXT("right of the middle goes right"), P[1].X > Before[1].X + 0.4f && P[0].X > Before[0].X + 0.4f);
-	TestTrue(TEXT("left of the middle goes left"), P[2].X < Before[2].X - 0.4f);
-	TestTrue(TEXT("and back"), P[1].Y < Before[1].Y);
-	for (const int32 V : {0, 1, 2})
-	{
-		int32 Id = INDEX_NONE; double D2 = 0.0;
-		Head.Nearest(FVector(P[V].X, P[V].Y, P[V].Z), Id, D2);
-		const bool bFace = Head.Normal(Id).Y > 0.3 && Top - Head.Point(Id).Z > FMantleHairCardsFit::FaceClearTopCm;
-		const double Out = (FVector(P[V].X, P[V].Y, P[V].Z) - Head.Point(Id)) | Head.Normal(Id);
-		TestTrue(FString::Printf(TEXT("vertex %d is clear of the face"), V), !bFace || Out >= FMantleHairCardsFit::FaceClearMarginCm);
-	}
+	// The sphere is centred on the origin (radius 9, top 9, +Y forward): at z = -5 the skin is in the face zone.
+	const FVector3f Fringe(0.f, 8.f, -5.f);   // in front of the face
+	const FVector3f Clear(0.f, 12.f, -5.f);   // well in front of it
+	const FVector3f Crown(0.f, 0.f, 9.1f);
+	TestTrue(TEXT("the fringe spot covers the face"), FMantleHairCardsFit::CoversFace(Head, FVector(Fringe)));
+	TestFalse(TEXT("the clear spot does not"), FMantleHairCardsFit::CoversFace(Head, FVector(Clear)));
+	TestFalse(TEXT("the crown does not"), FMantleHairCardsFit::CoversFace(Head, FVector(Crown)));
+
+	// 0: a deliberate fringe, over the face as made and after the fit. 1: a lock the fit pushed onto the face. 2: the crown. 3: moved but still clear.
+	const TArray<FVector3f> Baseline = {Fringe, Clear, Crown, Clear};
+	TArray<FVector3f> Fitted = {Fringe + FVector3f(0.f, 0.2f, 0.f), Fringe, Crown, Clear + FVector3f(0.f, 1.f, 0.f)};
+	const TArray<FVector3f> FittedBefore = Fitted;
+	const int32 Restored = FMantleHairCardsFit::ClearFaceAddedByTheFit(Head, TArray<int32>({0, 1, 2, 3}), Baseline, Fitted);
+	TestEqual(TEXT("one vertex went back"), Restored, 1);
+	TestTrue(TEXT("the deliberate fringe stays"), Fitted[0].Equals(FittedBefore[0], 1.e-5f));
+	TestTrue(TEXT("the lock the fit pushed onto the face goes back"), Fitted[1].Equals(Baseline[1], 1.e-5f));
+	TestTrue(TEXT("the crown stays"), Fitted[2].Equals(FittedBefore[2], 1.e-5f));
+	TestTrue(TEXT("hair that is still clear stays"), Fitted[3].Equals(FittedBefore[3], 1.e-5f));
+	// Nothing added by the fit, nothing changes.
+	TArray<FVector3f> Same = Baseline;
+	TestEqual(TEXT("an unchanged fit restores nothing"), FMantleHairCardsFit::ClearFaceAddedByTheFit(Head, TArray<int32>({0, 1, 2, 3}), Baseline, Same), 0);
 	return true;
 }
 
