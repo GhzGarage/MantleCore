@@ -32,6 +32,9 @@ struct MANTLERUNTIME_API FMantleWeaponAsset
 	/** Shot sound ids, each once. */
 	TArray<FString> Sounds;
 
+	/** The hotbar icon's texture id, "" when the document names none. */
+	FString Icon;
+
 	/** The mesh slots' material ids in slot order, "" for a slot the document leaves; Num() is 0 with none. */
 	TArray<FString> Materials;
 
@@ -42,7 +45,7 @@ struct MANTLERUNTIME_API FMantleWeaponAsset
 	 */
 	TMap<FString, TArray<FString>> AttachmentMaterials;
 
-	/** Every distinct asset id the document names (mesh, attachments, sounds, materials, attachments' materials). */
+	/** Every distinct asset id the document names (mesh, attachments, sounds, materials, attachments' materials, icon). */
 	TArray<FString> NamedIds() const;
 
 	/** Reads MWP1 bytes with the strict document reader. False with every problem in OutError. */

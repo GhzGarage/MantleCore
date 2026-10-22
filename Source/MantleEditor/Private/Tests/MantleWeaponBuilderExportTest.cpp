@@ -130,6 +130,7 @@ bool FMantleWeaponBuilderExportRifleTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the name"), Desc.Name, FString(ExportName));
 	TestEqual(TEXT("the mesh is named"), Desc.Mesh, FString::Printf(TEXT("SKM_%s"), ExportName));
 	TestTrue(TEXT("two-handed"), Desc.IsTwoHanded());
+	TestEqual(TEXT("the hotbar icon is named, a local name for the library picture"), Desc.Icon, FString::Printf(TEXT("%s_Icon_0"), ExportName));
 	TestEqual(TEXT("the shot interval"), Desc.Fire.Interval, 0.1, 1.0e-9);
 	TestEqual(TEXT("the damage"), Desc.Fire.Damage.Value, 21.0);
 	TestTrue(TEXT("automatic"), Desc.Fire.bAutomatic.Value);

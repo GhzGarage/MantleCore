@@ -1486,7 +1486,7 @@ namespace MantleWeaponDocumentPrivate
 			const FString Path;
 			Keys(Root, Path,
 				{ TEXT("schemaVersion"), TEXT("name"), TEXT("archetype"), TEXT("hold"), TEXT("delivery"), TEXT("twoHanded"), TEXT("effects"),
-				  TEXT("color"), TEXT("effectsColor"), TEXT("mesh"), TEXT("materials"), TEXT("sockets"), TEXT("parts"), TEXT("attachments"), TEXT("fire"),
+				  TEXT("color"), TEXT("effectsColor"), TEXT("mesh"), TEXT("materials"), TEXT("icon"), TEXT("sockets"), TEXT("parts"), TEXT("attachments"), TEXT("fire"),
 				  TEXT("charge"), TEXT("magazine"), TEXT("reload"), TEXT("resource"), TEXT("charges"), TEXT("projectile"), TEXT("sweep"), TEXT("beam"),
 				  TEXT("consumable"), TEXT("block"), TEXT("sounds"), TEXT("firstPerson"), TEXT("spread"), TEXT("sway"), TEXT("recoil") },
 				{ TEXT("schemaVersion"), TEXT("name") });
@@ -1562,6 +1562,10 @@ namespace MantleWeaponDocumentPrivate
 				Text(Mesh, TEXT("mesh"), EWeaponDocText::LocalName, Out.Mesh);
 			}
 			ReadMaterials(Root, Path, Out.Materials);
+			if (const TSharedPtr<FJsonValue> Icon = Field(Root, TEXT("icon")))
+			{
+				Text(Icon, TEXT("icon"), EWeaponDocText::LocalName, Out.Icon);
+			}
 			if (const TSharedPtr<FJsonValue> Sockets = Field(Root, TEXT("sockets")))
 			{
 				TSharedPtr<FJsonObject> SocketsObj;
@@ -2311,6 +2315,10 @@ namespace MantleWeaponDocumentPrivate
 				WeaponDocPut(Node, TEXT("mesh"), WeaponDocStringNode(D.Mesh));
 			}
 			Materials(Node, D.Materials);
+			if (!D.Icon.IsEmpty())
+			{
+				WeaponDocPut(Node, TEXT("icon"), WeaponDocStringNode(D.Icon));
+			}
 			FWeaponDocNodePtr Sockets = WeaponDocObjectNode();
 			for (int32 Index = 0; Index < static_cast<int32>(EMantleWeaponDocSocket::Count); ++Index)
 			{

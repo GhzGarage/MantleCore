@@ -418,4 +418,64 @@ bool FMantleWeaponPublishSourceTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// The hotbar icon: the weapon's settings file names its library picture by uploaded id, and names none when it has no picture.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleWeaponPublishIconTest,
+	"Mantle.WeaponPublish.IconIsRewrittenToTheUploadedPicture",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleWeaponPublishIconTest::RunTest(const FString& Parameters)
+{
+	FMantleConvertedWeapon Weapon;
+	Weapon.Key = TEXT("weapon:icon");
+	Weapon.Name = TEXT("IconSword");
+	Weapon.MeshKey = TEXT("mesh:icon");
+	Weapon.DocumentText = TEXT("{\"schemaVersion\":2,\"name\":\"IconSword\",\"mesh\":\"SKM_IconSword\",\"icon\":\"IconSword_Icon_0\"}");
+
+	auto IconOf = [this](const FMantlePlaceAssetSet& Set, const FMantleConvertedWeapon& Converted, FString& OutIcon) -> bool
+	{
+		TArray<uint8> Bytes;
+		FString Error;
+		if (!Set.WeaponBytes(Converted, Bytes, Error))
+		{
+			AddError(Error);
+			return false;
+		}
+		const FUTF8ToTCHAR Utf8(reinterpret_cast<const ANSICHAR*>(Bytes.GetData()), Bytes.Num());
+		TSharedPtr<FJsonObject> Root;
+		if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(FString(Utf8.Length(), Utf8.Get())), Root) || !Root.IsValid())
+		{
+			AddError(TEXT("the upload is not JSON"));
+			return false;
+		}
+		OutIcon = Root->HasField(TEXT("icon")) ? Root->GetStringField(TEXT("icon")) : FString();
+		return true;
+	};
+
+	FMantlePlaceAssetSet Set;
+	Set.Uploaded.Add(Weapon.MeshKey).Id = TEXT("ast_u00000000000000000000000000000001");
+	FString Icon;
+
+	// No picture: no icon, and the local name does not leak.
+	if (IconOf(Set, Weapon, Icon))
+	{
+		TestTrue(TEXT("a weapon without a picture names no icon"), Icon.IsEmpty());
+	}
+
+	// A picture that never got an id is the same.
+	Weapon.ThumbnailKey = TEXT("weaponpicture:abc");
+	if (IconOf(Set, Weapon, Icon))
+	{
+		TestTrue(TEXT("a picture that was not uploaded names no icon"), Icon.IsEmpty());
+	}
+
+	// An uploaded picture: the icon is its id.
+	Set.Uploaded.Add(Weapon.ThumbnailKey).Id = TEXT("ast_u00000000000000000000000000000002");
+	if (IconOf(Set, Weapon, Icon))
+	{
+		TestEqual(TEXT("the icon is the uploaded picture's id"), Icon, FString(TEXT("ast_u00000000000000000000000000000002")));
+	}
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

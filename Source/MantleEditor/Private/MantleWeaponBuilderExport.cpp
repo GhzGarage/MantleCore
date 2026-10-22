@@ -218,6 +218,9 @@ bool FMantleWeaponBuilderExport::BuildDocument(const UMantleWeaponSource& Source
 	const FMantleWeaponDocHoldInfo& Info = FMantleWeaponDocument::GetHoldInfo(Desc.GetHold());
 	Desc.Name = Source.DisplayName.TrimStartAndEnd().IsEmpty() ? DefaultName(Source.Hold) : Source.DisplayName.TrimStartAndEnd().Left(64);
 	Desc.Mesh = MeshName;
+	// The hotbar icon: the weapon's library picture. It is made at publish (the Thumbnail step's choice); publish swaps this name for the
+	// uploaded texture's id, or drops it when no picture was taken.
+	if (!MeshName.IsEmpty()) Desc.Icon = AuxiliaryName(Source, TEXT("Icon"));
 	Desc.Delivery.Set(Source.Delivery == EMantleWeaponSourceDelivery::Default ? UsualDelivery(Desc.GetHold())
 		: static_cast<EMantleWeaponDocDelivery>(static_cast<uint8>(Source.Delivery) - 1));
 	if (!IsDeliveryOffered(Desc.GetHold(), Desc.GetDelivery()))
