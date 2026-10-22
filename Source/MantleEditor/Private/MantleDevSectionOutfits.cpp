@@ -7,6 +7,8 @@
 // then drawn as the catalog thumbnail does (Mantle.Dev.RenderOutfitFits) into <Directory>. Needs a renderer. Saves what Convert and the
 // Outfits write under <body folder>/Converted; uploads nothing. Logs MANTLE_SECTION_OUTFITS lines.
 #include "MantleAvatarConverter.h"
+#include "MantleCosmeticThumbnail.h"
+#include "MantlePng.h"
 #include "MantleAvatarContract.h"
 #include "MantleGarmentOutfit.h"
 #include "MantleMetaHumanPose.h"
@@ -14,6 +16,7 @@
 #include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
 #include "HAL/IConsoleManager.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMantleSectionOutfits, Log, All);
@@ -88,6 +91,27 @@ namespace MantleDevSectionOutfitsPrivate
 			}
 		}
 		UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS cut %d pieces"), Cut);
+		// Each cut piece as it is before the fit: alone, and on the bare body Strip left (the body it was made for), front and side. A piece
+		// that is wrong here was cut wrong; one that is right here and wrong in the Outfit was changed by the fit.
+		for (const int32 Index : Indices)
+		{
+			const FMantleConvertGarment& Garment = Context.Garments[Index];
+			USkeletalMesh* PieceMesh = Garment.Mesh.Get();
+			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS piece %s: bounds %s (%d material slots)"), *Garment.Name, *PieceMesh->GetBounds().GetBox().ToString(), PieceMesh->GetMaterials().Num());
+			for (const bool bOnBody : { false, true })
+			{
+				FMantleThumbnailSubject Subject = FMantleCosmeticThumbnail::GarmentSubject(PieceMesh, bOnBody ? Work->SkinOnly.Get() : nullptr, nullptr);
+				for (const TPair<const TCHAR*, float> View : { TPair<const TCHAR*, float>(TEXT("front"), -90.0f), TPair<const TCHAR*, float>(TEXT("side"), 0.0f) })
+				{
+					Subject.View = FRotator(-4.0f, View.Value, 0.0f);
+					TArray<FColor> Pixels;
+					FString CaptureError;
+					const FString File = FPaths::Combine(Args[1], FString::Printf(TEXT("piece_%s_%s_%s.png"), *Garment.Slot, bOnBody ? TEXT("on_body") : TEXT("alone"), View.Key));
+					const bool bWritten = FMantleCosmeticThumbnail::Capture(Subject, 1024, Pixels, CaptureError) && FFileHelper::SaveArrayToFile(FMantlePng::EncodeRGBA8(1024, 1024, Pixels), *File);
+					UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS piece picture %s %s"), *File, bWritten ? TEXT("") : *CaptureError);
+				}
+			}
+		}
 		if (Meshes.Num() == 0)
 		{
 			return;
