@@ -14,7 +14,7 @@ struct MANTLEEDITOR_API FMantleSilhouette
 	double Depth[Bands] = { 0.0, 0.0, 0.0 };
 	bool bValid = false;
 
-	FString ToString() const;
+	FString ToString(bool bShareOfHeight = false) const;
 };
 
 /**

@@ -1,10 +1,11 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleBodySilhouette.h"
 
-FString FMantleSilhouette::ToString() const
+FString FMantleSilhouette::ToString(const bool bShareOfHeight) const
 {
-	return FString::Printf(TEXT("width %.1f / %.1f / %.1f, depth %.1f / %.1f / %.1f cm (chest / waist / hips)"), Width[0], Width[1], Width[2], Depth[0], Depth[1],
-		Depth[2]);
+	const double K = bShareOfHeight ? 100.0 : 1.0;
+	return FString::Printf(TEXT("width %.1f / %.1f / %.1f, depth %.1f / %.1f / %.1f %s (chest / waist / hips)"), Width[0] * K, Width[1] * K, Width[2] * K, Depth[0] * K,
+		Depth[1] * K, Depth[2] * K, bShareOfHeight ? TEXT("% of height") : TEXT("cm"));
 }
 
 FString FMantleSliderSeed::ToString() const

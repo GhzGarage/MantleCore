@@ -709,7 +709,7 @@ namespace MantleMetaHumanConformSeedPrivate
 		Subsystem.SetBodyConstraints(&Character, Constraints);
 		Subsystem.CommitBodyState(&Character);
 		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_FACEONLY %s: sliders seeded from the silhouette (source %s; default %s; %s):%s"), *Character.GetPathName(),
-			*SourceBuild.ToString(), *FMantleBodySilhouette::Normalised(Default, Height).ToString(), *Seed.ToString(), *Moved);
+			*SourceBuild.ToString(true), *FMantleBodySilhouette::Normalised(Default, Height).ToString(true), *Seed.ToString(), *Moved);
 	}
 }
 
