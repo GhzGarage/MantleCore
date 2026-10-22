@@ -310,7 +310,7 @@ namespace MantleThumbnailSectionDevShot
 	{
 		if (Args.Num() < 2)
 		{
-			UE_LOG(LogMantle, Error, TEXT("MANTLE_THUMBNAIL_SHOT usage: Mantle.Dev.ThumbnailSectionShot <Directory> <Sample.png>"));
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_THUMBNAIL_SHOT usage: Mantle.Dev.ThumbnailSectionShot <Directory> <Sample.png> [Exit]"));
 			return;
 		}
 		// The sample stands in for the kind's own render in Automatic and Choose the angle; the catalog thumbnail capture draws the real ones.
@@ -350,11 +350,16 @@ namespace MantleThumbnailSectionDevShot
 				.OnUseView_Lambda([]() { return FText::GetEmpty(); });
 			Save(SNew(SBox).Padding(12.0f)[Section], FPaths::Combine(Args[0], FString::Printf(TEXT("thumbnail_section_%s.png"), Shot.Name)), 560.0f, 1400.0f);
 		}
+		// A maintainer run draws and goes: an editor left open would hold the plugin's binaries.
+		if (Args.Num() > 2 && Args[2].Equals(TEXT("Exit"), ESearchCase::IgnoreCase))
+		{
+			FPlatformMisc::RequestExit(false);
+		}
 	}
 
 	FAutoConsoleCommand Command(
 		TEXT("Mantle.Dev.ThumbnailSectionShot"),
-		TEXT("Mantle.Dev.ThumbnailSectionShot <Directory> <Sample.png>: renders the shared Thumbnail section offscreen in each choice, square and wide, using the sample picture. Uploads nothing."),
+		TEXT("Mantle.Dev.ThumbnailSectionShot <Directory> <Sample.png> [Exit]: renders the shared Thumbnail section offscreen in each choice, square and wide, using the sample picture; with Exit the editor closes afterwards. Uploads nothing."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&Run));
 }
 
