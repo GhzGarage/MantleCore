@@ -11,6 +11,8 @@
 #include "MantleRuntimeTextureBuilder.h"
 
 #include "Engine/SkeletalMesh.h"
+#include "Rendering/SkeletalMeshLODModel.h"
+#include "Rendering/SkeletalMeshModel.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "UObject/Package.h"
@@ -301,6 +303,15 @@ namespace MantleOverlayWornDevCommands
 					for (const FVector3f& Corner : Triangle.Position) { Skin += FVector(Corner); }
 				}
 				UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED skin triangles span %s"), *Skin.ToString());
+				if (const FSkeletalMeshModel* Imported = Mesh->GetImportedModel(); Imported && Imported->LODModels.IsValidIndex(0))
+				{
+					for (const FSkelMeshSection& Section : Imported->LODModels[0].Sections)
+					{
+						UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED section slot=%s triangles=%u disabled=%d"),
+							Mesh->GetMaterials().IsValidIndex(Section.MaterialIndex) ? *Mesh->GetMaterials()[Section.MaterialIndex].MaterialSlotName.ToString() : TEXT("?"),
+							Section.NumTriangles, Section.bDisabled ? 1 : 0);
+					}
+				}
 				const FBox Box = Mesh->GetBounds().GetBox();
 				UE_LOG(LogMantle, Display, TEXT("MANTLE_OVERLAY_PLACED mesh=%s triangles=%d bounds=%s"), *Mesh->GetName(), Triangles.Num(), *Box.ToString());
 				const double Z = Box.Min.Z + Box.GetSize().Z * 0.72 + FCString::Atof(*Args[4]);
