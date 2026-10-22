@@ -2099,10 +2099,8 @@ void FMantlePlacePublishSession::StartLibraryJob()
 	FLibraryJob& Job = LibraryJobs[LibraryIndex];
 	if (Job.Step == FLibraryJob::EStep::Start)
 	{
-		if (LibraryIndex == 0)
-		{
-			bLibraryPublic = VehicleChoice.bPublic;
-		}
+		// Each job starts from the choice; an existing item may keep its own visibility instead (see the Looking answer).
+		bLibraryPublic = VehicleChoice.bPublic;
 		for (const FString& SourcePath : Job.Paths)
 		{
 			Job.ItemId = Source->FindLibraryItem(SourcePath);
@@ -2151,7 +2149,10 @@ void FMantlePlacePublishSession::StartLibraryJob()
 		break;
 	case FLibraryJob::EStep::Patching:
 		Request.Call = EMantleUploadCall::UpdateLibraryItem;
-		Request.Json = FMantleLibraryPublish::MakeVisibilityPatchBody(bLibraryPublic, Job.ThumbnailId);
+		// Keeping the item's visibility: the edit is the card's picture alone (a public body would also restate a rights declaration no one made here).
+		Request.Json = VehicleChoice.bKeepExistingVisibility
+			? FMantleLibraryPublish::MakeThumbnailPatchBody(Job.ThumbnailId)
+			: FMantleLibraryPublish::MakeVisibilityPatchBody(bLibraryPublic, Job.ThumbnailId);
 		break;
 	case FLibraryJob::EStep::Versioning:
 		Request.Call = EMantleUploadCall::CreateLibraryVersion;
@@ -2248,6 +2249,8 @@ void FMantlePlacePublishSession::HandleLibraryResponse(const FMantleApiResult& R
 		{
 			FMantleLibraryPublish::FindVersionWithAsset(Response.Body, Job.AssetId, Job.ExistingVersion);
 		}
+		// An agent's or blocking publish is private only because no one can declare rights: it must not undo a public choice the creator made.
+		bLibraryPublic = FMantleLibraryPublish::ResolveExistingItemPublic(Visibility, VehicleChoice);
 		const bool bVisibilityDiffers = FMantleLibraryPublish::VisibilityDiffers(Visibility, bLibraryPublic);
 		if (bVisibilityDiffers || !Job.ThumbnailId.IsEmpty())
 		{

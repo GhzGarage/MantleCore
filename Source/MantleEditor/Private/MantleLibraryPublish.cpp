@@ -412,6 +412,29 @@ bool FMantleLibraryPublish::VisibilityDiffers(const FString& ItemVisibility, boo
 	return false;
 }
 
+bool FMantleLibraryPublish::ResolveExistingItemPublic(const FString& ItemVisibility, const FMantleVehicleLibraryChoice& Choice)
+{
+	if (Choice.bKeepExistingVisibility)
+	{
+		if (ItemVisibility.Equals(TEXT("public"), ESearchCase::CaseSensitive))
+		{
+			return true;
+		}
+		if (ItemVisibility.Equals(TEXT("private"), ESearchCase::CaseSensitive))
+		{
+			return false;
+		}
+	}
+	return Choice.bPublic;
+}
+
+FString FMantleLibraryPublish::MakeThumbnailPatchBody(const FString& ThumbnailAssetId)
+{
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("thumbnailAssetId"), ThumbnailAssetId);
+	return MantleLibraryPublishPrivate::WriteLibraryObject(Body);
+}
+
 bool FMantleLibraryPublish::IsDelisted(const FString& ItemStatus)
 {
 	return ItemStatus.Equals(TEXT("delisted"), ESearchCase::CaseSensitive);
