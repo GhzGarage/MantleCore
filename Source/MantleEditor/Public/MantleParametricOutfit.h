@@ -12,6 +12,8 @@ class UChaosOutfitAsset;
 class USkeletalMesh;
 class FMantleAvatarContract;
 struct FMantleCosmeticDraft;
+struct FMantleGlbMesh;
+class UMaterialInterface;
 
 struct MANTLEEDITOR_API FMantleOutfitSourceSize
 {
@@ -101,6 +103,10 @@ struct MANTLEEDITOR_API FMantleParametricOutfit
 	 */
 	static bool Prepare(const FMantleCosmeticDraft& Draft, const FMantleAvatarContract& Contract,
 		FMantleCosmeticDraft& OutDraft, TArray<TStrongObjectPtr<UObject>>& KeepAlive, FString& OutError, FString* OutNote = nullptr);
+
+	/** A transient skeletal mesh of all of Mesh's primitives on its own joints, with Materials per glTF material (held by KeepAlive). */
+	static USkeletalMesh* MakeMesh(const FMantleGlbMesh& Mesh, const TArray<UMaterialInterface*>& Materials, TArray<TStrongObjectPtr<UObject>>& KeepAlive,
+		FString& OutError);
 
 	/**
 	 * Converts Draft's Outfit into a rigid accessory (a hat, a shirt tied round the waist): one authored size's kept sections,

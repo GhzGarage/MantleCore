@@ -1414,3 +1414,68 @@ bool FMantleEmoteCheck::ThumbnailSubject(TConstArrayView<uint8> ClipBytes, FMant
 	OutHow = FString::Printf(TEXT("%s, the emote at %.2f s of %.2f s"), *Describe, Time, Read.Clip.GetDuration());
 	return true;
 }
+
+bool FMantleEmoteCheck::GarmentPoser(UAnimSequence* Sequence, USkeletalMesh* Body, TFunction<void(FMantleThumbnailSubject& Shot, float Time)>& OutPoseAt,
+	float& OutDuration, FString& OutError)
+{
+	using namespace MantleEmoteCheckPrivate;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&OutError);
+	if (!Sequence || !Body || !Contract)
+	{
+		OutError = !Contract ? OutError : FString(TEXT("no animation sequence or no body"));
+		return false;
+	}
+	// The clip players' clients get: the panel's emote export of the sequence.
+	const FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Emote, Sequence, TEXT("emote"), Sequence->GetName(), *Contract, EMantleFitSex::Auto);
+	const FMantleCosmeticPackage Package = FMantleCosmeticExport::Build(Draft, *Contract);
+	const FMantleCosmeticUploadAsset* ClipAsset = Package.ClipKey.IsEmpty() ? nullptr : Package.FindAsset(Package.ClipKey);
+	const FMantleAnimClipReadResult Read = ClipAsset ? FMantleAnimClipReader::Read(ClipAsset->Bytes) : FMantleAnimClipReadResult();
+	if (!Read.bSuccess)
+	{
+		OutError = FString::Printf(TEXT("%s does not export as a clip%s"), *Sequence->GetName(), ClipAsset ? *(TEXT(": ") + Read.Error) : TEXT(""));
+		return false;
+	}
+	USkeletalMesh* Driver = FMantleBuiltInMannequin::UEFNMannequin(*Contract, &OutError);
+	FString SkeletonId;
+	FMantleAvatarPreviewPlan Plan;
+	if (!Driver || !FMantleCosmeticExport::AvatarSkeletonId(Body, *Contract, SkeletonId, OutError) || !FMantleAvatarPreviewPlan::ForSkeleton(SkeletonId, true, Plan, OutError))
+	{
+		return false;
+	}
+	const FMantleAvatarPreviewInputs Inputs = FMantleAvatarPreviewInputs::Gather(Plan, Driver, FString(), OutError);
+	FString NodeWhy;
+	if (!Inputs.Retargeter || !UMantlePreviewRetargetAnimInstance::IsRetargetNodeAvailable(&NodeWhy))
+	{
+		OutError = FString::Printf(TEXT("the body cannot be posed (%s%s)"), *FString::Join(Inputs.Missing, TEXT("; ")), *NodeWhy);
+		return false;
+	}
+	const TSharedRef<const FMantleAnimClip> Played = WithoutRoot(Read.Clip, Driver->GetRefSkeleton().GetBoneName(0));
+	const TStrongObjectPtr<UObject> KeepRetargeter(Inputs.Retargeter);
+	const TStrongObjectPtr<USkeletalMesh> KeepDriver(Driver);
+	const FBox Standing = StandingFrame(Body);
+	OutDuration = Read.Clip.GetDuration();
+	OutPoseAt = [KeepRetargeter, KeepDriver, Played, Standing](FMantleThumbnailSubject& Shot, const float Time)
+	{
+		// The whole body: arms and legs leave a garment's own frame once they move.
+		Shot.Frame = Standing;
+		Shot.Pose = [KeepRetargeter, KeepDriver, Played, Time](FPreviewScene& Scene, TConstArrayView<USkeletalMeshComponent*> Components, FBox&)
+		{
+			// A garment subject is the garment, then the body and its face.
+			USkeletalMeshComponent* Garment = Components.IsValidIndex(0) ? Components[0] : nullptr;
+			USkeletalMeshComponent* BodyAndFace[] = { Components.IsValidIndex(1) ? Components[1] : nullptr, Components.IsValidIndex(2) ? Components[2] : nullptr };
+			if (!PoseOnBody(Scene, MakeArrayView(BodyAndFace, BodyAndFace[1] ? 2 : 1), KeepDriver.Get(), KeepRetargeter.Get(), Played, Time) || !Garment)
+			{
+				return;
+			}
+			// The garment follows the body by bone name, as players' clients rebind it onto the wearer's bones.
+			Garment->SetLeaderPoseComponent(BodyAndFace[0], /*bForceUpdate*/ true);
+			Garment->UpdateBounds();
+			Garment->MarkRenderDynamicDataDirty();
+			if (UWorld* World = Scene.GetWorld())
+			{
+				World->SendAllEndOfFrameUpdates();
+			}
+		};
+	};
+	return true;
+}

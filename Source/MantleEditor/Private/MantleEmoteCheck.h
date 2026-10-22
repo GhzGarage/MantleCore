@@ -149,4 +149,13 @@ struct FMantleEmoteCheck
 	 * ClipBytes is the exported clip (what the upload carries). False with a reason when it cannot be posed (no body, no retarget node).
 	 */
 	static bool ThumbnailSubject(TConstArrayView<uint8> ClipBytes, FMantleThumbnailSubject& OutSubject, FString& OutHow, FString& OutError);
+
+	/**
+	 * Mantle.Dev.RenderOutfitFits' moving pictures: OutPoseAt(Shot, Time) sets a garment subject (the garment, then Body and its
+	 * face; FMantleCosmeticThumbnail::GarmentSubject) to Sequence at Time as players see it (the UEFN mannequin plays the exported
+	 * clip, Body copies it through the client's retargeter), the garment following Body by bone name, framed on the whole body.
+	 * OutDuration is the clip's length. False with a reason when it cannot be posed.
+	 */
+	static bool GarmentPoser(UAnimSequence* Sequence, USkeletalMesh* Body, TFunction<void(FMantleThumbnailSubject& Shot, float Time)>& OutPoseAt,
+		float& OutDuration, FString& OutError);
 };
