@@ -16,6 +16,7 @@
 #include "MantleCosmeticThumbnail.h"
 #include "MantleEmoteCheck.h"
 #include "MantleModelThumbnail.h"
+#include "MantleOverlayWorn.h"
 #include "MantleEmoteRetarget.h"
 #include "MantleGarmentFitter.h"
 #include "MantleHairCards.h"

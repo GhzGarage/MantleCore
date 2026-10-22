@@ -152,6 +152,7 @@ namespace MantleCosmeticThumbnailPrivate
 
 FRotator FMantleCosmeticThumbnail::DefaultView(bool bAccessory)
 {
+	using namespace MantleCosmeticThumbnailPrivate;
 	return bAccessory ? AccessoryView : BodyView;
 }
 
