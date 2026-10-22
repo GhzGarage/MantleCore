@@ -326,8 +326,9 @@ int32 FMantleOverlayBake::Bake(TConstArrayView<FTriangle> Triangles, TConstArray
 			for (int32 X = 0; X < Size; ++X)
 			{
 				const float DX = (Height01(X + 1, Y) - Height01(X - 1, Y)) * 0.5f;
+				// Unreal reads green as +V, which runs down the image: a raised edge tilts its normal toward the lower height, so green falls where the height rises downward.
 				const float DY = (Height01(X, Y + 1) - Height01(X, Y - 1)) * 0.5f;
-				const FVector3f N = FVector3f(-DX * Placement.Relief * 4.f, DY * Placement.Relief * 4.f, 1.f).GetSafeNormal();
+				const FVector3f N = FVector3f(-DX * Placement.Relief * 4.f, -DY * Placement.Relief * 4.f, 1.f).GetSafeNormal();
 				(*OutNormal)[Y * Size + X] = FColor(
 					static_cast<uint8>(FMath::RoundToInt((N.X * 0.5f + 0.5f) * 255.f)),
 					static_cast<uint8>(FMath::RoundToInt((N.Y * 0.5f + 0.5f) * 255.f)),
