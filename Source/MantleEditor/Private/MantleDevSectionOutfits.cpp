@@ -34,9 +34,19 @@ DEFINE_LOG_CATEGORY_STATIC(LogMantleSectionOutfits, Log, All);
 namespace MantleDevSectionOutfitsPrivate
 {
 	/** Mesh on Body (none: alone) as the catalog thumbnail draws it, front, side and back, into <Directory>/<Name>_<view>.png. */
-	void Draw(USkeletalMesh* Mesh, USkeletalMesh* Body, const FString& Directory, const FString& Name)
+	void Draw(USkeletalMesh* Mesh, USkeletalMesh* Body, const FString& Directory, const FString& Name, TConstArrayView<USkeletalMesh*> With = {})
 	{
 		FMantleThumbnailSubject Subject = FMantleCosmeticThumbnail::GarmentSubject(Mesh, Body, nullptr);
+		// More pieces worn with it (its trims, the rest of the outfit), drawn in the same scene.
+		for (USkeletalMesh* Other : With)
+		{
+			if (Other)
+			{
+				Subject.SkeletalMeshes.Add(Other);
+				if (Subject.HiddenSlots.Num() > 0) { Subject.HiddenSlots.AddDefaulted(); }
+				if (Subject.MaterialOverrides.Num() > 0) { Subject.MaterialOverrides.AddDefaulted(); }
+			}
+		}
 		for (const TPair<const TCHAR*, float> View : { TPair<const TCHAR*, float>(TEXT("front"), -90.0f), TPair<const TCHAR*, float>(TEXT("side"), 0.0f), TPair<const TCHAR*, float>(TEXT("back"), 90.0f) })
 		{
 			Subject.View = FRotator(-4.0f, View.Value, 0.0f);
@@ -138,10 +148,29 @@ namespace MantleDevSectionOutfitsPrivate
 			UE_LOG(LogMantleSectionOutfits, Error, TEXT("MANTLE_SECTION_OUTFITS failed: %s"), Body ? TEXT("no garment is a skeletal mesh") : TEXT("the body is not a skeletal mesh"));
 			return;
 		}
-		Draw(Body, nullptr, Args[1], TEXT("separated_body"));
-		for (USkeletalMesh* Garment : Garments)
+		// The pieces are drawn on a bare body as the creator made them: [draw-on:<Mesh>] (the pack's body with nothing on),
+		// else the body itself (which may still wear underwear Convert takes off).
+		USkeletalMesh* DrawOn = Body;
+		if (Args.Num() > 3 && Args[3].StartsWith(TEXT("draw-on:")))
 		{
-			Draw(Garment, Body, Args[1], FString::Printf(TEXT("piece_%s_on_body"), *Garment->GetName()));
+			if (USkeletalMesh* Bare = LoadObject<USkeletalMesh>(nullptr, *Args[3].RightChop(8), nullptr, LOAD_NoWarn | LOAD_Quiet))
+			{
+				DrawOn = Bare;
+			}
+		}
+		Draw(DrawOn, nullptr, Args[1], TEXT("separated_body"));
+		TArray<USkeletalMesh*> All;
+		for (int32 Index = 0; Index < Garments.Num(); ++Index)
+		{
+			const TArray<USkeletalMesh*> Its = Trims.IsValidIndex(Index) ? Trims[Index] : TArray<USkeletalMesh*>();
+			Draw(Garments[Index], DrawOn, Args[1], FString::Printf(TEXT("piece_%s_on_body"), *Garments[Index]->GetName()), Its);
+			All.Append(Its);
+		}
+		// Everything offered (and its trims) worn together, to set beside the character's own picture.
+		if (Garments.Num() > 1)
+		{
+			All.Append(TArrayView<USkeletalMesh*>(Garments).RightChop(1));
+			Draw(Garments[0], DrawOn, Args[1], TEXT("all_on_body"), All);
 		}
 		FMantleGarmentOutfitResult Made;
 		FString ConvertJson, Code, Refusal;
