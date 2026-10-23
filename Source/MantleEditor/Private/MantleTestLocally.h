@@ -7,6 +7,7 @@
 #include "MantlePreviewExport.h"
 
 class UWorld;
+struct FMantleCosmeticPackage;
 
 /** Where Test Locally is, as the Mantle Preview panel and the headless command report it. */
 enum class EMantleTestLocallyState : uint8
@@ -84,6 +85,13 @@ public:
 	 */
 	bool RunWithWeapon(const FMantleWeaponToTry& Weapon, FString& OutError, FString& OutNotice);
 
+	/**
+	 * The Cosmetics panel's Test locally for an avatar (chunk 9): the same flow as Run with Avatar, a checked package the creator has
+	 * not uploaded, as the preview player. Its files are cooked locally and bundled as a local draft; no catalog call is made. The level
+	 * is chosen as for a weapon: the open level when it is saved under /Game, else the small test range.
+	 */
+	bool RunWithDraftAvatar(const TSharedRef<const FMantleCosmeticPackage>& Avatar, FString& OutError, FString& OutNotice);
+
 	/** Stops the preview process this editor started (never another Mantle). */
 	void Stop();
 
@@ -139,8 +147,12 @@ public:
 private:
 	FMantleTestLocally() = default;
 
-	/** Run's flow, with the weapons (if any) to bundle. */
-	bool RunInternal(UWorld* World, const TArray<FMantleWeaponToTry>& Weapons, FString& OutError);
+	/** Run's flow, with the weapons (if any) to bundle and the draft avatar (if any) the player wears. */
+	bool RunInternal(UWorld* World, const TArray<FMantleWeaponToTry>& Weapons, FString& OutError,
+		const TSharedPtr<const FMantleCosmeticPackage>& DraftAvatar = nullptr);
+
+	/** The level a weapon or draft avatar test runs in (ChooseWeaponTestLevel), opening or making the test range; null with OutError. */
+	UWorld* PrepareTestLevel(const FString& RangeNotice, FString& OutError, FString& OutNotice);
 
 	/** Back to a clean slate for a new run (the cached client stays). */
 	void ResetRun();

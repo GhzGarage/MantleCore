@@ -1,5 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleTestLocally.h"
+#include "MantleCosmeticPackage.h"
 
 #include "MantlePlaceSecrets.h"
 #include "MantlePreviewExport.h"
@@ -435,24 +436,11 @@ bool FMantleTestLocally::RunWithWeapon(const FMantleWeaponToTry& Weapon, FString
 		return Failed(FMantlePreviewExport::WeaponsNeedNewerClientMessage(), OutError);
 	}
 
-	UWorld* World = MantleTestLocallyPrivate::EditorWorldFor(nullptr);
-	const bool bSaved = !LevelNameOf(World).IsEmpty();
-	const bool bUnsavedChanges = World && World->GetOutermost()->IsDirty();
-	const FString RangePackage = WeaponTestRangePackage();
-	const EWeaponTestLevel Choice = ChooseWeaponTestLevel(bSaved, bUnsavedChanges, FPackageName::DoesPackageExist(RangePackage));
-	if (Choice == EWeaponTestLevel::AskToSave)
+	FString LevelError;
+	UWorld* World = PrepareTestLevel(TEXT("Opened a small test range to try your weapon in."), LevelError, OutNotice);
+	if (!World)
 	{
-		return Failed(WeaponTestRangeAskToSaveMessage(), OutError);
-	}
-	if (Choice != EWeaponTestLevel::UseOpenLevel)
-	{
-		FString RangeError;
-		World = MantleTestLocallyPrivate::OpenWeaponTestRange(Choice == EWeaponTestLevel::CreateTestRange, RangeError);
-		if (!World)
-		{
-			return Failed(RangeError, OutError);
-		}
-		OutNotice = TEXT("Opened a small test range to try your weapon in.");
+		return Failed(LevelError, OutError);
 	}
 
 	// Only the weapon just made: the creator's other builder weapons stay out of the test.
@@ -466,7 +454,74 @@ bool FMantleTestLocally::RunWithWeapon(const FMantleWeaponToTry& Weapon, FString
 	return bOk;
 }
 
-bool FMantleTestLocally::RunInternal(UWorld* World, const TArray<FMantleWeaponToTry>& Weapons, FString& OutError)
+UWorld* FMantleTestLocally::PrepareTestLevel(const FString& RangeNotice, FString& OutError, FString& OutNotice)
+{
+	UWorld* World = MantleTestLocallyPrivate::EditorWorldFor(nullptr);
+	const bool bSaved = !LevelNameOf(World).IsEmpty();
+	const bool bUnsavedChanges = World && World->GetOutermost()->IsDirty();
+	const FString RangePackage = WeaponTestRangePackage();
+	const EWeaponTestLevel Choice = ChooseWeaponTestLevel(bSaved, bUnsavedChanges, FPackageName::DoesPackageExist(RangePackage));
+	if (Choice == EWeaponTestLevel::AskToSave)
+	{
+		OutError = WeaponTestRangeAskToSaveMessage();
+		return nullptr;
+	}
+	if (Choice != EWeaponTestLevel::UseOpenLevel)
+	{
+		World = MantleTestLocallyPrivate::OpenWeaponTestRange(Choice == EWeaponTestLevel::CreateTestRange, OutError);
+		if (!World)
+		{
+			return nullptr;
+		}
+		OutNotice = RangeNotice;
+	}
+	return World;
+}
+
+bool FMantleTestLocally::RunWithDraftAvatar(const TSharedRef<const FMantleCosmeticPackage>& Avatar, FString& OutError, FString& OutNotice)
+{
+	OutError.Reset();
+	OutNotice.Reset();
+	if (bBusy)
+	{
+		OutError = TEXT("Test Locally is still working on the last request; wait for it to finish.");
+		return false;
+	}
+	TGuardValue<bool> BusyGuard(bBusy, true);
+	ResetRun();
+
+	// The client first, so a creator whose Mantle app is missing or too old is told so before any level is opened or made.
+	State = EMantleTestLocallyState::FindingClient;
+	++Revision;
+	FMantlePreviewClientInfo ClientInfo;
+	FString ClientError;
+	if (!EnsureClient(ClientInfo, ClientError))
+	{
+		return Failed(ClientError, OutError);
+	}
+	const FString TooOld = MantleTestLocallyPrivate::ClientTooOld(ClientInfo);
+	if (!TooOld.IsEmpty())
+	{
+		return Failed(TooOld, OutError);
+	}
+
+	FString LevelError;
+	UWorld* World = PrepareTestLevel(TEXT("Opened a small test range to walk around in as your avatar."), LevelError, OutNotice);
+	if (!World)
+	{
+		return Failed(LevelError, OutError);
+	}
+	LogStep(TEXT("draft-avatar"), Avatar->Name);
+	const bool bOk = RunInternal(World, TArray<FMantleWeaponToTry>(), OutError, Avatar);
+	if (bOk && !OutNotice.IsEmpty())
+	{
+		SetNotice(OutNotice, /*bError*/ false);
+	}
+	return bOk;
+}
+
+bool FMantleTestLocally::RunInternal(UWorld* World, const TArray<FMantleWeaponToTry>& Weapons, FString& OutError,
+	const TSharedPtr<const FMantleCosmeticPackage>& DraftAvatar)
 {
 	ResetRun();
 
@@ -510,6 +565,7 @@ bool FMantleTestLocally::RunInternal(UWorld* World, const TArray<FMantleWeaponTo
 	// Export for this client's features (an older client's answer names none), so what it cannot read is left out, not refused.
 	Options.Features = FMantleTargetFeatures::FromNames(ClientInfo.Features);
 	Options.Weapons = Weapons;
+	Options.DraftAvatar = DraftAvatar;
 	FMantlePreviewExportResult Export;
 	FMantlePreviewExport::Run(World, Options, Export);
 	if (Export.bCancelled)

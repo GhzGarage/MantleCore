@@ -9,6 +9,7 @@
 #include "MantlePlaceValidator.h"
 #include "MantleClientFeatures.h"
 #include "MantlePreparedPlaceAssets.h"
+#include "MantleCosmeticPackage.h"
 #include "MantlePreviewAvatarExport.h"
 #include "MantlePreviewLaunch.h"
 #include "MantlePublishCaches.h"
@@ -500,14 +501,14 @@ namespace MantlePreviewExportPrivate
 	}
 
 	/**
-	 * Cooks one upload with the local tool and puts the result in the bundle's Assets/ folder. The only
-	 * thing read back from the tool is its --result file. OutInfo is the result's info object (may be null).
+	 * Cooks one file with the local tool and reads back what it wrote, held to the tool's --result file (the only other thing read
+	 * back). OutInfo is the result's info object (may be null). Name is the file's name for the creator.
 	 */
-	bool PreviewCookAsset(FExportState& State, const FMantlePlaceUpload& Upload, FBundleAsset& OutAsset, TSharedPtr<FJsonObject>& OutInfo, FString& OutError)
+	bool PreviewRunCook(FExportState& State, const FString& Name, const FMantleAssetUploadOptions& UploadOptions, const TArray<uint8>& Bytes,
+		TArray<uint8>& OutCooked, FMantleContentHash& OutHash, TSharedPtr<FJsonObject>& OutInfo, FString& OutError)
 	{
-		const FString& Name = Upload.SourceName;
-		const FString& Kind = Upload.Options.Kind;
-		if (Upload.Bytes.Num() == 0)
+		const FString& Kind = UploadOptions.Kind;
+		if (Bytes.Num() == 0)
 		{
 			OutError = FString::Printf(TEXT("'%s' was prepared with no content."), *Name);
 			return false;
@@ -521,14 +522,14 @@ namespace MantlePreviewExportPrivate
 		FTempFiles Temp;
 		Temp.Files = { InputFile, OutputFile, ResultFile, OptionsFile };
 
-		if (!PreviewWriteBytes(InputFile, Upload.Bytes))
+		if (!PreviewWriteBytes(InputFile, Bytes))
 		{
 			OutError = FString::Printf(TEXT("Could not write the working file for '%s' in %s."), *Name, *State.WorkDir);
 			return false;
 		}
 		FString Arguments = FString::Printf(TEXT("--kind=%s --input=%s --output=%s --result=%s"), *Kind,
 			*MantlePreviewShared::Quoted(MantlePreviewShared::PlatformPath(InputFile)), *MantlePreviewShared::Quoted(MantlePreviewShared::PlatformPath(OutputFile)), *MantlePreviewShared::Quoted(MantlePreviewShared::PlatformPath(ResultFile)));
-		const FString OptionsJson = PreviewCookOptionsJson(Upload.Options);
+		const FString OptionsJson = PreviewCookOptionsJson(UploadOptions);
 		if (!OptionsJson.IsEmpty())
 		{
 			if (!PreviewWriteText(OptionsFile, OptionsJson))
@@ -599,7 +600,8 @@ namespace MantlePreviewExportPrivate
 			return false;
 		}
 
-		TArray<uint8> Cooked;
+		TArray<uint8>& Cooked = OutCooked;
+		Cooked.Reset();
 		if (!FFileHelper::LoadFileToArray(Cooked, *OutputFile) || Cooked.Num() == 0)
 		{
 			OutError = FString::Printf(TEXT("The cook tool said it cooked '%s' but left no output."), *Name);
@@ -610,7 +612,8 @@ namespace MantlePreviewExportPrivate
 			OutError = FString::Printf(TEXT("'%s' cooked to %lld bytes; a preview asset may be at most %lld."), *Name, static_cast<int64>(Cooked.Num()), MaxAssetFileBytes);
 			return false;
 		}
-		const FMantleContentHash Hash = FMantleContentHash::OfBytes(Cooked);
+		OutHash = FMantleContentHash::OfBytes(Cooked);
+		const FMantleContentHash& Hash = OutHash;
 		FString ReportedHash;
 		double ReportedBytes = 0.0;
 		Result->TryGetStringField(TEXT("cookedHash"), ReportedHash);
@@ -618,6 +621,27 @@ namespace MantlePreviewExportPrivate
 		if (!ReportedHash.Equals(Hash.ToString(), ESearchCase::CaseSensitive) || static_cast<int64>(ReportedBytes) != Cooked.Num())
 		{
 			OutError = FString::Printf(TEXT("The cook tool's result for '%s' does not match the file it wrote (%s, %d bytes)."), *Name, *Hash.ToString(), Cooked.Num());
+			return false;
+		}
+
+		OutInfo.Reset();
+		const TSharedPtr<FJsonObject>* Info = nullptr;
+		if (Result->TryGetObjectField(TEXT("info"), Info) && Info)
+		{
+			OutInfo = *Info;
+		}
+		return true;
+	}
+
+	/** Cooks one upload with the local tool (PreviewRunCook) and puts the result in the bundle's Assets/ folder. */
+	bool PreviewCookAsset(FExportState& State, const FMantlePlaceUpload& Upload, FBundleAsset& OutAsset, TSharedPtr<FJsonObject>& OutInfo, FString& OutError)
+	{
+		const FString& Name = Upload.SourceName;
+		const FString& Kind = Upload.Options.Kind;
+		TArray<uint8> Cooked;
+		FMantleContentHash Hash;
+		if (!PreviewRunCook(State, Name, Upload.Options, Upload.Bytes, Cooked, Hash, OutInfo, OutError))
+		{
 			return false;
 		}
 
@@ -642,13 +666,6 @@ namespace MantlePreviewExportPrivate
 			}
 			State.WrittenFiles.Add(OutAsset.File);
 			State.TotalAssetBytes += Cooked.Num();
-		}
-
-		OutInfo.Reset();
-		const TSharedPtr<FJsonObject>* Info = nullptr;
-		if (Result->TryGetObjectField(TEXT("info"), Info) && Info)
-		{
-			OutInfo = *Info;
 		}
 		return true;
 	}
@@ -1342,7 +1359,35 @@ namespace MantlePreviewExportPrivate
 		FString AvatarDescriptor;
 		FString AvatarBuiltin;
 		FString AvatarError;
-		if (MantlePreviewAvatarExport::Write(State.BundleDir, AvatarDescriptor, AvatarBuiltin, AvatarError, /*bUseOwnAvatarWhenUnset*/ BundleWeapons.Num() > 0 || bLevelHasWeapons))
+		if (Options.DraftAvatar.IsValid())
+		{
+			// Chunk 9: the avatar the creator just checked, cooked here like the upload worker would; no catalog call.
+			const FMantleCosmeticPackage& Draft = *Options.DraftAvatar;
+			TArray<MantlePreviewAvatarExport::FCookedDraftAsset> Cooked;
+			for (const FMantleCosmeticUploadAsset& Asset : Draft.Assets)
+			{
+				if (Asset.Key == Draft.ThumbnailKey)
+				{
+					continue;
+				}
+				MantlePreviewAvatarExport::FCookedDraftAsset& Out = Cooked.AddDefaulted_GetRef();
+				Out.Key = Asset.Key;
+				FMantleContentHash Hash;
+				FString CookError;
+				if (!PreviewRunCook(State, Asset.Label.IsEmpty() ? Asset.Key : Asset.Label, Asset.Options, Asset.Bytes, Out.Bytes, Hash, Out.Info, CookError))
+				{
+					Result.Errors.Add(CookError);
+					return false;
+				}
+			}
+			if (!MantlePreviewAvatarExport::WriteLocalDraft(State.BundleDir, Draft, Cooked, AvatarDescriptor, AvatarBuiltin, AvatarError))
+			{
+				Result.Errors.Add(AvatarError);
+				return false;
+			}
+			Result.bHasAvatar = true;
+		}
+		else if (MantlePreviewAvatarExport::Write(State.BundleDir, AvatarDescriptor, AvatarBuiltin, AvatarError, /*bUseOwnAvatarWhenUnset*/ BundleWeapons.Num() > 0 || bLevelHasWeapons))
 		{
 			Result.bHasAvatar = true;
 		}
