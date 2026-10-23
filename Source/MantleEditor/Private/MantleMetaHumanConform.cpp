@@ -355,7 +355,7 @@ namespace MantleMetaHumanConformPrivate
 	{
 		FMantleConvertPart& Part = Context.Parts[Fix.PartIndex];
 		USkeletalMesh* Source = Part.Original.IsValid() ? Part.Original.Get() : Part.Mesh.Get();
-		// A model with no skeleton (a static mesh, or a skeletal mesh with one bone) has its head cut by height, not by bone weights.
+		// A model with no skeleton (a static mesh, or a skeletal mesh with no usable weights) has its head cut by height, not by bone weights.
 		UStaticMesh* StaticSource = Part.bUnrigged ? Part.StaticSource.Get() : nullptr;
 		if (!Source && !StaticSource)
 		{
