@@ -6,6 +6,7 @@
 #include "MantleCosmeticValidation.h"
 #include "Templates/Function.h"
 
+struct FMaterialShadingModelField;
 class UMaterialInstanceConstant;
 class UMaterialInterface;
 
@@ -207,6 +208,14 @@ public:
 	 * colour. A lit material with a real base colour keeps it. Pure (tested).
 	 */
 	static bool BakesEmissiveAsColour(bool bUnlit, TConstArrayView<FColor> BaseColor, TConstArrayView<FColor> Emissive);
+
+	/**
+	 * #167: whether a rendered bake takes a material's Metallic pin as metal, and its Normal pin as a normal map. The Hair shading
+	 * model reuses both (Metallic is Scatter, Normal the strand Tangent), the Eye model Metallic (Curvature): baked as metal they
+	 * turn the colour near-black, so those bake metal 0 and a flat normal. Pure (tested).
+	 */
+	static bool BakesMetallic(const FMaterialShadingModelField& Models);
+	static bool BakesNormal(const FMaterialShadingModelField& Models);
 
 	/** Whether BakeMaterial renders Material (else it samples its textures). */
 	static bool WouldRender(const UMaterialInterface* Material, const FMantleAtlasSettings& Settings);

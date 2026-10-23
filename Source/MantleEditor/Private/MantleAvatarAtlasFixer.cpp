@@ -947,12 +947,23 @@ namespace MantleAvatarAtlasFixerPrivate
 					}
 				}
 			}
-			if (!AtlasBakedProperty(Output, MP_Normal, Request.Size, Pixels.Normal))
+			// #167: the Hair and Eye shading models put other things in the Metallic and Normal pins (Scatter, the strand Tangent,
+			// Curvature): they bake metal 0 and a flat normal, or the hair comes out near-black.
+			const FMaterialShadingModelField Models = Request.Material->GetShadingModels();
+			const bool bBakeNormal = FMantleAvatarAtlasFixer::BakesNormal(Models);
+			const bool bBakeMetal = FMantleAvatarAtlasFixer::BakesMetallic(Models);
+			if (!bBakeNormal || !bBakeMetal)
+			{
+				UE_LOG(LogMantle, Log, TEXT("MANTLE_ATLAS %s: %s shading model, so its %s not baked (metal 0%s)"), *Request.Material->GetName(),
+					Models.HasShadingModel(MSM_Hair) ? TEXT("Hair") : TEXT("Eye"), bBakeNormal ? TEXT("Metallic pin is") : TEXT("Metallic and Normal pins are"),
+					bBakeNormal ? TEXT("") : TEXT(", a flat normal"));
+			}
+			if (!bBakeNormal || !AtlasBakedProperty(Output, MP_Normal, Request.Size, Pixels.Normal))
 			{
 				Pixels.Normal.Init(FColor(128, 128, 255, 255), Request.Size.X * Request.Size.Y);
 			}
 			const bool bRough = AtlasBakedProperty(Output, MP_Roughness, Request.Size, Rough);
-			const bool bMetal = AtlasBakedProperty(Output, MP_Metallic, Request.Size, Metal);
+			const bool bMetal = bBakeMetal && AtlasBakedProperty(Output, MP_Metallic, Request.Size, Metal);
 			const bool bOcclusion = AtlasBakedProperty(Output, MP_AmbientOcclusion, Request.Size, Occlusion);
 			const bool bOpacity = Request.OpacityProperty != MP_MAX && AtlasBakedProperty(Output, Request.OpacityProperty, Request.Size, Opacity);
 			Pixels.Orm.SetNumUninitialized(Request.Size.X * Request.Size.Y);
@@ -2350,6 +2361,16 @@ bool FMantleAvatarAtlasFixer::ApplyToPart(FMantleConvertContext& Context, int32 
 		NewMaterials.Num() == 1 ? TEXT("") : TEXT("s"), *FString::Join(Lines, TEXT(", "))));
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ATLAS %s -> %s slots=%d atlases=%d"), *Source->GetPathName(), *Work->GetPathName(), NewMaterials.Num(), Rewrites.Num());
 	return true;
+}
+
+bool FMantleAvatarAtlasFixer::BakesMetallic(const FMaterialShadingModelField& Models)
+{
+	return !Models.HasShadingModel(MSM_Hair) && !Models.HasShadingModel(MSM_Eye);
+}
+
+bool FMantleAvatarAtlasFixer::BakesNormal(const FMaterialShadingModelField& Models)
+{
+	return !Models.HasShadingModel(MSM_Hair);
 }
 
 void FMantleAvatarAtlasFixer::BakeMaterial(UMaterialInterface* Material, const FBox2f& Rectangle, int32 Size, const FMantleAtlasSettings& Settings,
