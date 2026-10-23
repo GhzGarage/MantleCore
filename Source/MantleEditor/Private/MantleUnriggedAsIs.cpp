@@ -475,7 +475,8 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 			}
 			Offset = Start + FMantleGarmentOutfit::AlignTranslation(Moved, Skin.Positions, Gap);
 		}
-		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG align: feet and middle %s off the body's; %s"), *Start.ToString(),
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG align: model %s, body %s; feet and middle %s off the body's; %s"), *ModelBox.ToString(),
+			*BodyBox.ToString(), *Start.ToString(),
 			Offset.IsZero() ? TEXT("left where it stands") : *FString::Printf(TEXT("moved by %s (gap %.2f cm)"), *Offset.ToString(), Gap));
 		OutResult.Offset = Offset;
 		OutResult.AlignGapCm = Gap;
