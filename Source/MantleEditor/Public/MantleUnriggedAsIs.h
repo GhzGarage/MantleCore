@@ -67,6 +67,9 @@ struct MANTLEEDITOR_API FMantleFingerFix
 	/** Points whose weights changed: kept to their nearest finger. */
 	int32 Changed = 0;
 
+	/** By finger (its root bone, e.g. index_metacarpal_l): how many points had their weights on it dropped for another finger. */
+	TMap<FName, int32> DroppedFrom;
+
 	/** "1200 finger points: 310 on two or more fingers, 340 kept to their nearest finger". */
 	FString ToString() const;
 };

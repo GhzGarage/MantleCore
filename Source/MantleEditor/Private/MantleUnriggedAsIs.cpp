@@ -164,7 +164,12 @@ FString FMantleAutoRigWeights::ToString() const
 
 FString FMantleFingerFix::ToString() const
 {
-	return FString::Printf(TEXT("%d finger points: %d on two or more fingers, %d kept to their nearest finger"), FingerPoints, MixedPoints, Changed);
+	FString Dropped;
+	for (const TPair<FName, int32>& Finger : DroppedFrom)
+	{
+		Dropped += FString::Printf(TEXT("%s%s %d"), Dropped.IsEmpty() ? TEXT("; dropped from ") : TEXT(", "), *Finger.Key.ToString(), Finger.Value);
+	}
+	return FString::Printf(TEXT("%d finger points: %d on two or more fingers, %d kept to their nearest finger%s"), FingerPoints, MixedPoints, Changed, *Dropped);
 }
 
 FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVector3f> Points, const TConstArrayView<FName> Names,
@@ -288,6 +293,7 @@ FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVecto
 		// Its weights on the other fingers dropped, the rest renormalised.
 		const int32 Keep = FingerOf[Nearest];
 		bool bDropped = false;
+		TSet<int32> DroppedHere;
 		float Sum = 0.0f;
 		for (int32 Slot = 0; Slot < Slots; ++Slot)
 		{
@@ -296,6 +302,11 @@ FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVecto
 			if (InOut.Weights[Index] > 0.0f && FingerOf.IsValidIndex(Bone) && FingerOf[Bone] != INDEX_NONE && FingerOf[Bone] != Keep)
 			{
 				InOut.Weights[Index] = 0.0f;
+				if (!bDropped || !DroppedHere.Contains(FingerOf[Bone]))
+				{
+					DroppedHere.Add(FingerOf[Bone]);
+					++Out.DroppedFrom.FindOrAdd(Names[FingerOf[Bone]]);
+				}
 				bDropped = true;
 			}
 			Sum += InOut.Weights[Index];
