@@ -449,39 +449,34 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 		}
 	});
 
-	// On the body: the conform fits the body to the model where it stands, so the gap is small as it is; when it isn't, the model
-	// is first put on the body's feet and middle, then the gap closed (the clothing's own distance from the skin stays).
+	// On the body: the conform fits the body to the model where it stands, so the model stays put (closing the gap would pull it
+	// toward its hair and clothing: RoninGirl rose 6 cm). Only a model whose feet or middle are MisplacedCm or more off the body's
+	// is moved: put on the body's feet and middle, then the gap closed.
 	{
-		double Gap = 0.0;
-		FVector3f Offset = FMantleGarmentOutfit::AlignTranslation(Points, Skin.Positions, Gap);
-		if (Gap > AlignedGapCm)
+		FBox3f ModelBox(ForceInit);
+		FBox3f BodyBox(ForceInit);
+		for (const FVector3f& Point : Points)
 		{
-			FBox3f ModelBox(ForceInit);
-			FBox3f BodyBox(ForceInit);
-			for (const FVector3f& Point : Points)
-			{
-				ModelBox += Point;
-			}
-			for (const FVector3f& Position : Skin.Positions)
-			{
-				BodyBox += Position;
-			}
-			const FVector3f Start(BodyBox.GetCenter().X - ModelBox.GetCenter().X, BodyBox.GetCenter().Y - ModelBox.GetCenter().Y, BodyBox.Min.Z - ModelBox.Min.Z);
+			ModelBox += Point;
+		}
+		for (const FVector3f& Position : Skin.Positions)
+		{
+			BodyBox += Position;
+		}
+		const FVector3f Start(BodyBox.GetCenter().X - ModelBox.GetCenter().X, BodyBox.GetCenter().Y - ModelBox.GetCenter().Y, BodyBox.Min.Z - ModelBox.Min.Z);
+		FVector3f Offset = FVector3f::ZeroVector;
+		double Gap = 0.0;
+		if (Start.GetAbsMax() >= MisplacedCm)
+		{
 			TArray<FVector3f> Moved = Points;
 			for (FVector3f& Point : Moved)
 			{
 				Point += Start;
 			}
-			double MovedGap = 0.0;
-			const FVector3f Refined = FMantleGarmentOutfit::AlignTranslation(Moved, Skin.Positions, MovedGap);
-			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG align: as it stands %s (gap %.2f cm); from the body's feet and middle %s (gap %.2f cm)"),
-				*Offset.ToString(), Gap, *(Start + Refined).ToString(), MovedGap);
-			if (MovedGap < Gap)
-			{
-				Offset = Start + Refined;
-				Gap = MovedGap;
-			}
+			Offset = Start + FMantleGarmentOutfit::AlignTranslation(Moved, Skin.Positions, Gap);
 		}
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG align: feet and middle %s off the body's; %s"), *Start.ToString(),
+			Offset.IsZero() ? TEXT("left where it stands") : *FString::Printf(TEXT("moved by %s (gap %.2f cm)"), *Offset.ToString(), Gap));
 		OutResult.Offset = Offset;
 		OutResult.AlignGapCm = Gap;
 		for (FVector3f& Point : Points)

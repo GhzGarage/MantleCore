@@ -94,8 +94,8 @@ public:
 	/** A point farther than this from the skin is counted (hair, a cape, a skirt's hem): it follows its nearest bone rigidly. */
 	static constexpr double FarCm = 5.0;
 
-	/** The posed model is taken as already on the body when the mean gap from it to the body's skin is under this (cm). */
-	static constexpr double AlignedGapCm = 3.0;
+	/** The posed model is moved onto the body only when its feet or middle are this far or more off the body's (cm). */
+	static constexpr double MisplacedCm = 10.0;
 
 	/** The bone everything above the neck follows. */
 	static const FName HeadBone;
