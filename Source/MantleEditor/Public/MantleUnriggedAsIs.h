@@ -129,9 +129,25 @@ public:
 	/**
 	 * A hand whose finger skin lies farther than this from its finger bones on average (cm) has fingers the fitted MetaHuman hand
 	 * doesn't line up with: bent about joints that aren't inside them they stretch into claws, so they follow the hand rigidly.
-	 * The conform puts the joints within about 2.5 cm of its own skin; a finger is about 2 cm thick.
+	 * A finger's skin lies within about 1 cm of its bones, a glove's within about 2, once the hand is laid on (HandFit*).
 	 */
-	static constexpr double FingerReachCm = 2.5;
+	static constexpr double FingerReachCm = 3.5;
+
+	/**
+	 * The hand fit (MakeSkinnedMesh): the conform's body holds its hands where MetaHuman's A-pose puts them, not inside the model's,
+	 * so each is laid onto the model's hand (FitRigid). Its targets are the model's points within HandFitRadiusCm of the points that
+	 * first took the hand's weights; its sources at most about HandFitSamples of the body hand's skin; HandFitRounds rounds at most.
+	 * A fit that moves the hand joint farther than HandFitMaxCm or turns it more than HandFitMaxDegrees, or lays it no closer, is
+	 * not taken.
+	 */
+	static constexpr double HandFitRadiusCm = 25.0;
+	static constexpr int32 HandFitSamples = 1500;
+	static constexpr int32 HandFitRounds = 60;
+	static constexpr double HandFitMaxCm = 25.0;
+	static constexpr double HandFitMaxDegrees = 60.0;
+
+	/** FitRigid keeps the closest this share of its point pairs each round (the rest are taken for another part of the model). */
+	static constexpr double FitKeepShare = 0.9;
 
 	/** The bone everything above the neck follows. */
 	static const FName HeadBone;
@@ -175,6 +191,23 @@ public:
 		TConstArrayView<FVector3f> Joints, FMantleAutoRigWeights& InOut);
 
 	/**
+	 * Pure (tested): linear blend skinning. Each of Points moves by its weights' blend of each bone's move From -> To (component
+	 * transforms by bone, as Bones index them; NumInfluences (bone, weight) slots per point); bInverse moves it back To -> From by the
+	 * inverse of that same blend. A point with no weight stays.
+	 */
+	static void MoveByWeights(TArrayView<FVector3f> Points, int32 NumInfluences, TConstArrayView<int32> Bones, TConstArrayView<float> Weights,
+		TConstArrayView<FTransform> From, TConstArrayView<FTransform> To, bool bInverse);
+
+	/**
+	 * Pure (tested): the rigid move that best lays Source onto Target, by iterative closest point from Start: each round every
+	 * source point (moved) pairs with its nearest target, the closest FitKeepShare of the pairs give the best turn and shift
+	 * (Horn's closed form), Rounds rounds; the move whose kept pairs came closest is returned. OutStartCm and OutFitCm: the kept
+	 * pairs' mean distance at Start and at the move returned (cm). Start when either is empty.
+	 */
+	static FTransform FitRigid(TConstArrayView<FVector3f> Source, TConstArrayView<FVector3f> Target, const FTransform& Start, int32 Rounds,
+		double& OutStartCm, double& OutFitCm);
+
+	/**
 	 * Appends Mesh's LOD 0 (its imported model: vertices, triangles, weights) to InOut, its bones mapped by name onto Target's raw
 	 * bones; a bone Target lacks (the face's FACIAL_ joints) maps to its nearest ancestor Target has. False with why.
 	 */
@@ -182,7 +215,8 @@ public:
 
 	/**
 	 * The skinned mesh: Posed's geometry (its LOD 0 source, each slot its material) where it stands (the conform fitted Body to it
-	 * there), weighted from Body and Head (TransferWeights; the head cut at Body's head joint), its lowest point then put on the floor
+	 * there), weighted from Body and Head (TransferWeights; the head cut at Body's head joint) with each of Body's hands first laid
+	 * onto the model's (FitRigid; the skeleton's hand joint, its fingers and their skin with it), its lowest point then put on the floor
 	 * with the skeleton (the root's children moved by as much), as a new skeletal mesh Folder/SK_<Name>_AsIs on that reference
 	 * skeleton and Body's skeleton. False with why (OutResult.Created lists what
 	 * was made).

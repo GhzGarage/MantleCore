@@ -255,4 +255,97 @@ bool FMantleUnriggedAsIsFingerTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// The hand fit: the conform's body holds its hand away from the model's, so the body hand (its skin, its joints) is laid onto the
+// model's by a rigid fit, then its skin moved with it by its weights. A synthetic hand, no assets.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleUnriggedAsIsHandFitTest,
+	"Mantle.Editor.UnriggedAsIs.HandFit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleUnriggedAsIsHandFitTest::RunTest(const FString& Parameters)
+{
+	// A hand as surface samples: a palm, three fingers and a thumb; the model's hand sampled apart from the body's, as two meshes are.
+	auto Boxes = [](const int32 Seed, const int32 PerPalm)
+	{
+		FRandomStream Random(Seed);
+		struct FPart { FVector3f Centre; FVector3f Size; int32 Count; };
+		const FPart Parts[] = { { FVector3f(4, 4, 1), FVector3f(8, 9, 2.5f), PerPalm }, { FVector3f(1, 13, 1), FVector3f(1.8f, 9, 1.8f), PerPalm / 3 },
+			{ FVector3f(3.5f, 13, 1), FVector3f(1.8f, 10, 1.8f), PerPalm / 3 }, { FVector3f(6, 12.5f, 1), FVector3f(1.8f, 8, 1.8f), PerPalm / 3 },
+			{ FVector3f(10, 2, 1), FVector3f(5, 2, 2), PerPalm / 4 } };
+		TArray<FVector3f> Out;
+		for (const FPart& Part : Parts)
+		{
+			for (int32 Index = 0; Index < Part.Count; ++Index)
+			{
+				FVector3f Unit(Random.FRandRange(-0.5f, 0.5f), Random.FRandRange(-0.5f, 0.5f), Random.FRandRange(-0.5f, 0.5f));
+				Unit[Random.RandRange(0, 2)] = Random.FRand() < 0.5f ? -0.5f : 0.5f;
+				Out.Add(Part.Centre + Unit * Part.Size);
+			}
+		}
+		return Out;
+	};
+	const TArray<FVector3f> Hand = Boxes(1, 600);
+	const TArray<FVector3f> ModelHand = Boxes(2, 800);
+	// The model's hand: turned 30 degrees about a slanted axis and moved 12 cm, its forearm beside it in the targets.
+	const FTransform Truth(FQuat(FVector(0.3, 0.2, 1.0).GetSafeNormal(), FMath::DegreesToRadians(30.0)), FVector(3.0, -11.0, 4.0));
+	TArray<FVector3f> Model;
+	FVector3f SourceCentre = FVector3f::ZeroVector;
+	FVector3f ModelCentre = FVector3f::ZeroVector;
+	for (const FVector3f& Point : Hand)
+	{
+		SourceCentre += Point;
+	}
+	for (const FVector3f& Point : ModelHand)
+	{
+		Model.Add(FVector3f(Truth.TransformPosition(FVector(Point))));
+		ModelCentre += Model.Last();
+	}
+	SourceCentre /= Hand.Num();
+	ModelCentre /= ModelHand.Num();
+	{
+		FRandomStream Random(3);
+		for (int32 Index = 0; Index < 500; ++Index)
+		{
+			const FVector Forearm(Random.FRandRange(0.5f, 7.5f), Random.FRandRange(-20.0f, -4.0f), Random.FRand() < 0.5f ? -1.5f : 3.5f);
+			Model.Add(FVector3f(Truth.TransformPosition(Forearm)));
+		}
+	}
+
+	double StartCm = 0.0;
+	double FitCm = 0.0;
+	// From the two hands' centres, a little off (the model's points that first take the hand's weights are only its near side).
+	const FTransform Start(FVector(ModelCentre - SourceCentre) + FVector(2.0, 1.0, -2.0));
+	const FTransform Fit = FMantleUnriggedAsIs::FitRigid(Hand, Model, Start, FMantleUnriggedAsIs::HandFitRounds, StartCm, FitCm);
+	TestTrue(FString::Printf(TEXT("the fit lays the hand on (%.3f cm from %.3f cm)"), FitCm, StartCm), FitCm < 0.4 && FitCm < StartCm);
+	double Worst = 0.0;
+	for (const FVector3f& Point : Hand)
+	{
+		Worst = FMath::Max(Worst, FVector::Dist(Fit.TransformPosition(FVector(Point)), Truth.TransformPosition(FVector(Point))));
+	}
+	TestTrue(FString::Printf(TEXT("every point lands where the model's is (worst %.3f cm)"), Worst), Worst < 0.3);
+
+	// Nothing to fit: the start comes back.
+	double Unused = 0.0;
+	const FTransform Same = FMantleUnriggedAsIs::FitRigid(Hand, TArray<FVector3f>(), FTransform(FVector(1.0, 2.0, 3.0)), 10, Unused, Unused);
+	TestTrue(TEXT("no target gives the start back"), Same.GetTranslation().Equals(FVector(1.0, 2.0, 3.0)));
+
+	// The skin with it: a point all on the hand moves with the hand, one on the forearm stays, one at the wrist half way.
+	const TArray<FTransform> Rest = { FTransform::Identity, FTransform(FVector(30.0, 0.0, 0.0)) };
+	const TArray<FTransform> Laid = { FTransform::Identity, FTransform(FQuat(FVector::UpVector, UE_DOUBLE_HALF_PI), FVector(30.0, 0.0, 0.0)) };
+	const TArray<int32> Bones = { 1, 0, 0, 0, 1, 0 };
+	const TArray<float> Weights = { 1.0f, 0.0f, 1.0f, 0.0f, 0.5f, 0.5f };
+	TArray<FVector3f> Skin = { FVector3f(40, 0, 0), FVector3f(15, 2, 0), FVector3f(30, 2, 0) };
+	const TArray<FVector3f> Before = Skin;
+	FMantleUnriggedAsIs::MoveByWeights(Skin, 2, Bones, Weights, Rest, Laid, /*bInverse*/ false);
+	TestTrue(TEXT("the fingertip turns with the hand"), FVector3f::Dist(Skin[0], FVector3f(30, 10, 0)) < 1e-3f);
+	TestTrue(TEXT("the forearm stays"), FVector3f::Dist(Skin[1], Before[1]) < 1e-3f);
+	TestTrue(TEXT("the wrist moves half way"), FVector3f::Dist(Skin[2], FVector3f(29, 1, 0)) < 1e-3f);
+	FMantleUnriggedAsIs::MoveByWeights(Skin, 2, Bones, Weights, Rest, Laid, /*bInverse*/ true);
+	for (int32 Point = 0; Point < Skin.Num(); ++Point)
+	{
+		TestTrue(FString::Printf(TEXT("skin point %d moves back where it was"), Point), FVector3f::Dist(Skin[Point], Before[Point]) < 1e-3f);
+	}
+	return true;
+}
+
 #endif
