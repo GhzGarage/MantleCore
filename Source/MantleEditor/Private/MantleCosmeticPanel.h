@@ -29,6 +29,40 @@ struct FMantlePackMove
 };
 
 /**
+ * The one Avatar door: what the panel sees in the character picked under Avatar, for the "what I see" line and the route
+ * choice (FMantleConvertSection::WhatISee, AsIsGreyedWhy). The kind and bones are read on pick (SeeKind); the rest once
+ * the character is looked at (SeeContext, SeeAssembly).
+ */
+struct FMantleAvatarSight
+{
+	enum class EKind : uint8
+	{
+		None,
+		SkeletalMesh,
+		StaticMesh,
+		CreatorCharacter,
+		Blueprint,
+	};
+	EKind Kind = EKind::None;
+	/** The picked asset's name, at the start of the line. */
+	FString Name;
+	/** A skeletal mesh's reference skeleton bones. */
+	int32 Bones = 0;
+	/** Whether the converter has looked at it (the fix list was made). */
+	bool bLooked = false;
+	/**
+	 * A skeletal mesh whose skeleton doesn't carry it: one bone, or (chunk 4, #161) more bones but no usable skin weights.
+	 * Convert fits it to a MetaHuman body as it does a static mesh.
+	 */
+	bool bUnrigged = false;
+	/** Strip read the body as covered by clothing (its face-only line ticked by default). */
+	bool bCovered = false;
+	/** A MetaHuman Blueprint's clothing meshes and hair pieces. */
+	int32 Clothing = 0;
+	int32 Hair = 0;
+};
+
+/**
  * What the Cosmetics panel's Convert section shows, apart from Slate. Nothing here asks Epic: the
  * build checks the sign-in when Convert runs (FMantleMetaHumanBuild::Preflight), and never opens a login window.
  */
@@ -60,6 +94,38 @@ struct FMantleConvertSection
 
 	/** Whether Convert is on for Fixes: no fixable line that needs confirming (Strip's bare-skin line) is left unticked. */
 	static bool CanConvert(TConstArrayView<FMantleConvertFix> Fixes);
+
+	/** The Avatar door's first look at Selection: its kind, name and bones (null or another kind: None). */
+	static FMantleAvatarSight SeeKind(const UObject* Selection);
+
+	/** What the converter found (MakeContext, then the fix list as Analyze made it, before any tick changes): unrigged, covered. */
+	static void SeeContext(const FMantleConvertContext& Context, TConstArrayView<FMantleConvertFix> Fixes, FMantleAvatarSight& Sight);
+
+	/** A MetaHuman Blueprint's pieces, from its assembly's scan: clothing meshes (one per mesh) and hair. */
+	static void SeeAssembly(const FMantleAssemblyScan& Scan, FMantleAvatarSight& Sight);
+
+	/**
+	 * The "what I see" line under the Avatar picker: "SK_Vampire: Skeletal mesh, 68 bones, rigged. The body is covered by
+	 * clothing." / "Static mesh, no skeleton." / "MetaHuman Creator character." / "MetaHuman Blueprint: body, 3 clothing
+	 * pieces, hair." Empty for nothing picked. Pure (tested).
+	 */
+	static FString WhatISee(const FMantleAvatarSight& Sight);
+
+	/**
+	 * Why As is is greyed for Sight, empty when it isn't: a MetaHuman Creator character ("it's already a MetaHuman"); a
+	 * static mesh or a skeleton with no usable weights ("no rig to keep") until AutoRigsAsIs. Pure (tested).
+	 */
+	static FString AsIsGreyedWhy(const FMantleAvatarSight& Sight);
+
+	/**
+	 * Chunk 7's hook: whether As is can auto-rig a model with no rig (skin it to the MetaHuman body skeleton and keep its
+	 * look). False until that fixer lands; then AsIsGreyedWhy stops greying static meshes and weightless skeletons, and
+	 * FMantleAvatarConverter::MakeContext takes them on the As-is route.
+	 */
+	static bool AutoRigsAsIs();
+
+	/** The route the Avatar door uses: Picked while it is offered (EffectiveRoute) and not greyed for Sight, else Convert. Pure (tested). */
+	static EMantleAvatarRoute DoorRoute(EMantleAvatarRoute Picked, const FMantleAvatarSight& Sight);
 };
 
 /**
@@ -86,7 +152,7 @@ public:
 
 	/**
 	 * Maintainer command Mantle.Dev.ConvertPanelShot <Character> <Directory> [Confirm keys]: opens the panel, picks the
-	 * character under Convert a character, lists its fixes (ticking the Confirm keys, joined by +: -ExecCmds splits on commas), converts it, then
+	 * character under Avatar (the one door), lists its fixes (ticking the Confirm keys, joined by +: -ExecCmds splits on commas), converts it, then
 	 * chooses Use on its first clothing piece that can be an Outfit. After each step the Convert section (and, after Use,
 	 * the whole panel) is rendered offscreen into <Directory>/<Character>_{list,converted,used,panel}.png. Nothing uploads.
 	 */
@@ -244,13 +310,25 @@ private:
 	void RememberPreviewPick() const;
 
 	/**
-	 * #610, the Convert section: a character (a skeletal mesh, or a MetaHuman Creator character's Blueprint or body)
-	 * analysed into its fix list (FMantleAvatarConverter::Analyze) with a checkbox per fix, converted into new assets
-	 * under its Converted folder (Convert), and each converted part offered as a ready draft (LoadConvertedPart). #625: the
-	 * route picker only while As-is uploads are allowed (FMantleConvertSection::ShowsRoutePicker), else Convert alone; the
-	 * cloud note by the Convert button; Convert runs behind a progress dialog (it blocks, as Epic's cloud calls do).
+	 * #610, the Convert section, under Avatar only (the one door): the character picked in the Avatar picker (a skeletal
+	 * mesh, a static mesh, a MetaHuman Creator character or a MetaHuman Blueprint: PickAvatar), the "what I see" line, then
+	 * "How should it go up?" (Convert pre-selected; As is beside it only while As-is uploads are allowed,
+	 * FMantleConvertSection::ShowsRoutePicker, greyed with why for a character it can't take). It is analysed into its fix
+	 * list (FMantleAvatarConverter::Analyze) with a checkbox per fix, converted into new assets under its Converted folder
+	 * (Convert), and each converted part offered as a ready draft (LoadConvertedPart). The cloud note by the Convert
+	 * button; Convert runs behind a progress dialog (it blocks, as Epic's cloud calls do).
 	 */
 	TSharedRef<SWidget> MakeConvertSection();
+
+	/**
+	 * The Avatar picker's choice: the character Convert works on (ConvertSource), with Convert pre-selected again. A skeletal
+	 * mesh is also the draft's asset, as before (a body converted earlier checks and uploads straight away); any other kind
+	 * leaves the draft empty until Use.
+	 */
+	void PickAvatar(UObject* Character);
+
+	/** The route the door uses now (FMantleConvertSection::DoorRoute of the pick and AvatarSight). */
+	EMantleAvatarRoute DoorRoute() const;
 	FReply OnAnalyzeConvert();
 	FReply OnRunConvert();
 	void RefreshConvertRows();
@@ -268,12 +346,16 @@ private:
 	 */
 	void UseConvertGarment(int32 GarmentIndex);
 
-	/** What Convert... analyses: picked in the section, else the draft's asset. */
+	/** What Convert... analyses: picked at the Avatar door, else the draft's asset. */
 	UObject* GetConvertSelection() const;
 
 	TWeakObjectPtr<UObject> ConvertSource;
-	/** #625: the route picked while the section offers more than Convert (FMantleConvertSection::EffectiveRoute). */
+	/** #625: the route picked while the section offers more than Convert (DoorRoute). */
 	EMantleAvatarRoute ConvertRoute = EMantleAvatarRoute::Convert;
+	/** What the door sees in ConvertSource, for the "what I see" line and As is greyed. */
+	FMantleAvatarSight AvatarSight;
+	/** The whole section (the line, the question, the rows), for Mantle.Dev.ConvertPanelShot's pictures. */
+	TSharedPtr<SVerticalBox> ConvertSectionBox;
 	TSharedPtr<FMantleConvertContext> ConvertContext;
 	TArray<FMantleConvertFix> ConvertFixes;
 	TOptional<FMantleConvertResult> ConvertResult;

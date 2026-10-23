@@ -48,6 +48,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "DesktopPlatformModule.h"
+#include "Engine/Blueprint.h"
 #include "Engine/SkeletalMesh.h"
 #include "IDesktopPlatform.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -118,7 +119,7 @@ namespace MantleCosmeticPanelPrivate
 		case EMantleCosmeticClass::Accessory:
 			return LOCTEXT("AccessoryHelp", "A static mesh with one material. Its pivot is where it attaches to the socket.");
 		case EMantleCosmeticClass::Avatar:
-			return LOCTEXT("AvatarHelp", "Pick your character under Convert a character and choose Convert. Mantle builds it as a MetaHuman at Mantle's default height and checks whether the body and face are ready. Choose Use, then Upload to Mantle to add it to the catalog. The upload carries supported body and face geometry, required rig data, and a presentation thumbnail; the game supplies appearance materials and textures.");
+			return LOCTEXT("AvatarHelp", "Pick your character below: a skeletal mesh, a static mesh, a MetaHuman Creator character or a MetaHuman Blueprint, and choose Convert. Mantle builds it as a MetaHuman at Mantle's default height and checks whether the body and face are ready. Choose Use, then Upload to Mantle to add it to the catalog. The upload carries supported body and face geometry, required rig data, and a presentation thumbnail; the game supplies appearance materials and textures.");
 		case EMantleCosmeticClass::Emote:
 			return LOCTEXT("EmoteHelp", "An animation on the UEFN mannequin, MetaHuman, UE5 Mannequin or UE4 Mannequin skeleton, at most 10 seconds. MetaHuman, UE5 Mannequin and UE4 Mannequin clips are retargeted onto the UEFN mannequin when they upload.");
 		case EMantleCosmeticClass::Overlay:
@@ -557,14 +558,14 @@ void SMantleCosmeticPanel::Construct(const FArguments& InArgs)
 						TAttribute<EVisibility>::CreateLambda([this] { return Draft.Class == EMantleCosmeticClass::Garment ? EVisibility::Visible : EVisibility::Collapsed; }))
 				]
 
-				// #610: make a character upload-ready, then take its parts from here.
+				// #610: make a character upload-ready, then take its parts from here. Under Avatar only (the one door): clothing
+				// and hair pick their own meshes, as before.
 				+ SVerticalBox::Slot().AutoHeight()
 				[
-					MakeSection(LOCTEXT("ConvertTitle", "Convert a character"), MakeConvertSection(),
+					MakeSection(LOCTEXT("ConvertTitle", "Character"), MakeConvertSection(),
 						TAttribute<EVisibility>::CreateLambda([this]
 						{
-							return Draft.Class == EMantleCosmeticClass::Avatar || Draft.Class == EMantleCosmeticClass::Garment
-								|| Draft.Class == EMantleCosmeticClass::Hair ? EVisibility::Visible : EVisibility::Collapsed;
+							return Draft.Class == EMantleCosmeticClass::Avatar ? EVisibility::Visible : EVisibility::Collapsed;
 						}))
 				]
 
@@ -1161,7 +1162,8 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeSourcePicker()
 	{
 	case EMantleCosmeticClass::Garment:
 		Allowed = UObject::StaticClass(); break;
-	case EMantleCosmeticClass::Avatar: Allowed = USkeletalMesh::StaticClass(); break;
+	// The one door: any character (IsAllowedSource), which Convert takes (PickAvatar).
+	case EMantleCosmeticClass::Avatar: Allowed = UObject::StaticClass(); break;
 	case EMantleCosmeticClass::Accessory: Allowed = UStaticMesh::StaticClass(); break;
 	case EMantleCosmeticClass::Emote: Allowed = UAnimSequence::StaticClass(); break;
 	case EMantleCosmeticClass::Overlay: Allowed = UTexture2D::StaticClass(); break;
@@ -1172,12 +1174,35 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeSourcePicker()
 		.AllowClear(true)
 		.DisplayThumbnail(false)
 		.OnShouldFilterAsset_Lambda([this](const FAssetData& Asset) { return !IsAllowedSource(Asset); })
-		.ObjectPath_Lambda([this] { return Draft.Source.IsValid() ? Draft.Source->GetPathName() : FString(); })
-		.OnObjectChanged_Lambda([this](const FAssetData& Asset) { SetSource(Asset.GetAsset()); });
+		.ObjectPath_Lambda([this]
+		{
+			// Avatar shows the character picked, not the converted body Use put in the draft.
+			const UObject* Shown = Draft.Class == EMantleCosmeticClass::Avatar ? GetConvertSelection() : Draft.Source.Get();
+			return Shown ? Shown->GetPathName() : FString();
+		})
+		.OnObjectChanged_Lambda([this](const FAssetData& Asset)
+		{
+			if (Draft.Class == EMantleCosmeticClass::Avatar)
+			{
+				PickAvatar(Asset.GetAsset());
+			}
+			else
+			{
+				SetSource(Asset.GetAsset());
+			}
+		});
 }
 
 bool SMantleCosmeticPanel::IsAllowedSource(const FAssetData& Asset) const
 {
+	if (Draft.Class == EMantleCosmeticClass::Avatar)
+	{
+		// #625: a MetaHuman Creator character (an Epic preset or the creator's own), built as it is. #776: a static mesh, a
+		// model with no skeleton (fitted to a MetaHuman body). A Blueprint: a MetaHuman Creator assembly's.
+		const FString ClassName = Asset.AssetClassPath.GetAssetName().ToString();
+		return ClassName.Equals(TEXT("SkeletalMesh"), ESearchCase::CaseSensitive) || ClassName.Equals(TEXT("StaticMesh"), ESearchCase::CaseSensitive)
+			|| ClassName.Equals(TEXT("MetaHumanCharacter"), ESearchCase::CaseSensitive) || ClassName.Equals(TEXT("Blueprint"), ESearchCase::CaseSensitive);
+	}
 	if (Draft.Class == EMantleCosmeticClass::Garment)
 	{
 		return Asset.AssetClassPath == USkeletalMesh::StaticClass()->GetClassPathName()
@@ -2059,7 +2084,7 @@ bool SMantleCosmeticPanel::BuildPackage()
 	Progress.MakeDialogDelayed(0.5f);
 	Progress.EnterProgressFrame(1.0f);
 	if (Draft.Class==EMantleCosmeticClass::Avatar)
-		Draft.AvatarPublicationMode=FMantleConvertSection::EffectiveRoute(ConvertRoute)==EMantleAvatarRoute::AsIs ? TEXT("as_is") : TEXT("converted");
+		Draft.AvatarPublicationMode=DoorRoute()==EMantleAvatarRoute::AsIs ? TEXT("as_is") : TEXT("converted");
 	else Draft.AvatarPublicationMode.Empty();
 	Package = FMantleCosmeticExport::Build(Draft, *Contract);
 	for (const FString& Note : Package->Notes)
@@ -3660,9 +3685,163 @@ bool FMantleConvertSection::CanConvert(TConstArrayView<FMantleConvertFix> Fixes)
 	});
 }
 
+FMantleAvatarSight FMantleConvertSection::SeeKind(const UObject* Selection)
+{
+	FMantleAvatarSight Sight;
+	if (!Selection)
+	{
+		return Sight;
+	}
+	Sight.Name = Selection->GetName();
+	if (const USkeletalMesh* Mesh = Cast<USkeletalMesh>(Selection))
+	{
+		Sight.Kind = FMantleAvatarSight::EKind::SkeletalMesh;
+		Sight.Bones = Mesh->GetRefSkeleton().GetRawBoneNum();
+		// One bone carries nothing, as MakeContext reads it. Chunk 4 (#161) adds the weights rule there
+		// (FMantleUnriggedBody::HasNoUsableWeights), which SeeContext takes once Convert has looked.
+		Sight.bUnrigged = Sight.Bones == 1;
+	}
+	else if (Selection->IsA<UStaticMesh>())
+	{
+		Sight.Kind = FMantleAvatarSight::EKind::StaticMesh;
+	}
+	else if (Selection->IsA<UMetaHumanCharacter>())
+	{
+		Sight.Kind = FMantleAvatarSight::EKind::CreatorCharacter;
+	}
+	else if (Selection->IsA<UBlueprint>())
+	{
+		Sight.Kind = FMantleAvatarSight::EKind::Blueprint;
+	}
+	else
+	{
+		Sight.Name.Reset();
+	}
+	return Sight;
+}
+
+void FMantleConvertSection::SeeContext(const FMantleConvertContext& Context, TConstArrayView<FMantleConvertFix> Fixes, FMantleAvatarSight& Sight)
+{
+	Sight.bLooked = true;
+	// The As-is route never marks a part unrigged: keep what the pick (or an earlier Convert look) saw.
+	if (Context.Route == EMantleAvatarRoute::Convert && Context.Parts.IsValidIndex(0) && Sight.Kind == FMantleAvatarSight::EKind::SkeletalMesh)
+	{
+		Sight.bUnrigged = Context.Parts[0].bUnrigged;
+	}
+	// Strip ticks the face-only line by default when the body reads as covered (IsCovered). An assembled MetaHuman's line
+	// means something else (MetaHuman Creator can't fit its body), so a Blueprint never reads as covered here.
+	Sight.bCovered = Sight.Kind != FMantleAvatarSight::EKind::Blueprint && Fixes.ContainsByPredicate([](const FMantleConvertFix& Fix)
+	{
+		return Fix.FixerId == MantleAvatarFixerIds::Strip && Fix.PartIndex == 0 && Fix.Kind == FMantleAvatarStripFixer::KindFaceOnly && Fix.bEnabled;
+	});
+}
+
+void FMantleConvertSection::SeeAssembly(const FMantleAssemblyScan& Scan, FMantleAvatarSight& Sight)
+{
+	TSet<const USkeletalMesh*> Meshes;
+	for (const FMantleAssemblyMesh& Garment : Scan.Garments)
+	{
+		Meshes.Add(Garment.Mesh.Get());
+	}
+	Sight.Clothing = Meshes.Num();
+	Sight.Hair = Scan.Hair.Num();
+}
+
+FString FMantleConvertSection::WhatISee(const FMantleAvatarSight& Sight)
+{
+	FString Seen;
+	switch (Sight.Kind)
+	{
+	case FMantleAvatarSight::EKind::SkeletalMesh:
+		if (!Sight.bUnrigged)
+		{
+			Seen = FString::Printf(TEXT("Skeletal mesh, %d bones%s."), Sight.Bones, Sight.bLooked ? TEXT(", rigged") : TEXT(""));
+		}
+		else if (Sight.Bones <= 1)
+		{
+			Seen = TEXT("Skeletal mesh with one bone, no rig: we'll fit it to a MetaHuman body.");
+		}
+		else
+		{
+			// Chunk 4's (#161) case, in its words (FMantleUnriggedBody::NoUsableWeightsMessage).
+			Seen = FString::Printf(TEXT("Skeletal mesh, %d bones. Skeleton found, but no usable weights: we'll fit it to a MetaHuman body."), Sight.Bones);
+		}
+		break;
+	case FMantleAvatarSight::EKind::StaticMesh:
+		Seen = TEXT("Static mesh, no skeleton.");
+		break;
+	case FMantleAvatarSight::EKind::CreatorCharacter:
+		Seen = TEXT("MetaHuman Creator character.");
+		break;
+	case FMantleAvatarSight::EKind::Blueprint:
+		if (!Sight.bLooked)
+		{
+			Seen = TEXT("MetaHuman Blueprint.");
+			break;
+		}
+		{
+			TArray<FString> Pieces = { TEXT("body") };
+			if (Sight.Clothing > 0)
+			{
+				Pieces.Add(FString::Printf(TEXT("%d clothing piece%s"), Sight.Clothing, Sight.Clothing == 1 ? TEXT("") : TEXT("s")));
+			}
+			if (Sight.Hair > 0)
+			{
+				Pieces.Add(TEXT("hair"));
+			}
+			Seen = FString::Printf(TEXT("MetaHuman Blueprint: %s."), *FString::Join(Pieces, TEXT(", ")));
+		}
+		break;
+	default:
+		return FString();
+	}
+	if (Sight.bCovered)
+	{
+		Seen += TEXT(" The body is covered by clothing.");
+	}
+	return Sight.Name.IsEmpty() ? Seen : FString::Printf(TEXT("%s: %s"), *Sight.Name, *Seen);
+}
+
+bool FMantleConvertSection::AutoRigsAsIs()
+{
+	// Chunk 7 (auto-rig for As is) turns this on with its fixer.
+	return false;
+}
+
+FString FMantleConvertSection::AsIsGreyedWhy(const FMantleAvatarSight& Sight)
+{
+	if (Sight.Kind == FMantleAvatarSight::EKind::CreatorCharacter)
+	{
+		return TEXT("it's already a MetaHuman");
+	}
+	const bool bNoRig = Sight.Kind == FMantleAvatarSight::EKind::StaticMesh || (Sight.Kind == FMantleAvatarSight::EKind::SkeletalMesh && Sight.bUnrigged);
+	return bNoRig && !AutoRigsAsIs() ? FString(TEXT("no rig to keep")) : FString();
+}
+
+EMantleAvatarRoute FMantleConvertSection::DoorRoute(const EMantleAvatarRoute Picked, const FMantleAvatarSight& Sight)
+{
+	const EMantleAvatarRoute Route = EffectiveRoute(Picked);
+	return Route == EMantleAvatarRoute::AsIs && !AsIsGreyedWhy(Sight).IsEmpty() ? EMantleAvatarRoute::Convert : Route;
+}
+
 UObject* SMantleCosmeticPanel::GetConvertSelection() const
 {
 	return ConvertSource.IsValid() ? ConvertSource.Get() : Draft.Source.Get();
+}
+
+EMantleAvatarRoute SMantleCosmeticPanel::DoorRoute() const
+{
+	return FMantleConvertSection::DoorRoute(ConvertRoute, AvatarSight);
+}
+
+void SMantleCosmeticPanel::PickAvatar(UObject* Character)
+{
+	ConvertSource = Character;
+	AvatarSight = FMantleConvertSection::SeeKind(Character);
+	// Convert is the pre-selected choice for every character.
+	ConvertRoute = EMantleAvatarRoute::Convert;
+	SetSource(Cast<USkeletalMesh>(Character));
+	ResetConvert();
 }
 
 void SMantleCosmeticPanel::ResetConvert()
@@ -3679,16 +3858,15 @@ void SMantleCosmeticPanel::ResetConvert()
 TSharedRef<SWidget> SMantleCosmeticPanel::MakeConvertSection()
 {
 	using namespace MantleCosmeticPanelPrivate;
-	// #625: a route button, shown only while As-is uploads are allowed; picking another route forgets the fix list.
+	// #625: a route button; As is shows only while As-is uploads are allowed, greyed with why for a character it can't take.
+	// Picking another route forgets the fix list.
 	auto RouteButton = [this](const EMantleAvatarRoute Route, const FText& Label, const FText& Tooltip)
 	{
 		return SNew(SCheckBox)
 			.Style(&FAppStyle::Get(), "RadioButton")
 			.ToolTipText(Tooltip)
-			.IsChecked_Lambda([this, Route]
-			{
-				return FMantleConvertSection::EffectiveRoute(ConvertRoute) == Route ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-			})
+			.IsEnabled_Lambda([this, Route] { return Route != EMantleAvatarRoute::AsIs || FMantleConvertSection::AsIsGreyedWhy(AvatarSight).IsEmpty(); })
+			.IsChecked_Lambda([this, Route] { return DoorRoute() == Route ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 			.OnCheckStateChanged_Lambda([this, Route](const ECheckBoxState State)
 			{
 				if (State == ECheckBoxState::Checked && ConvertRoute != Route)
@@ -3701,62 +3879,74 @@ TSharedRef<SWidget> SMantleCosmeticPanel::MakeConvertSection()
 				SNew(STextBlock).Text(Label)
 			];
 	};
-	return SNew(SVerticalBox)
+	return SAssignNew(ConvertSectionBox, SVerticalBox)
+		// What the plugin sees in the character picked under Avatar (PickAvatar); the pack's rows come under the question.
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
+		[
+			SNew(STextBlock)
+			.AutoWrapText(true)
+			.Visibility_Lambda([this] { return AvatarSight.Kind == FMantleAvatarSight::EKind::None ? EVisibility::Collapsed : EVisibility::Visible; })
+			.Text_Lambda([this] { return FText::FromString(FMantleConvertSection::WhatISee(AvatarSight)); })
+		]
+		// After Use: the converted body the upload takes, which the picker above doesn't show.
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
 		[
 			SNew(STextBlock)
 			.AutoWrapText(true)
 			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
-			.Text(LOCTEXT("ConvertHelp", "A character from Fab, Sketchfab or MetaHuman Creator that the checks refuse: pick its skeletal mesh, a MetaHuman Creator character (an Epic preset or your own; built as it is at the default height), or a built character's Blueprint or body, and choose Convert... to see what the plugin would fix. Nothing of yours is changed: the fixes write new assets to a Converted folder next to it, and each converted part comes back here, ready to preview and upload."))
+			.Visibility_Lambda([this] { return Draft.Source.IsValid() && Draft.Source.Get() != GetConvertSelection() ? EVisibility::Visible : EVisibility::Collapsed; })
+			.Text_Lambda([this]
+			{
+				return FText::Format(LOCTEXT("ConvertUploads", "Upload takes {0}."), FText::FromString(Draft.Source.IsValid() ? Draft.Source->GetName() : FString()));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 4)
+		[
+			SNew(STextBlock).Text(LOCTEXT("ConvertQuestion", "How should it go up?"))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
 		[
 			SNew(SHorizontalBox)
-			.Visibility_Lambda([] { return FMantleConvertSection::ShowsRoutePicker() ? EVisibility::Visible : EVisibility::Collapsed; })
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 12, 0)
 			[
-				RouteButton(EMantleAvatarRoute::Convert, LOCTEXT("ConvertRouteConvert", "Convert"),
+				RouteButton(EMantleAvatarRoute::Convert, LOCTEXT("ConvertRouteConvert", "Convert to MetaHuman"),
 					LOCTEXT("ConvertRouteConvertTooltip", "The avatar becomes a MetaHuman: it wears clothing and takes the avatar options."))
 			]
-			+ SHorizontalBox::Slot().AutoWidth()
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
 			[
-				RouteButton(EMantleAvatarRoute::AsIs, LOCTEXT("ConvertRouteAsIs", "As-is"),
-					LOCTEXT("ConvertRouteAsIsTooltip", "What you see is what you get: a supported skeleton and Mantle's limits, no customisation, no clothing."))
+				SNew(SBox)
+				.Visibility_Lambda([] { return FMantleConvertSection::ShowsRoutePicker() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					RouteButton(EMantleAvatarRoute::AsIs, LOCTEXT("ConvertRouteAsIs", "As is"),
+						LOCTEXT("ConvertRouteAsIsTooltip", "What you see is what you get: a supported skeleton and Mantle's limits, no customisation, no clothing."))
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.Visibility_Lambda([this]
+				{
+					return FMantleConvertSection::ShowsRoutePicker() && !FMantleConvertSection::AsIsGreyedWhy(AvatarSight).IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed;
+				})
+				.Text_Lambda([this] { return FText::Format(LOCTEXT("ConvertAsIsGreyed", "({0})"), FText::FromString(FMantleConvertSection::AsIsGreyedWhy(AvatarSight))); })
 			]
 		]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
 			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 8, 0)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(0, 0, 8, 0)
 			[
-				SNew(SObjectPropertyEntryBox)
-				.AllowedClass(UObject::StaticClass())
-				.AllowClear(true)
-				.DisplayThumbnail(false)
-				.OnShouldFilterAsset_Lambda([](const FAssetData& Asset)
-				{
-					const FString ClassName = Asset.AssetClassPath.GetAssetName().ToString();
-					// #625: and a MetaHuman Creator character (an Epic preset or the creator's own), built as it is.
-					// #776: and a static mesh, a model with no skeleton (fitted to a MetaHuman body).
-					return !ClassName.Equals(TEXT("SkeletalMesh"), ESearchCase::CaseSensitive) && !ClassName.Equals(TEXT("Blueprint"), ESearchCase::CaseSensitive)
-						&& !ClassName.Equals(TEXT("MetaHumanCharacter"), ESearchCase::CaseSensitive) && !ClassName.Equals(TEXT("StaticMesh"), ESearchCase::CaseSensitive);
-				})
-				.ObjectPath_Lambda([this]
-				{
-					const UObject* Selection = GetConvertSelection();
-					return Selection ? Selection->GetPathName() : FString();
-				})
-				.OnObjectChanged_Lambda([this](const FAssetData& Asset)
-				{
-					ConvertSource = Asset.GetAsset();
-					ResetConvert();
-				})
+				SNew(STextBlock)
+				.AutoWrapText(true)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.Text(LOCTEXT("ConvertHelp", "Nothing of yours is changed: the plugin lists what it would do first, then writes new assets to a Converted folder next to it, and each part comes back here, ready to preview and upload."))
 			]
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
 				SNew(SButton)
 				.IsEnabled_Lambda([this] { return GetConvertSelection() != nullptr && ContractError.IsEmpty() && !IsRunning(); })
-				.Text(LOCTEXT("ConvertAnalyze", "Convert..."))
+				.Text_Lambda([this] { return DoorRoute() == EMantleAvatarRoute::AsIs ? LOCTEXT("ConvertAnalyzeAsIs", "As is...") : LOCTEXT("ConvertAnalyze", "Convert..."); })
 				.ToolTipText(LOCTEXT("ConvertAnalyzeTooltip", "List what the plugin would fix to make this character upload-ready. Nothing is written until you choose Convert."))
 				.OnClicked(this, &SMantleCosmeticPanel::OnAnalyzeConvert)
 			]
@@ -3783,16 +3973,19 @@ FReply SMantleCosmeticPanel::OnAnalyzeConvert()
 	{
 		return FReply::Handled();
 	}
+	if (AvatarSight.Kind == FMantleAvatarSight::EKind::None)
+	{
+		AvatarSight = FMantleConvertSection::SeeKind(Selection);
+	}
 	// #55: what the pack holds beside a character's skeletal mesh converted as an avatar, as rows the creator changes.
 	ConvertReview.Reset();
 	USkeletalMesh* Picked = Cast<USkeletalMesh>(Selection);
-	const bool bAvatar = Selection != Draft.Source.Get() || Draft.Slot.IsEmpty() || Draft.Slot == TEXT("avatar");
 	// Not a MetaHuman Creator assembly (its folder scans as one, as MakeContext checks).
 	const FString AssemblyFolder = Picked ? FMantleAvatarAssemblyFixer::AssemblyFolderOf(Picked) : FString();
 	FMantleAssemblyScan AssemblyScan;
 	FString ScanError;
 	const bool bAssembly = !AssemblyFolder.IsEmpty() && FMantleAvatarAssemblyFixer::Scan(AssemblyFolder, AssemblyScan, ScanError);
-	if (Picked && bAvatar && FMantleConvertSection::EffectiveRoute(ConvertRoute) == EMantleAvatarRoute::Convert && Picked->GetRefSkeleton().GetRawBoneNum() > 1 && !bAssembly)
+	if (Picked && DoorRoute() == EMantleAvatarRoute::Convert && Picked->GetRefSkeleton().GetRawBoneNum() > 1 && !bAssembly)
 	{
 		FScopedSlowTask Progress(1.0f, LOCTEXT("ConvertScanning", "Looking at what's in the pack..."));
 		Progress.MakeDialogDelayed(0.5f);
@@ -3819,15 +4012,12 @@ void SMantleCosmeticPanel::AnalyzeConvertBody()
 	{
 		return;
 	}
-	// The slot the panel shows applies to the panel's own asset; anything else converts for the slot it has (or as an avatar).
+	// The one door is under Avatar: whatever was picked converts for the avatar slot (a Blueprint as its whole assembly).
 	FMantleConvertOptions Options;
-	if (Selection == Draft.Source.Get())
-	{
-		Options.Slot = Draft.Slot;
-	}
-	// #625: Convert unless As-is is allowed and picked. The fix list never asks Epic (MHBuild's line says the sign-in is
-	// checked when Convert runs).
-	Options.Route = FMantleConvertSection::EffectiveRoute(ConvertRoute);
+	Options.Slot = TEXT("avatar");
+	// #625: Convert unless As-is is allowed, picked and not greyed. The fix list never asks Epic (MHBuild's line says the
+	// sign-in is checked when Convert runs).
+	Options.Route = DoorRoute();
 	// #55: the body the review's row chose, with the clothing its rows take.
 	const int32 BodyMesh = ConvertReview.IsValid() ? ConvertReview->BodyMesh() : INDEX_NONE;
 	if (ConvertReview.IsValid() && ConvertReview->Meshes.IsValidIndex(BodyMesh) && ConvertReview->Meshes[BodyMesh].IsValid())
@@ -3853,6 +4043,26 @@ void SMantleCosmeticPanel::AnalyzeConvertBody()
 			return;
 		}
 		ConvertFixes = FMantleAvatarConverter::Analyze(*ConvertContext);
+	}
+	// The "what I see" line: what the converter found, before the creator changes a tick. With the pack's rows it looked at
+	// the body row's mesh, not the one picked; the rows say which body that is.
+	if (Selection == GetConvertSelection())
+	{
+		FMantleConvertSection::SeeContext(*ConvertContext, ConvertFixes, AvatarSight);
+	}
+	else
+	{
+		AvatarSight.bLooked = true;
+	}
+	if (AvatarSight.Kind == FMantleAvatarSight::EKind::Blueprint)
+	{
+		FMantleAssemblyScan Scan;
+		FString ScanError;
+		const FString Folder = FMantleAvatarAssemblyFixer::AssemblyFolderOf(GetConvertSelection());
+		if (!Folder.IsEmpty() && FMantleAvatarAssemblyFixer::Scan(Folder, Scan, ScanError))
+		{
+			FMantleConvertSection::SeeAssembly(Scan, AvatarSight);
+		}
 	}
 	bConvertFailed = false;
 	int32 Fixable = 0;
@@ -4807,7 +5017,7 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 			}
 		}
 		Panel->RefreshConvertRows();
-		Save(Panel->ConvertBox.ToSharedRef(), File, 820.0f, 4000.0f);
+		Save(Panel->ConvertSectionBox.ToSharedRef(), File, 820.0f, 4000.0f);
 		// What Convert would take from the rows as they stand (OnRunConvert's own call).
 		if (Panel->ConvertReview.IsValid() && Panel->ConvertContext.IsValid() && Panel->ConvertContext->Parts.IsValidIndex(0) && Panel->ConvertContext->Parts[0].Original.IsValid())
 		{
@@ -4817,10 +5027,14 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 		}
 	};
 
-	// Convert a character: pick it, list its fixes, tick the ones to confirm.
-	Panel->ConvertSource = Character;
+	// Pick it at the Avatar door, list its fixes, tick the ones to confirm.
+	Panel->SetClass(EMantleCosmeticClass::Avatar);
+	Panel->PickAvatar(Character);
+	UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT sees: %s As is: %s"), *FMantleConvertSection::WhatISee(Panel->AvatarSight),
+		!FMantleConvertSection::ShowsRoutePicker() ? TEXT("hidden") : FMantleConvertSection::AsIsGreyedWhy(Panel->AvatarSight).IsEmpty() ? TEXT("offered")
+		: *FMantleConvertSection::AsIsGreyedWhy(Panel->AvatarSight));
 	Panel->OnAnalyzeConvert();
-	if (!Panel->ConvertContext.IsValid() || !Panel->ConvertBox.IsValid())
+	if (!Panel->ConvertContext.IsValid() || !Panel->ConvertSectionBox.IsValid())
 	{
 		UE_LOG(LogMantle, Error, TEXT("MANTLE_CONVERT_SHOT %s: %s"), *Path, *Panel->ConvertStatus);
 		return;
@@ -4883,7 +5097,7 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 
 	Panel->OnRunConvert();
 	UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT converted: %s"), *Panel->ConvertStatus);
-	Save(Panel->ConvertBox.ToSharedRef(), Stem + TEXT("_converted.png"), 820.0f, 4000.0f);
+	Save(Panel->ConvertSectionBox.ToSharedRef(), Stem + TEXT("_converted.png"), 820.0f, 4000.0f);
 
 	const int32 First = Panel->ConvertContext->Garments.IndexOfByPredicate([](const FMantleConvertGarment& Garment) { return Garment.Why.IsEmpty(); });
 	if (First == INDEX_NONE || !FMantleGarmentOutfit::WhyNoOutfits(*Panel->ConvertContext, 0).IsEmpty())
@@ -4892,7 +5106,7 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 		return;
 	}
 	Panel->UseConvertGarment(First);
-	Save(Panel->ConvertBox.ToSharedRef(), Stem + TEXT("_used.png"), 820.0f, 4000.0f);
+	Save(Panel->ConvertSectionBox.ToSharedRef(), Stem + TEXT("_used.png"), 820.0f, 4000.0f);
 	Save(Panel, Stem + TEXT("_panel.png"), 820.0f, 2400.0f);
 	for (const FMantleConvertGarment& Garment : Panel->ConvertContext->Garments)
 	{
