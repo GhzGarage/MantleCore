@@ -1,6 +1,9 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleTestLocally.h"
+#include "MantleAvatarContract.h"
+#include "MantleCosmeticExport.h"
 #include "MantleCosmeticPackage.h"
+#include "MantleEditorActions.h"
 
 #include "MantlePlaceSecrets.h"
 #include "MantlePreviewExport.h"
@@ -242,6 +245,64 @@ namespace MantleTestLocallyPrivate
 			FString Error;
 			FString Notice;
 			if (TestLocally.RunWithWeapon(FMantleWeaponToTry::FromBuilderName(Args[0]), Error, Notice))
+			{
+				UE_LOG(LogMantle, Display, TEXT("MANTLE_TEST_LOCALLY_LAUNCHED %s client=%s %s%s%s"), *TestLocally.GetManifestFile(),
+					*TestLocally.GetClient().Source, *TestLocally.GetClient().ClientVersion, Notice.IsEmpty() ? TEXT("") : TEXT(" notice="), *OneLine(Notice));
+			}
+			else
+			{
+				UE_LOG(LogMantle, Error, TEXT("MANTLE_TEST_LOCALLY_FAILED %s"), Error.IsEmpty() ? TEXT("cancelled") : *OneLine(Error));
+			}
+		}));
+
+	// Chunk 9: the Cosmetics panel's Test locally for an avatar without the panel, for a harness: the panel's default draft for
+	// the source, checked as Check does, then the same RunWithDraftAvatar the button calls.
+	FAutoConsoleCommand GMantleDevTestAvatarLocallyCommand(
+		TEXT("Mantle.Dev.TestAvatarLocally"),
+		TEXT("Mantle.Dev.TestAvatarLocally <SourceAsset> [as_is] -- checks the asset as an avatar (converted unless as_is) and runs Test locally with it ")
+		TEXT("as the preview player, cooked locally as a draft. Nothing uploads. Logs MANTLE_TEST_LOCALLY_LAUNCHED or MANTLE_TEST_LOCALLY_FAILED."),
+		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+		{
+			if (Args.IsEmpty())
+			{
+				UE_LOG(LogMantle, Error, TEXT("MANTLE_TEST_LOCALLY_FAILED usage: Mantle.Dev.TestAvatarLocally <SourceAsset> [as_is]"));
+				return;
+			}
+			if (IAssetRegistry* Registry = IAssetRegistry::Get())
+			{
+				Registry->WaitForCompletion();
+			}
+			FString Path = Args[0];
+			if (!FPackageName::GetShortName(Path).Contains(TEXT(".")))
+			{
+				Path += TEXT(".") + FPackageName::GetShortName(Path);
+			}
+			UObject* Source = LoadObject<UObject>(nullptr, *Path);
+			FString ContractError;
+			const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+			if (!Source || !Contract)
+			{
+				UE_LOG(LogMantle, Error, TEXT("MANTLE_TEST_LOCALLY_FAILED %s"), !Source ? *FString::Printf(TEXT("%s did not load"), *Path) : *OneLine(ContractError));
+				return;
+			}
+			FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Avatar, Source, TEXT("avatar"), FString(), *Contract, EMantleFitSex::Auto);
+			Draft.AvatarPublicationMode = Args.Num() > 1 && Args[1].Equals(TEXT("as_is"), ESearchCase::IgnoreCase) ? TEXT("as_is") : TEXT("converted");
+			// The thumbnail is never bundled.
+			Draft.bRenderThumbnail = false;
+			const TSharedRef<FMantleCosmeticPackage> Package = MakeShared<FMantleCosmeticPackage>(FMantleCosmeticExport::Build(Draft, *Contract));
+			if (Package->HasErrors())
+			{
+				for (const FMantleCosmeticIssue& Issue : Package->Issues)
+				{
+					UE_LOG(LogMantle, Warning, TEXT("MANTLE_TEST_LOCALLY check %s"), *Issue.ToString());
+				}
+				UE_LOG(LogMantle, Error, TEXT("MANTLE_TEST_LOCALLY_FAILED the check found problems"));
+				return;
+			}
+			FMantleTestLocally& TestLocally = FMantleTestLocally::Get();
+			FString Error;
+			FString Notice;
+			if (TestLocally.RunWithDraftAvatar(Package, Error, Notice))
 			{
 				UE_LOG(LogMantle, Display, TEXT("MANTLE_TEST_LOCALLY_LAUNCHED %s client=%s %s%s%s"), *TestLocally.GetManifestFile(),
 					*TestLocally.GetClient().Source, *TestLocally.GetClient().ClientVersion, Notice.IsEmpty() ? TEXT("") : TEXT(" notice="), *OneLine(Notice));
