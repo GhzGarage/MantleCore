@@ -152,6 +152,19 @@ bool FMantleAgentPanelTest::RunTest(const FString& Parameters)
 		TestTrue(FString::Printf(TEXT("%s: the case says something to compare"), Slots[Case]), Panel.Num() > 0);
 	}
 
+	// ConvertCosmetic through the tool, list only: the panel's "what I see" line for the piece and its Convert button state.
+	{
+		const FString Json = CallTool(TEXT("ConvertCosmetic"), { Mesh->GetPathName(), TEXT("avatar"), FString(), FString(), TEXT("convert") });
+		TSharedPtr<FJsonObject> Convert;
+		FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Convert);
+		if (TestTrue(FString::Printf(TEXT("ConvertCosmetic answered (%s)"), *Json.Left(400)), Convert.IsValid()) && Convert->GetBoolField(TEXT("ok")))
+		{
+			TestTrue(TEXT("the what-I-see line names the piece"), Convert->GetStringField(TEXT("sees")).StartsWith(TEXT("SK_AgentPanelPiece: Skeletal mesh")));
+			TestTrue(TEXT("the Convert button state is reported"), Convert->HasField(TEXT("canConvert")));
+			TestEqual(TEXT("route"), Convert->GetStringField(TEXT("route")), FString(TEXT("convert")));
+		}
+	}
+
 	// A body stamped As-is goes up as As is.
 	Mesh->GetPackage()->GetMetaData().SetValue(Mesh, FMantleAvatarConverter::RouteKey, LexToString(EMantleAvatarRoute::AsIs));
 	TestTrue(TEXT("stamped As-is: As is"), FMantleEditorActions::CosmeticRouteOf(Mesh) == EMantleAvatarRoute::AsIs);

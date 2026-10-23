@@ -1328,10 +1328,31 @@ FString FMantleAvatarConverter::RunForAgent(const FString& Path, const FString& 
 		if (Found == INDEX_NONE)
 		{
 			Unknown.Add(MakeShared<FJsonValueString>(Wanted));
+			continue;
+		}
+		const FMantleConvertFix& Line = Fixes[Found];
+		if (Line.FixerId == MantleAvatarFixerIds::Strip && Line.Kind == FMantleAvatarStripFixer::KindFaceOnly)
+		{
+			// Chunk 5's body row, as the panel's "Keep this character's body": offered only when the body can be kept.
+			const FMantleConvertFix* Bare = Fixes.FindByPredicate([&Line](const FMantleConvertFix& Fix)
+			{
+				return Fix.FixerId == MantleAvatarFixerIds::Strip && Fix.PartIndex == Line.PartIndex && Fix.Kind == FMantleAvatarStripFixer::KindBareSkin;
+			});
+			if (Bare && !Bare->bCanFix)
+			{
+				return ConverterRefusal(TEXT("cannot_keep_body"), FString::Printf(
+					TEXT("This character's body can't be kept, so its face goes on a MetaHuman body (leave %s on): %s"), *Wanted, *Bare->Problem));
+			}
+			FMantleConvertSection::PickBody(Fixes, Line.PartIndex, false);
 		}
 		else
 		{
 			Fixes[Found].bEnabled = false;
+			// As the panel: a changed slot or piece line changes the kept parts, so the bare-skin tick is the caller's to give again.
+			if (Line.FixerId == MantleAvatarFixerIds::Strip && !FMantleAvatarStripFixer::IsBodyRowLine(Line))
+			{
+				FMantleConvertSection::KeptPartsChanged(Fixes, Line.PartIndex);
+			}
 		}
 	}
 
@@ -1353,6 +1374,13 @@ FString FMantleAvatarConverter::RunForAgent(const FString& Path, const FString& 
 		{
 			UnknownConfirm.Add(MakeShared<FJsonValueString>(Wanted));
 		}
+		else if (CreatorChoice(Fixes[Found].Kind))
+		{
+			// The body row, as the panel's radios pick it: the face on a MetaHuman body, and at most one of Women's and Men's.
+			const FName Kind = Fixes[Found].Kind;
+			FMantleConvertSection::PickBody(Fixes, Fixes[Found].PartIndex, true, Kind == FMantleAvatarStripFixer::KindFaceOnly ? TOptional<bool>()
+				: TOptional<bool>(Kind == FMantleAvatarStripFixer::KindFeminineBody));
+		}
 		else
 		{
 			Fixes[Found].bEnabled = true;
@@ -1366,6 +1394,18 @@ FString FMantleAvatarConverter::RunForAgent(const FString& Path, const FString& 
 	}
 	TSharedRef<FJsonObject> Object = ToJson(Context, Fixes, Result.GetPtrOrNull(), *Contract);
 	Object->SetStringField(TEXT("sees"), FMantleConvertSection::WhatISee(Sight));
+	// The panel's Convert button: on only when nothing is left to confirm and the body row is complete (its words below it).
+	Object->SetBoolField(TEXT("canConvert"), FMantleConvertSection::CanConvert(Fixes));
+	TArray<TSharedPtr<FJsonValue>> BodyChoices;
+	for (int32 PartIndex = 0; PartIndex < Context.Parts.Num(); ++PartIndex)
+	{
+		const FString Missing = FMantleAvatarStripFixer::MissingBodyChoice(Fixes, PartIndex);
+		if (!Missing.IsEmpty())
+		{
+			BodyChoices.Add(MakeShared<FJsonValueString>(FString::Printf(TEXT("Part %d: %s."), PartIndex, *Missing)));
+		}
+	}
+	Object->SetArrayField(TEXT("bodyChoice"), BodyChoices);
 	TArray<TSharedPtr<FJsonValue>> ReviewLines;
 	if (Review.IsValid())
 	{

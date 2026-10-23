@@ -220,22 +220,31 @@ public:
 	 * footwear, hair, eyebrows, eyelashes, facial_hair); "" takes its slot in its character, else
 	 * avatar. Ignored for a whole character. Always pass it.
 	 * @param bApply False lists the fixes only; true converts. Always pass it.
+	 * The body row, as the panel shows it, is four keys per part: "Strip.<part>.FaceOnly" (on: put the face on a MetaHuman
+	 * body; pre-ticked when the body is covered by clothing), "Strip.<part>.FeminineBody" / "Strip.<part>.MasculineBody" (the
+	 * MetaHuman body it goes on, Women's or Men's; never pre-picked, one is needed while FaceOnly is on), and
+	 * "Strip.<part>.BareSkin" (needsConfirm: the kept parts are bare skin; pre-ticked only when a bare body is clearly found,
+	 * and not needed while FaceOnly is on). "bodyChoice" says what the row still needs; "canConvert" is the panel's Convert
+	 * button.
 	 * @param TurnOff Comma-separated fix keys (from "fixes"[].key, e.g. "Triangles.0.Mesh") to leave
-	 * alone; every other fix keeps its default ("enabled"). "" for none. Always pass it.
+	 * alone; every other fix keeps its default ("enabled"). "Strip.<part>.FaceOnly" keeps the character's own body (refused,
+	 * cannot_keep_body, when it can't be kept). Turning off another Strip line changes the kept parts, so the bare-skin line
+	 * starts unticked again, as in the panel. "" for none. Always pass it.
 	 * @param Confirm Comma-separated keys of the fixes that need confirming ("needsConfirm", e.g.
-	 * "Strip.0.BareSkin": the kept parts are bare skin) that you confirm. Convert does nothing while
-	 * one is unconfirmed. Only confirm what the person asking told you is true. "" for none.
+	 * "Strip.0.BareSkin": the kept parts are bare skin) that you confirm, and body row picks ("Strip.0.FeminineBody" or
+	 * "Strip.0.MasculineBody": one unpicks the other). Convert does nothing while one is unconfirmed. Only confirm what the
+	 * person asking told you is true. "" for none.
 	 * @param Route How it should go up, the panel's "How should it go up?": "convert" (Convert to MetaHuman, the default) or
 	 * "asis" (As is: it keeps its own look; offered only while As-is uploads are allowed, and refused with the panel's
 	 * reason when the panel greys it, e.g. a MetaHuman Creator character, "it's already a MetaHuman"). "" is convert.
 	 * Always pass it.
-	 * @return JSON: {"ok", "source", "assembly", "outputFolder", "route", "sees", "packReview": [lines], "parts": [{"index", "slot", "class",
+	 * @return JSON: {"ok", "source", "assembly", "outputFolder", "route", "sees", "packReview": [lines], "canConvert", "bodyChoice": [lines], "parts": [{"index", "slot", "class",
 	 * "name", "mesh", "original", "face", "section", "skeleton", "authoringBody", "authoringFace",
 	 * "included", "clothAsset"}], "fixes": [{"key", "fixer", "kind", "part", "problem", "action",
 	 * "canFix", "enabled", "needsConfirm"}], "notes", "unknownTurnOff", "unknownConfirm", "applied", and with Apply "result":
 	 * {"removedPrevious", "applied", "failed", "leftAlone" (fixes with a "reason"), "created" (asset
 	 * paths), "checks": [{"part", "canUpload", "standingHeightCm", "issues": [{"severity",
-	 * "message", "hint"}]}], "blocked"}}, or a refusal (not_convertible, no_contract, unknown_route, as_is_greyed).
+	 * "message", "hint"}]}], "blocked"}}, or a refusal (not_convertible, no_contract, unknown_route, as_is_greyed, cannot_keep_body).
 	 */
 	UFUNCTION(meta = (AICallable))
 	static FString ConvertCosmetic(const FString& AssetPath, const FString& Slot, bool bApply, const FString& TurnOff = TEXT(""), const FString& Confirm = TEXT(""),
