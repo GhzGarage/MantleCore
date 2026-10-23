@@ -74,6 +74,9 @@ struct MANTLEEDITOR_API FMantleFingerFix
 	TMap<FName, FVector2D> DistanceTo;
 	TMap<FName, double> ChainLength;
 
+	/** Hands whose finger skin lies farther than FMantleUnriggedAsIs::FingerReachCm from their finger bones, on average: their fingers follow the hand rigidly. */
+	TArray<FName> RigidHands;
+
 	/** "1200 finger points: 310 on two or more fingers, 340 kept to their nearest finger". */
 	FString ToString() const;
 };
@@ -123,6 +126,13 @@ public:
 	/** A model whose lowest point is within this of the floor (cm) is left at its height. */
 	static constexpr double FloorToleranceCm = 0.05;
 
+	/**
+	 * A hand whose finger skin lies farther than this from its finger bones on average (cm) has fingers the fitted MetaHuman hand
+	 * doesn't line up with: bent about joints that aren't inside them they stretch into claws, so they follow the hand rigidly.
+	 * The conform puts the joints within about 2.5 cm of its own skin; a finger is about 2 cm thick.
+	 */
+	static constexpr double FingerReachCm = 2.5;
+
 	/** The bone everything above the neck follows. */
 	static const FName HeadBone;
 
@@ -156,7 +166,10 @@ public:
 	 * one whose bones (each a segment from its parent's joint to its own, a fingertip carried on past its last joint) pass
 	 * nearest the point; its weights on other fingers are dropped and the rest renormalised (all on that nearest bone when
 	 * nothing is left). Fingers are the chains under a "hand_*" bone whose root is named thumb, index, middle, ring or pinky
-	 * (Epic's MetaHuman skeleton). Joints are component-space, as Points are.
+	 * (Epic's MetaHuman skeleton); only their main bones (<finger>_metacarpal, _01, _02, _03 and the side) are measured, not the
+	 * helper bones Epic's rig logic drives (bulge, half, palm, side, pip, dip, slide). Then a hand whose finger points lie
+	 * farther than FingerReachCm from those bones on average has its fingers' weights moved onto the hand bone. Joints are
+	 * component-space, as Points are.
 	 */
 	static FMantleFingerFix KeepOneFinger(TConstArrayView<FVector3f> Points, TConstArrayView<FName> Names, TConstArrayView<int32> Parents,
 		TConstArrayView<FVector3f> Joints, FMantleAutoRigWeights& InOut);

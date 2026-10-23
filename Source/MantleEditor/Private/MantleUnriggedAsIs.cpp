@@ -175,7 +175,13 @@ FString FMantleFingerFix::ToString() const
 		Distances += FString::Printf(TEXT("%s%s %.2f cm over %d (chain %.1f cm)"), Distances.IsEmpty() ? TEXT("; skin to its finger's bones: ") : TEXT(", "),
 			*Finger.Key.ToString(), Finger.Value.Y > 0.0 ? Finger.Value.X / Finger.Value.Y : 0.0, static_cast<int32>(Finger.Value.Y), ChainLength.FindRef(Finger.Key));
 	}
-	return FString::Printf(TEXT("%d finger points: %d on two or more fingers, %d kept to their nearest finger%s%s"), FingerPoints, MixedPoints, Changed, *Dropped, *Distances);
+	FString Rigid;
+	for (const FName& Hand : RigidHands)
+	{
+		Rigid += FString::Printf(TEXT("%s%s"), Rigid.IsEmpty() ? TEXT("; fingers following the hand rigidly (too far from their bones): ") : TEXT(", "), *Hand.ToString());
+	}
+	return FString::Printf(TEXT("%d finger points: %d on two or more fingers, %d kept to their nearest finger%s%s%s"), FingerPoints, MixedPoints, Changed, *Dropped,
+		*Distances, *Rigid);
 }
 
 FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVector3f> Points, const TConstArrayView<FName> Names,
@@ -210,11 +216,31 @@ FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVecto
 	FingerOf.Init(INDEX_NONE, NumBones);
 	TArray<int32> HandOf;
 	HandOf.Init(INDEX_NONE, NumBones);
+	// The main bones: <finger>_metacarpal, _01, _02, _03 and the side; not the helper bones Epic's rig logic drives.
+	auto IsMainBone = [&](const int32 Bone)
+	{
+		const FString Name = Names[Bone].ToString();
+		for (const TCHAR* Word : FingerWords)
+		{
+			if (Name.StartsWith(Word))
+			{
+				const FString Rest = Name.RightChop(FCString::Strlen(Word));
+				for (const TCHAR* Part : { TEXT("_metacarpal_"), TEXT("_01_"), TEXT("_02_"), TEXT("_03_") })
+				{
+					if (Rest.StartsWith(Part) && Rest.Len() == FCString::Strlen(Part) + 1)
+					{
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	};
 	TArray<bool> HasChild;
 	HasChild.Init(false, NumBones);
 	for (int32 Bone = 0; Bone < NumBones; ++Bone)
 	{
-		if (Parents[Bone] >= 0 && Parents[Bone] < NumBones)
+		if (Parents[Bone] >= 0 && Parents[Bone] < NumBones && IsMainBone(Bone))
 		{
 			HasChild[Parents[Bone]] = true;
 		}
@@ -239,7 +265,7 @@ FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVecto
 	for (int32 Bone = 0; Bone < NumBones; ++Bone)
 	{
 		const int32 Parent = Parents[Bone];
-		if (FingerOf[Bone] == INDEX_NONE || Parent < 0)
+		if (FingerOf[Bone] == INDEX_NONE || Parent < 0 || !IsMainBone(Bone))
 		{
 			continue;
 		}
@@ -262,6 +288,7 @@ FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVecto
 		}
 	}
 	const int32 Slots = InOut.NumInfluences;
+	TMap<int32, FVector2D> ByHand;
 	for (int32 Point = 0; Point < Points.Num(); ++Point)
 	{
 		// The fingers (and the hand) its weights reach.
@@ -307,6 +334,9 @@ FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVecto
 		FVector2D& Distance = Out.DistanceTo.FindOrAdd(Names[FingerOf[Nearest]]);
 		Distance.X += FMath::Sqrt(NearestSquared);
 		Distance.Y += 1.0;
+		FVector2D& HandDistance = ByHand.FindOrAdd(Hand);
+		HandDistance.X += FMath::Sqrt(NearestSquared);
+		HandDistance.Y += 1.0;
 		// Its weights on the other fingers dropped, the rest renormalised.
 		const int32 Keep = FingerOf[Nearest];
 		bool bDropped = false;
@@ -345,6 +375,53 @@ FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVecto
 			InOut.Bones[Point * Slots] = Nearest;
 			InOut.Weights[Point * Slots] = 1.0f;
 		}
+	}
+
+	// A hand whose finger skin lies far from its finger bones: its fingers follow the hand rigidly.
+	TSet<int32> Rigid;
+	for (const TPair<int32, FVector2D>& Hand : ByHand)
+	{
+		if (Hand.Value.Y > 0.0 && Hand.Value.X / Hand.Value.Y > FingerReachCm)
+		{
+			Rigid.Add(Hand.Key);
+			Out.RigidHands.Add(Names[Hand.Key]);
+		}
+	}
+	if (Rigid.IsEmpty())
+	{
+		return Out;
+	}
+	for (int32 Point = 0; Point < Points.Num(); ++Point)
+	{
+		int32 Hand = INDEX_NONE;
+		float Moved = 0.0f;
+		for (int32 Slot = 0; Slot < Slots; ++Slot)
+		{
+			const int32 Index = Point * Slots + Slot;
+			const int32 Bone = InOut.Bones[Index];
+			if (InOut.Weights[Index] > 0.0f && FingerOf.IsValidIndex(Bone) && FingerOf[Bone] != INDEX_NONE && Rigid.Contains(HandOf[Bone]))
+			{
+				Hand = HandOf[Bone];
+				Moved += InOut.Weights[Index];
+				InOut.Weights[Index] = 0.0f;
+			}
+		}
+		if (Hand == INDEX_NONE)
+		{
+			continue;
+		}
+		// Onto the hand's slot, else the first empty one (the moved weight left at least one).
+		int32 Target = INDEX_NONE;
+		for (int32 Slot = 0; Slot < Slots && Target == INDEX_NONE; ++Slot)
+		{
+			Target = InOut.Bones[Point * Slots + Slot] == Hand && InOut.Weights[Point * Slots + Slot] > 0.0f ? Slot : INDEX_NONE;
+		}
+		for (int32 Slot = 0; Slot < Slots && Target == INDEX_NONE; ++Slot)
+		{
+			Target = InOut.Weights[Point * Slots + Slot] <= 0.0f ? Slot : INDEX_NONE;
+		}
+		InOut.Bones[Point * Slots + Target] = Hand;
+		InOut.Weights[Point * Slots + Target] += Moved;
 	}
 	return Out;
 }

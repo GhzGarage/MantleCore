@@ -220,6 +220,32 @@ bool FMantleUnriggedAsIsFingerTest::RunTest(const FString& Parameters)
 		&& FMath::IsNearlyEqual(Weights.WeightOf(3, 6), 0.3f, 1e-5f));
 	TestTrue(TEXT("a point on the wrong finger alone goes to its nearest bone"), FMath::IsNearlyEqual(Weights.WeightOf(4, Middle2), 1.0f, 1e-5f));
 
+	TestEqual(TEXT("fingers 1 cm or so from their bones keep bending"), Fix.RigidHands.Num(), 0);
+
+	// The same fingers 10 cm off their bones (a model's hand the fitted hand doesn't line up with) follow the hand rigidly.
+	{
+		FMantleAutoRigWeights Far;
+		Far.NumInfluences = 4;
+		TArray<FVector3f> FarPoints;
+		for (const FVector3f& Point : Points)
+		{
+			FarPoints.Add(Point + FVector3f(0.0f, 0.0f, 10.0f));
+		}
+		for (int32 Point = 0; Point < Points.Num(); ++Point)
+		{
+			const TPair<int32, float> Influences[] = { TPair<int32, float>(Index2, 0.75f), TPair<int32, float>(Hand, 0.25f) };
+			for (int32 Slot = 0; Slot < Far.NumInfluences; ++Slot)
+			{
+				Far.Bones.Add(Slot < 2 ? Influences[Slot].Key : 0);
+				Far.Weights.Add(Slot < 2 ? Influences[Slot].Value : 0.0f);
+			}
+		}
+		const FMantleFingerFix FarFix = FMantleUnriggedAsIs::KeepOneFinger(FarPoints, Names, Parents, Joints, Far);
+		TestEqual(TEXT("the far hand's fingers follow it rigidly"), FarFix.RigidHands.Num(), 1);
+		TestTrue(TEXT("a far finger point is all on the hand"), FMath::IsNearlyEqual(Far.WeightOf(2, Hand), 1.0f, 1e-5f));
+		TestEqual(TEXT("and nothing on its finger"), Far.WeightOf(2, Index2), 0.0f);
+	}
+
 	// No hand in the skeleton: nothing changes.
 	FMantleAutoRigWeights Same = Weights;
 	const TArray<FName> NoHand = { TEXT("root"), TEXT("pelvis"), TEXT("index_01_l"), TEXT("index_02_l"), TEXT("middle_01_l"), TEXT("middle_02_l"), TEXT("spine") };
