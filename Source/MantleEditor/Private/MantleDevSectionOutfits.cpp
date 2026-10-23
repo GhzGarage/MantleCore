@@ -7,9 +7,11 @@
 // then drawn as the catalog thumbnail does (Mantle.Dev.RenderOutfitFits) into <Directory>. Before that, for telling where a piece goes
 // wrong: the character as it came (source_*), each cut piece alone and on the bare body Strip left (piece_<slot>_alone_*, _on_body_*),
 // and each Outfit at the size it was made on the MetaHuman it was made on (made_<slot>_*), front, side and back. Needs a renderer.
-// Mantle.Dev.GarmentOutfits <Body> <Directory> <Garment,...> does the same for clothing in its own meshes beside a bare body (#102). Saves what Convert and the
+// Mantle.Dev.GarmentOutfits <Body> <Directory> <Garment,...|found|rows> [draw-on:<Mesh>] [draw-only] does the same for clothing in its own
+// meshes beside a bare body (#102); rows takes the clothing the pack review's rows give for <Body> (#55), draw-only stops after the pictures. Saves what Convert and the
 // Outfits write under <body folder>/Converted; uploads nothing. Logs MANTLE_SECTION_OUTFITS lines.
 #include "MantleAvatarConverter.h"
+#include "MantleCharacterSplit.h"
 #include "MantleCosmeticThumbnail.h"
 #include "MantlePng.h"
 #include "MantleAvatarContract.h"
@@ -100,7 +102,17 @@ namespace MantleDevSectionOutfitsPrivate
 		// "bare-of:<Mesh>": the bare body the pack has beside that character (FMantleGarmentOutfit::FindBareBody).
 		const bool bBareOf = Args[0].StartsWith(TEXT("bare-of:"));
 		USkeletalMesh* Body = LoadObject<USkeletalMesh>(nullptr, bBareOf ? *Args[0].RightChop(8) : *Args[0], nullptr, LOAD_NoWarn | LOAD_Quiet);
-		if (Body && bBareOf)
+		// "rows": the clothing the pack review's rows take for the mesh named (bare-of: the character), on the body they chose (#55).
+		USkeletalMesh* Picked = Body;
+		TOptional<FMantlePackReview> Review;
+		if (Body && Args[2] == TEXT("rows"))
+		{
+			Review = FMantleCharacterSplit::ReviewFor(*Picked);
+			const int32 Chosen = Review->BodyMesh();
+			Body = Review->Meshes.IsValidIndex(Chosen) && Review->Meshes[Chosen].IsValid() ? Review->Meshes[Chosen].Get() : Body;
+			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS rows of %s: body %s"), *Picked->GetName(), *Body->GetName());
+		}
+		else if (Body && bBareOf)
 		{
 			FString Why;
 			Body = FMantleGarmentOutfit::FindBareBody(*Body, Why);
@@ -111,11 +123,18 @@ namespace MantleDevSectionOutfitsPrivate
 		TArray<USkeletalMesh*> Garments;
 		TArray<TArray<USkeletalMesh*>> Trims;
 		// "found": the clothing Convert finds beside the body, its trims paired, as the Cosmetics panel offers it.
-		if (Body && Args[2] == TEXT("found"))
+		if (Body && (Args[2] == TEXT("found") || Review.IsSet()))
 		{
 			TArray<FMantleConvertGarment> Found;
 			TArray<FString> NotOffered, Paired;
-			FMantleGarmentOutfit::FindGarments(*Body, Found, NotOffered, &Paired);
+			if (Review.IsSet())
+			{
+				FMantleGarmentOutfit::GarmentsFromReview(*Body, *Review, Found);
+			}
+			else
+			{
+				FMantleGarmentOutfit::FindGarments(*Body, Found, NotOffered, &Paired);
+			}
 			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS paired: %s; not offered: %s"), *FString::Join(Paired, TEXT("; ")), *FString::Join(NotOffered, TEXT(", ")));
 			for (const FMantleConvertGarment& Garment : Found)
 			{
@@ -150,13 +169,19 @@ namespace MantleDevSectionOutfitsPrivate
 		}
 		// The pieces are drawn on a bare body as the creator made them: [draw-on:<Mesh>] (the pack's body with nothing on),
 		// else the body itself (which may still wear underwear Convert takes off).
+		// [draw-only]: the pictures of the pieces on the body, no Outfits made.
 		USkeletalMesh* DrawOn = Body;
-		if (Args.Num() > 3 && Args[3].StartsWith(TEXT("draw-on:")))
+		bool bDrawOnly = false;
+		for (int32 Arg = 3; Arg < Args.Num(); ++Arg)
 		{
-			if (USkeletalMesh* Bare = LoadObject<USkeletalMesh>(nullptr, *Args[3].RightChop(8), nullptr, LOAD_NoWarn | LOAD_Quiet))
+			if (Args[Arg].StartsWith(TEXT("draw-on:")))
 			{
-				DrawOn = Bare;
+				if (USkeletalMesh* Bare = LoadObject<USkeletalMesh>(nullptr, *Args[Arg].RightChop(8), nullptr, LOAD_NoWarn | LOAD_Quiet))
+				{
+					DrawOn = Bare;
+				}
 			}
+			bDrawOnly |= Args[Arg] == TEXT("draw-only");
 		}
 		Draw(DrawOn, nullptr, Args[1], TEXT("separated_body"));
 		TArray<USkeletalMesh*> All;
@@ -171,6 +196,11 @@ namespace MantleDevSectionOutfitsPrivate
 		{
 			All.Append(TArrayView<USkeletalMesh*>(Garments).RightChop(1));
 			Draw(Garments[0], DrawOn, Args[1], TEXT("all_on_body"), All);
+		}
+		if (bDrawOnly)
+		{
+			UE_LOG(LogMantleSectionOutfits, Display, TEXT("MANTLE_SECTION_OUTFITS done (draw-only)"));
+			return;
 		}
 		FMantleGarmentOutfitResult Made;
 		FString ConvertJson, Code, Refusal;
