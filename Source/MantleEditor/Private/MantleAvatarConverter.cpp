@@ -810,12 +810,20 @@ FMantleConvertResult FMantleAvatarConverter::Convert(FMantleConvertContext& Cont
 			}
 		}
 		const TArray<FString> Keys = FixKeys(Fixes);
+		TArray<FMantleConvertFix> FixesAsChosen = Fixes;
+		for (int32 Index = 0; Index < FixesAsChosen.Num(); ++Index)
+		{
+			if (const bool* Choice = Chosen.Find(Keys[Index]))
+			{
+				FixesAsChosen[Index].bEnabled = *Choice;
+			}
+		}
 		for (int32 Index = 0; Index < Fixes.Num(); ++Index)
 		{
 			FMantleConvertOutcome Outcome;
 			Outcome.Fix = Fixes[Index];
 			Outcome.Key = Keys[Index];
-			if (Unconfirmed(Outcome.Fix, Outcome.Key))
+			if (FMantleAvatarStripFixer::IsUnconfirmed(FixesAsChosen, FixesAsChosen[Index]))
 			{
 				// Met only now (an earlier fixer made the case for it): stop here.
 				Outcome.Reason = TEXT("not confirmed: tick it to convert (the conversion stopped here)");
