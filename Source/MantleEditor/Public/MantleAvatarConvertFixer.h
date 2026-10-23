@@ -23,6 +23,10 @@ class UObject;
  * UMantleSettings::bAllowAsIsAvatars is on, which it is not by default.
  *
  * Pipeline order (FMantleAvatarConverter runs them in this order; later fixers see earlier fixers' output):
+ *   AsIsRig     (as-is) chunk 7: a model with no rig (a static mesh, or a skeletal mesh with no usable weights) keeps its look:
+ *               Epic's conform places the MetaHuman skeleton inside it (MHUnrigged's posed mesh, then MHConform's conform),
+ *               its vertices take the A-pose body's skin weights at their closest point (above the neck: the head), and it
+ *               becomes a skeletal mesh on that skeleton for the as-is fixers after it (RigMap skips it)
  *   RigMap      (as-is) third-party rig (Mixamo, Character Creator, Daz, guided mapping) onto a supported skeleton
  *   Repose      (as-is) the reference pose re-posed to the skeleton's A-pose, the mesh re-bound in it
  *   AsIsHeight  (as-is, #774) the body scaled about its feet to the default height (FMantleAvatarHeight::TargetCm), as Convert does
@@ -53,6 +57,7 @@ class UObject;
  */
 namespace MantleAvatarFixerIds
 {
+	inline const FName AsIsRig(TEXT("AsIsRig"));
 	inline const FName RigMap(TEXT("RigMap"));
 	inline const FName Repose(TEXT("Repose"));
 	inline const FName AsIsHeight(TEXT("AsIsHeight"));
@@ -110,6 +115,12 @@ struct MANTLEEDITOR_API FMantleConvertPart
 	 */
 	bool bUnrigged = false;
 	TWeakObjectPtr<UStaticMesh> StaticSource;
+
+	/**
+	 * Chunk 7: an unrigged part on the As-is route, once the AsIsRig step made Mesh of it (its own geometry skinned to Epic's MetaHuman
+	 * body skeleton; FMantleUnriggedAsIs). Until then As-is leaves Mesh null for it, so no other As-is fixer reads the source's rig.
+	 */
+	bool bAutoRigged = false;
 
 	/**
 	 * False for a part the creator opts into (an assembly's cloth-simulated piece). Fixers still analyse it, but the
