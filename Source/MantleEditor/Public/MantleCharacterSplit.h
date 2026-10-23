@@ -302,13 +302,16 @@ public:
 	static constexpr float OnPickedCm = 0.5f;
 	static constexpr float OnPickedShare = 0.5f;
 
+	/** A piece on the head or neck is hair when its top is at least this share of the body's height (above the eyes). */
+	static constexpr float HairTopShare = 0.95f;
+
 	/**
 	 * Pure (tested): the pack review of Meshes, Picked the one the creator picked. Rules, in this order:
 	 *   - a whole body (skin, about the picked mesh's height) is a body: offered when FMantleGarmentOutfit::BareBodyRank says it is
 	 *     bare (or in underwear Convert takes off), the best one chosen;
 	 *   - a piece all skin is part of a body, not used;
-	 *   - every other piece is placed by its bones (PlaceOf), its slot from where it sits (SlotOfPlace); hair is a piece on the head
-	 *     whose name says hair; one that nothing places is not used;
+	 *   - every other piece is placed by its bones (PlaceOf), its slot from where it sits (SlotOfPlace); hair is a piece mostly on
+	 *     the head or neck whose top reaches above the face (HairTopShare); one that nothing places is not used. Names never place;
 	 *   - when Picked wears clothing, a piece not on it (OnPicked) is another outfit in the pack: not used;
 	 *   - a thin piece lying on another of its slot (TrimShare, the trim rule) goes into it as its edging;
 	 *   - several pieces in one slot are one item, unless two of them sit on the same region (two tops): then one item each.
