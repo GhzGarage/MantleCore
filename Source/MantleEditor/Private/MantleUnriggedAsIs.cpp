@@ -733,6 +733,107 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 	{
 		return false;
 	}
+	// Each hand's finger joints against the body's own finger skin and the model's, for the record (whether the hands line up).
+	{
+		auto JointAt = [&Reference](const int32 Bone) { return FVector3f(FAnimationRuntime::GetComponentSpaceTransformRefPose(Reference, Bone).GetLocation()); };
+		auto DominantOf = [](const TArray<int32>& Bones, const TArray<float>& Weights, const int32 Slots, const int32 Vertex)
+		{
+			int32 Best = INDEX_NONE;
+			float BestWeight = 0.0f;
+			for (int32 Slot = 0; Slot < Slots; ++Slot)
+			{
+				const int32 Index = Vertex * Slots + Slot;
+				if (Weights.IsValidIndex(Index) && Weights[Index] > BestWeight)
+				{
+					Best = Bones[Index];
+					BestWeight = Weights[Index];
+				}
+			}
+			return Best;
+		};
+		auto V = [](const FVector3f& P) { return FString::Printf(TEXT("(%.1f %.1f %.1f)"), P.X, P.Y, P.Z); };
+		for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
+		{
+			const int32 Hand = Reference.FindRawBoneIndex(FName(*FString::Printf(TEXT("hand_%s"), Side)));
+			if (Hand == INDEX_NONE)
+			{
+				continue;
+			}
+			TArray<bool> InHand;
+			InHand.Init(false, Reference.GetRawBoneNum());
+			for (int32 Bone = 0; Bone < Reference.GetRawBoneNum(); ++Bone)
+			{
+				for (int32 Walk = Bone; Walk != INDEX_NONE && !InHand[Bone]; Walk = Reference.GetRawParentIndex(Walk))
+				{
+					InHand[Bone] = Walk == Hand;
+				}
+			}
+			FString Line = FString::Printf(TEXT("hand_%s joint %s"), Side, *V(JointAt(Hand)));
+			for (const TCHAR* Finger : { TEXT("thumb_02"), TEXT("index_01"), TEXT("index_02"), TEXT("middle_02"), TEXT("pinky_02") })
+			{
+				const int32 Bone = Reference.FindRawBoneIndex(FName(*FString::Printf(TEXT("%s_%s"), Finger, Side)));
+				if (Bone == INDEX_NONE)
+				{
+					continue;
+				}
+				const FVector3f Joint = JointAt(Bone);
+				FVector3f BodySum = FVector3f::ZeroVector;
+				FVector3f ModelSum = FVector3f::ZeroVector;
+				int32 BodyCount = 0;
+				int32 ModelCount = 0;
+				float BodyNearest = TNumericLimits<float>::Max();
+				float ModelNearest = TNumericLimits<float>::Max();
+				for (int32 Vertex = 0; Vertex < Skin.Positions.Num(); ++Vertex)
+				{
+					BodyNearest = FMath::Min(BodyNearest, FVector3f::Dist(Joint, Skin.Positions[Vertex]));
+					if (DominantOf(Skin.Bones, Skin.Weights, Skin.NumInfluences, Vertex) == Bone)
+					{
+						BodySum += Skin.Positions[Vertex];
+						++BodyCount;
+					}
+				}
+				for (int32 Point = 0; Point < Points.Num(); ++Point)
+				{
+					ModelNearest = FMath::Min(ModelNearest, FVector3f::Dist(Joint, Points[Point]));
+					if (OutResult.Weights.Dominant(Point) == Bone)
+					{
+						ModelSum += Points[Point];
+						++ModelCount;
+					}
+				}
+				const FVector3f BodyCentre = BodyCount > 0 ? BodySum / BodyCount : FVector3f::ZeroVector;
+				const FVector3f ModelCentre = ModelCount > 0 ? ModelSum / ModelCount : FVector3f::ZeroVector;
+				Line += FString::Printf(TEXT("; %s joint %s: body skin on it %d centred %s (%.1f cm from the joint), nearest body skin %.1f cm; model points on it %d centred %s (%.1f cm), nearest model point %.1f cm"),
+					Finger, *V(Joint), BodyCount, *V(BodyCentre), BodyCount > 0 ? FVector3f::Dist(Joint, BodyCentre) : -1.0f, BodyNearest, ModelCount, *V(ModelCentre),
+					ModelCount > 0 ? FVector3f::Dist(Joint, ModelCentre) : -1.0f, ModelNearest);
+			}
+			FVector3f BodySum = FVector3f::ZeroVector;
+			FVector3f ModelSum = FVector3f::ZeroVector;
+			int32 BodyCount = 0;
+			int32 ModelCount = 0;
+			for (int32 Vertex = 0; Vertex < Skin.Positions.Num(); ++Vertex)
+			{
+				const int32 Bone = DominantOf(Skin.Bones, Skin.Weights, Skin.NumInfluences, Vertex);
+				if (InHand.IsValidIndex(Bone) && InHand[Bone])
+				{
+					BodySum += Skin.Positions[Vertex];
+					++BodyCount;
+				}
+			}
+			for (int32 Point = 0; Point < Points.Num(); ++Point)
+			{
+				const int32 Bone = OutResult.Weights.Dominant(Point);
+				if (InHand.IsValidIndex(Bone) && InHand[Bone])
+				{
+					ModelSum += Points[Point];
+					++ModelCount;
+				}
+			}
+			Line += FString::Printf(TEXT("; hand and fingers: body skin %d centred %s, model points %d centred %s"), BodyCount,
+				*V(BodyCount > 0 ? BodySum / BodyCount : FVector3f::ZeroVector), ModelCount, *V(ModelCount > 0 ? ModelSum / ModelCount : FVector3f::ZeroVector));
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG handfit %s"), *Line);
+		}
+	}
 	// A finger's skin follows one finger: closest points between fingers blend neighbours, which stretch when the fingers curl.
 	{
 		TArray<FName> BoneNames;
