@@ -70,6 +70,10 @@ struct MANTLEEDITOR_API FMantleFingerFix
 	/** By finger (its root bone, e.g. index_metacarpal_l): how many points had their weights on it dropped for another finger. */
 	TMap<FName, int32> DroppedFrom;
 
+	/** By finger (its root bone): its points' summed distance to their nearest bone of that finger (cm) and how many; its chain's length, hand to last joint (cm). */
+	TMap<FName, FVector2D> DistanceTo;
+	TMap<FName, double> ChainLength;
+
 	/** "1200 finger points: 310 on two or more fingers, 340 kept to their nearest finger". */
 	FString ToString() const;
 };

@@ -169,7 +169,13 @@ FString FMantleFingerFix::ToString() const
 	{
 		Dropped += FString::Printf(TEXT("%s%s %d"), Dropped.IsEmpty() ? TEXT("; dropped from ") : TEXT(", "), *Finger.Key.ToString(), Finger.Value);
 	}
-	return FString::Printf(TEXT("%d finger points: %d on two or more fingers, %d kept to their nearest finger%s"), FingerPoints, MixedPoints, Changed, *Dropped);
+	FString Distances;
+	for (const TPair<FName, FVector2D>& Finger : DistanceTo)
+	{
+		Distances += FString::Printf(TEXT("%s%s %.2f cm over %d (chain %.1f cm)"), Distances.IsEmpty() ? TEXT("; skin to its finger's bones: ") : TEXT(", "),
+			*Finger.Key.ToString(), Finger.Value.Y > 0.0 ? Finger.Value.X / Finger.Value.Y : 0.0, static_cast<int32>(Finger.Value.Y), ChainLength.FindRef(Finger.Key));
+	}
+	return FString::Printf(TEXT("%d finger points: %d on two or more fingers, %d kept to their nearest finger%s%s"), FingerPoints, MixedPoints, Changed, *Dropped, *Distances);
 }
 
 FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVector3f> Points, const TConstArrayView<FName> Names,
@@ -247,6 +253,14 @@ FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVecto
 	{
 		return Out;
 	}
+	for (const FFingerSegment& Segment : Segments)
+	{
+		// The chain: hand to the last joint (the fingertip carried on past it is not bone).
+		if (Segment.A != Joints[Segment.Bone])
+		{
+			Out.ChainLength.FindOrAdd(Names[FingerOf[Segment.Bone]]) += FVector3f::Dist(Segment.A, Segment.B);
+		}
+	}
 	const int32 Slots = InOut.NumInfluences;
 	for (int32 Point = 0; Point < Points.Num(); ++Point)
 	{
@@ -290,6 +304,9 @@ FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVecto
 		{
 			continue;
 		}
+		FVector2D& Distance = Out.DistanceTo.FindOrAdd(Names[FingerOf[Nearest]]);
+		Distance.X += FMath::Sqrt(NearestSquared);
+		Distance.Y += 1.0;
 		// Its weights on the other fingers dropped, the rest renormalised.
 		const int32 Keep = FingerOf[Nearest];
 		bool bDropped = false;
