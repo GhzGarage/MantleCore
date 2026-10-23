@@ -33,7 +33,7 @@ bool FMantleAssemblyBuildMessageTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("a MetaHuman body with another face skeleton is not"), FMantleMetaHumanBuild::IsMetaHumanAssembly(BodySkeleton, TEXT("/Game/Hero/Hero_Skeleton.Hero_Skeleton")));
 	TestFalse(TEXT("a missing skeleton is not"), FMantleMetaHumanBuild::IsMetaHumanAssembly(BodySkeleton, FString()));
 	// A refused body fit names the next step: the face-only choice, never As-is.
-	TestTrue(TEXT("the hint offers keeping the face on MetaHuman's own body"), FMantleMetaHumanBuild::AssemblyFaceOnlyHint().Contains(TEXT("keep only its face")));
+	TestTrue(TEXT("the hint offers keeping the face on MetaHuman's own body"), FMantleMetaHumanBuild::AssemblyFaceOnlyHint().Contains(TEXT("Put the face on a MetaHuman body")));
 	TestTrue(TEXT("the hint names the body choice"), FMantleMetaHumanBuild::AssemblyFaceOnlyHint().Contains(TEXT("Women's or Men's")));
 
 	// Wasteland Kid 1: 62,669 vertices (the outfit merged into the body) is far past a MetaHuman body; a MetaHuman body is not.
