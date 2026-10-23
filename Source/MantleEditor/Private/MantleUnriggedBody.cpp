@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleUnriggedBody.h"
 #include "MantleAvatarHeight.h"
+#include "MantleAvatarRigMapFixer.h"
 #include "MantleMetaHumanPose.h"
 #include "MantleRuntime.h"
 
@@ -13,6 +14,8 @@
 #include "GeometryScript/MeshAssetFunctions.h"
 #include "GeometryScript/MeshTransformFunctions.h"
 #include "Materials/MaterialInterface.h"
+#include "Rendering/SkeletalMeshLODModel.h"
+#include "Rendering/SkeletalMeshModel.h"
 #include "Selections/MeshConnectedComponents.h"
 #include "SkinnedAssetCompiler.h"
 #include "UDynamicMesh.h"
@@ -227,6 +230,83 @@ bool FMantleUnriggedBody::IsUnriggedBody(const FMantleConvertContext& Context, c
 FString FMantleUnriggedBody::PlainMessage()
 {
 	return TEXT("This model has no skeleton, so we'll fit it to a MetaHuman body.");
+}
+
+FString FMantleUnriggedBody::NoUsableWeightsMessage()
+{
+	return TEXT("Skeleton found, but no usable weights: we'll fit it to a MetaHuman body.");
+}
+
+FString FMantleSkinWeightRead::ToString() const
+{
+	return FString::Printf(TEXT("%d vertices, %d bones weighted, %d dominant"), Vertices, WeightedBones, DominantBones);
+}
+
+int32 FMantleUnriggedBody::MinWeightedBones()
+{
+	return FMantleAvatarRigMap::MustMapBones().Num();
+}
+
+FMantleSkinWeightRead FMantleUnriggedBody::ReadSkinWeights(const TConstArrayView<FSkelMeshSection> Sections, const int32 NumBones)
+{
+	FMantleSkinWeightRead Out;
+	if (NumBones <= 0)
+	{
+		return Out;
+	}
+	TBitArray<> Weighted(false, NumBones);
+	TBitArray<> Dominant(false, NumBones);
+	for (const FSkelMeshSection& Section : Sections)
+	{
+		for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
+		{
+			++Out.Vertices;
+			int32 Best = INDEX_NONE;
+			int32 BestWeight = 0;
+			for (int32 Influence = 0; Influence < MAX_TOTAL_INFLUENCES; ++Influence)
+			{
+				const int32 Weight = Vertex.InfluenceWeights[Influence];
+				if (Weight == 0)
+				{
+					continue;
+				}
+				const int32 Local = Vertex.InfluenceBones[Influence];
+				const int32 Bone = Section.BoneMap.IsValidIndex(Local) ? static_cast<int32>(Section.BoneMap[Local]) : INDEX_NONE;
+				if (Bone < 0 || Bone >= NumBones)
+				{
+					continue;
+				}
+				Weighted[Bone] = true;
+				if (Weight > BestWeight)
+				{
+					Best = Bone;
+					BestWeight = Weight;
+				}
+			}
+			if (Best != INDEX_NONE)
+			{
+				Dominant[Best] = true;
+			}
+		}
+	}
+	Out.WeightedBones = Weighted.CountSetBits();
+	Out.DominantBones = Dominant.CountSetBits();
+	return Out;
+}
+
+FMantleSkinWeightRead FMantleUnriggedBody::ReadSkinWeights(const USkeletalMesh& Mesh)
+{
+	const FSkeletalMeshModel* Imported = Mesh.GetImportedModel();
+	if (!Imported || Imported->LODModels.Num() == 0)
+	{
+		return FMantleSkinWeightRead();
+	}
+	return ReadSkinWeights(Imported->LODModels[0].Sections, Mesh.GetRefSkeleton().GetRawBoneNum());
+}
+
+bool FMantleUnriggedBody::HasNoUsableWeights(const FMantleSkinWeightRead& Read, const int32 MinWeights)
+{
+	return Read.Vertices > 0 && (Read.DominantBones <= 1 || Read.WeightedBones < MinWeights);
 }
 
 bool FMantleUnriggedBody::MakePosedMesh(const FMantleConvertPart& Part, const FString& Folder, const FString& Name, const double DefaultHeightCm,

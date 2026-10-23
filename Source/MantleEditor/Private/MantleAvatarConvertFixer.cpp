@@ -16,7 +16,7 @@ namespace MantleAvatarFixersPrivate
 
 	int32 Order(const FName Id)
 	{
-		const FName Pipeline[] = { MantleAvatarFixerIds::RigMap, MantleAvatarFixerIds::Repose, MantleAvatarFixerIds::AsIsHeight, MantleAvatarFixerIds::Strip, MantleAvatarFixerIds::MHUnrigged, MantleAvatarFixerIds::MHPose,
+		const FName Pipeline[] = { MantleAvatarFixerIds::AsIsRig, MantleAvatarFixerIds::RigMap, MantleAvatarFixerIds::Repose, MantleAvatarFixerIds::AsIsHeight, MantleAvatarFixerIds::Strip, MantleAvatarFixerIds::MHUnrigged, MantleAvatarFixerIds::MHPose,
 			MantleAvatarFixerIds::MHConform, MantleAvatarFixerIds::MHSource, MantleAvatarFixerIds::MHBuild, MantleAvatarFixerIds::RetargetPose,
 			MantleAvatarFixerIds::Assembly, MantleAvatarFixerIds::Refit, MantleAvatarFixerIds::Triangles, MantleAvatarFixerIds::Atlas, MantleAvatarFixerIds::Bake };
 		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Pipeline); ++Index)

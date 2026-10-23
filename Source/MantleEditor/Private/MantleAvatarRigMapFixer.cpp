@@ -641,6 +641,11 @@ namespace MantleAvatarRigMapPrivate
 				{
 					continue;
 				}
+				// Chunk 7: an auto-rigged body is already on Epic's MetaHuman body skeleton (AsIsRig made it).
+				if (Context.Parts[PartIndex].bAutoRigged)
+				{
+					continue;
+				}
 				const FRigPartDecision Decision = RigDecide(Context.Parts[PartIndex], *Contract);
 				if (!Decision.bApplies)
 				{

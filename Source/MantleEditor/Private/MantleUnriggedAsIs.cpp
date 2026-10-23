@@ -1,0 +1,785 @@
+// Copyright Joshua Eger. All Rights Reserved.
+#include "MantleUnriggedAsIs.h"
+#include "MantleAvatarHeight.h"
+#include "MantleGarmentOutfit.h"
+#include "MantleMetaHumanConform.h"
+#include "MantleMetaHumanPose.h"
+#include "MantleRuntime.h"
+#include "MantleUnriggedBody.h"
+
+#include "AnimationRuntime.h"
+#include "Animation/Skeleton.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "BoneWeights.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "DynamicMesh/DynamicMeshAABBTree3.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/SkinnedAssetCommon.h"
+#include "Engine/StaticMesh.h"
+#include "Framework/Application/SlateApplication.h"
+#include "GeometryScript/MeshAssetFunctions.h"
+#include "Materials/MaterialInterface.h"
+#include "MeshDescription.h"
+#include "MeshQueries.h"
+#include "Misc/PackageName.h"
+#include "ReferenceSkeleton.h"
+#include "RHIGlobals.h"
+#include "Rendering/SkeletalMeshLODModel.h"
+#include "Rendering/SkeletalMeshModel.h"
+#include "SkeletalMeshAttributes.h"
+#include "SkinnedAssetCompiler.h"
+#include "UDynamicMesh.h"
+#include "UObject/Package.h"
+#include "UObject/StrongObjectPtr.h"
+
+using UE::AnimationCore::FBoneWeight;
+
+const FName FMantleUnriggedAsIs::HeadBone(TEXT("head"));
+
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleUnriggedAsIsPrivate
+{
+	const TCHAR* const AsIsAvatarSlot = TEXT("avatar");
+
+	/** Influences summed by bone, then the heaviest Max kept and renormalised; false when nothing weighs anything. */
+	bool KeepHeaviest(TArray<TPair<int32, double>>& Blend, const int32 Max)
+	{
+		Blend.RemoveAll([](const TPair<int32, double>& Entry) { return !(Entry.Value > 0.0); });
+		Blend.Sort([](const TPair<int32, double>& A, const TPair<int32, double>& B) { return A.Value > B.Value; });
+		if (Blend.Num() > Max)
+		{
+			Blend.SetNum(Max);
+		}
+		double Sum = 0.0;
+		for (const TPair<int32, double>& Entry : Blend)
+		{
+			Sum += Entry.Value;
+		}
+		if (!(Sum > 0.0))
+		{
+			return false;
+		}
+		for (TPair<int32, double>& Entry : Blend)
+		{
+			Entry.Value /= Sum;
+		}
+		return true;
+	}
+
+	void AddTo(TArray<TPair<int32, double>>& Blend, const int32 Bone, const double Weight)
+	{
+		if (TPair<int32, double>* Existing = Blend.FindByPredicate([Bone](const TPair<int32, double>& Entry) { return Entry.Key == Bone; }))
+		{
+			Existing->Value += Weight;
+		}
+		else
+		{
+			Blend.Emplace(Bone, Weight);
+		}
+	}
+
+	/** A skinned or static mesh source with no rig of its own (one bone, or no usable weights). */
+	bool SkeletalHasNoRig(const USkeletalMesh& Mesh)
+	{
+		return Mesh.GetRefSkeleton().GetRawBoneNum() == 1 || FMantleUnriggedBody::HasNoUsableWeights(FMantleUnriggedBody::ReadSkinWeights(Mesh));
+	}
+
+	/** Slot names made unique ("Skin", "Skin_1"): the build matches sections to slots by name. */
+	TArray<FName> UniqueSlotNames(const TArray<FStaticMaterial>& Materials)
+	{
+		TArray<FName> Out;
+		TSet<FName> Taken;
+		for (int32 Slot = 0; Slot < Materials.Num(); ++Slot)
+		{
+			FName Name = Materials[Slot].MaterialSlotName;
+			if (Name.IsNone())
+			{
+				Name = FName(*FString::Printf(TEXT("Slot_%d"), Slot));
+			}
+			FName Unique = Name;
+			for (int32 Suffix = 1; Taken.Contains(Unique); ++Suffix)
+			{
+				Unique = FName(*FString::Printf(TEXT("%s_%d"), *Name.ToString(), Suffix));
+			}
+			Taken.Add(Unique);
+			Out.Add(Unique);
+		}
+		return Out;
+	}
+}
+
+int32 FMantleAutoRigSkin::AddVertex(const FVector3f& Position, const TConstArrayView<TPair<int32, float>> Influences)
+{
+	TArray<TPair<int32, double>> Blend;
+	for (const TPair<int32, float>& Influence : Influences)
+	{
+		MantleUnriggedAsIsPrivate::AddTo(Blend, Influence.Key, Influence.Value);
+	}
+	Blend.RemoveAll([](const TPair<int32, double>& Entry) { return !(Entry.Value > 0.0); });
+	Blend.Sort([](const TPair<int32, double>& A, const TPair<int32, double>& B) { return A.Value > B.Value; });
+	const int32 Index = Positions.Add(Position);
+	for (int32 Slot = 0; Slot < NumInfluences; ++Slot)
+	{
+		Bones.Add(Blend.IsValidIndex(Slot) ? Blend[Slot].Key : 0);
+		Weights.Add(Blend.IsValidIndex(Slot) ? static_cast<float>(Blend[Slot].Value) : 0.0f);
+	}
+	return Index;
+}
+
+float FMantleAutoRigWeights::WeightOf(const int32 Point, const int32 Bone) const
+{
+	float Out = 0.0f;
+	for (int32 Slot = 0; Slot < NumInfluences; ++Slot)
+	{
+		const int32 Index = Point * NumInfluences + Slot;
+		if (Bones.IsValidIndex(Index) && Bones[Index] == Bone && Weights.IsValidIndex(Index))
+		{
+			Out += Weights[Index];
+		}
+	}
+	return Out;
+}
+
+int32 FMantleAutoRigWeights::Dominant(const int32 Point) const
+{
+	int32 Best = INDEX_NONE;
+	float BestWeight = 0.0f;
+	for (int32 Slot = 0; Slot < NumInfluences; ++Slot)
+	{
+		const int32 Index = Point * NumInfluences + Slot;
+		if (Weights.IsValidIndex(Index) && Weights[Index] > BestWeight)
+		{
+			Best = Bones[Index];
+			BestWeight = Weights[Index];
+		}
+	}
+	return Best;
+}
+
+FString FMantleAutoRigWeights::ToString() const
+{
+	return FString::Printf(TEXT("%d points: %d above the neck on head, %d from the skin (mean %.2f cm, largest %.2f cm, %d over %.0f cm)"),
+		HeadPoints + SkinPoints, HeadPoints, SkinPoints, MeanDistanceCm, MaxDistanceCm, FarPoints, FMantleUnriggedAsIs::FarCm);
+}
+
+bool FMantleUnriggedAsIs::HasNoRig(const UObject* Selection)
+{
+	if (Cast<UStaticMesh>(Selection))
+	{
+		return true;
+	}
+	const USkeletalMesh* Mesh = Cast<USkeletalMesh>(Selection);
+	return Mesh && MantleUnriggedAsIsPrivate::SkeletalHasNoRig(*Mesh);
+}
+
+bool FMantleUnriggedAsIs::CanAutoRig(const UObject* Selection, FString& OutNote)
+{
+	OutNote.Reset();
+	if (!HasNoRig(Selection))
+	{
+		return false;
+	}
+	// The conform takes a front portrait of the face (MHConform's own refusals, in the same words).
+	if (GUsingNullRHI)
+	{
+		OutNote = TEXT("It has no rig, and fitting one needs a renderer, which this editor runs without.");
+		return false;
+	}
+	if (!FSlateApplication::IsInitialized())
+	{
+		OutNote = TEXT("It has no rig, and fitting one needs the editor's UI, which this editor runs without.");
+		return false;
+	}
+	OutNote = PlainMessage();
+	return true;
+}
+
+FString FMantleUnriggedAsIs::PlainMessage()
+{
+	return TEXT("This model has no rig, so we'll fit Epic's MetaHuman skeleton inside it and skin it to that. It keeps its own look.");
+}
+
+bool FMantleUnriggedAsIs::IsUnriggedAsIs(const FMantleConvertContext& Context, const int32 PartIndex)
+{
+	if (Context.Route != EMantleAvatarRoute::AsIs || !Context.AssemblyFolder.IsEmpty() || !Context.Parts.IsValidIndex(PartIndex))
+	{
+		return false;
+	}
+	const FMantleConvertPart& Part = Context.Parts[PartIndex];
+	return Part.bUnrigged && !Part.bAutoRigged && Part.bIncluded && Part.Slot.Equals(MantleUnriggedAsIsPrivate::AsIsAvatarSlot, ESearchCase::CaseSensitive)
+		&& (Part.StaticSource.IsValid() || Part.Original.IsValid());
+}
+
+bool FMantleUnriggedAsIs::TransferWeights(const TConstArrayView<FVector3f> Points, const FMantleAutoRigSkin& Skin, const int32 HeadBoneIndex,
+	const double HeadCutZ, FMantleAutoRigWeights& Out, FString& OutError)
+{
+	using namespace MantleUnriggedAsIsPrivate;
+	using namespace UE::Geometry;
+	Out = FMantleAutoRigWeights();
+	Out.NumInfluences = MaxInfluences;
+	const int32 Slots = Skin.NumInfluences;
+	if (Skin.Positions.IsEmpty() || Skin.Indices.Num() < 3 || Slots <= 0 || Skin.Bones.Num() != Skin.Positions.Num() * Slots
+		|| Skin.Weights.Num() != Skin.Bones.Num())
+	{
+		OutError = TEXT("the body has no skin to take weights from");
+		return false;
+	}
+
+	// The skin as a surface to search: one mesh vertex per skin vertex (ids in order), a triangle the mesh can't take as it is
+	// (it would make an edge with three triangles) on copies of its corners, so no triangle is lost.
+	FDynamicMesh3 Surface;
+	TArray<int32> SkinVertexOf;
+	SkinVertexOf.Reserve(Skin.Positions.Num());
+	for (int32 Vertex = 0; Vertex < Skin.Positions.Num(); ++Vertex)
+	{
+		Surface.AppendVertex(FVector3d(Skin.Positions[Vertex]));
+		SkinVertexOf.Add(Vertex);
+	}
+	for (int32 First = 0; First + 2 < Skin.Indices.Num(); First += 3)
+	{
+		const int32 A = Skin.Indices[First];
+		const int32 B = Skin.Indices[First + 1];
+		const int32 C = Skin.Indices[First + 2];
+		if (!Skin.Positions.IsValidIndex(A) || !Skin.Positions.IsValidIndex(B) || !Skin.Positions.IsValidIndex(C) || A == B || B == C || A == C)
+		{
+			continue;
+		}
+		if (Surface.AppendTriangle(A, B, C) >= 0)
+		{
+			continue;
+		}
+		const int32 CopyA = Surface.AppendVertex(FVector3d(Skin.Positions[A]));
+		const int32 CopyB = Surface.AppendVertex(FVector3d(Skin.Positions[B]));
+		const int32 CopyC = Surface.AppendVertex(FVector3d(Skin.Positions[C]));
+		SkinVertexOf.Add(A);
+		SkinVertexOf.Add(B);
+		SkinVertexOf.Add(C);
+		Surface.AppendTriangle(CopyA, CopyB, CopyC);
+	}
+	if (Surface.TriangleCount() == 0)
+	{
+		OutError = TEXT("the body has no skin to take weights from");
+		return false;
+	}
+	const FDynamicMeshAABBTree3 Tree(&Surface, /*bAutoBuild*/ true);
+
+	Out.Bones.Reserve(Points.Num() * MaxInfluences);
+	Out.Weights.Reserve(Points.Num() * MaxInfluences);
+	TArray<TPair<int32, double>> Blend;
+	double TotalCm = 0.0;
+	for (const FVector3f& Point : Points)
+	{
+		Blend.Reset();
+		if (HeadBoneIndex != INDEX_NONE && Point.Z > HeadCutZ)
+		{
+			// Above the neck: the head alone (the body's skin ends at the neck; the face has no jaw to follow).
+			Blend.Emplace(HeadBoneIndex, 1.0);
+			++Out.HeadPoints;
+		}
+		else
+		{
+			double DistanceSquared = 0.0;
+			const int32 Triangle = Tree.FindNearestTriangle(FVector3d(Point), DistanceSquared);
+			if (Triangle < 0)
+			{
+				OutError = TEXT("a point of the model found no skin near it");
+				return false;
+			}
+			const FDistPoint3Triangle3d Query = TMeshQueries<FDynamicMesh3>::TriangleDistance(Surface, Triangle, FVector3d(Point));
+			const FIndex3i Corners = Surface.GetTriangle(Triangle);
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				const double Share = Query.TriangleBaryCoords[Corner];
+				const int32 SkinVertex = SkinVertexOf[Corners[Corner]];
+				for (int32 Slot = 0; Slot < Slots; ++Slot)
+				{
+					const int32 Index = SkinVertex * Slots + Slot;
+					if (Skin.Weights[Index] > 0.0f && Share > 0.0)
+					{
+						AddTo(Blend, Skin.Bones[Index], Share * Skin.Weights[Index]);
+					}
+				}
+			}
+			const double Distance = FMath::Sqrt(FMath::Max(0.0, DistanceSquared));
+			TotalCm += Distance;
+			Out.MaxDistanceCm = FMath::Max(Out.MaxDistanceCm, Distance);
+			Out.FarPoints += Distance > FarCm ? 1 : 0;
+			++Out.SkinPoints;
+		}
+		if (!KeepHeaviest(Blend, MaxInfluences))
+		{
+			OutError = TEXT("the body's skin near a point of the model has no weights");
+			return false;
+		}
+		for (int32 Slot = 0; Slot < MaxInfluences; ++Slot)
+		{
+			Out.Bones.Add(Blend.IsValidIndex(Slot) ? Blend[Slot].Key : 0);
+			Out.Weights.Add(Blend.IsValidIndex(Slot) ? static_cast<float>(Blend[Slot].Value) : 0.0f);
+		}
+	}
+	Out.MeanDistanceCm = Out.SkinPoints > 0 ? TotalCm / Out.SkinPoints : 0.0;
+	return true;
+}
+
+bool FMantleUnriggedAsIs::ReadSkin(const USkeletalMesh& Mesh, const FReferenceSkeleton& Target, FMantleAutoRigSkin& InOut, FString& OutError)
+{
+	const FSkeletalMeshModel* Imported = Mesh.GetImportedModel();
+	if (!Imported || Imported->LODModels.Num() == 0)
+	{
+		OutError = FString::Printf(TEXT("%s has no geometry to read"), *Mesh.GetName());
+		return false;
+	}
+	if (InOut.NumInfluences <= 0)
+	{
+		InOut.NumInfluences = MAX_TOTAL_INFLUENCES;
+	}
+	// Its bones onto Target's by name; a bone Target lacks (a face's FACIAL_ joints) onto its nearest ancestor Target has.
+	const FReferenceSkeleton& Own = Mesh.GetRefSkeleton();
+	TArray<int32> ToTarget;
+	ToTarget.Init(INDEX_NONE, Own.GetRawBoneNum());
+	for (int32 Bone = 0; Bone < Own.GetRawBoneNum(); ++Bone)
+	{
+		for (int32 Walk = Bone; Walk != INDEX_NONE && ToTarget[Bone] == INDEX_NONE; Walk = Own.GetRawParentIndex(Walk))
+		{
+			ToTarget[Bone] = Target.FindRawBoneIndex(Own.GetRawRefBoneInfo()[Walk].Name);
+		}
+	}
+	const FSkeletalMeshLODModel& LOD = Imported->LODModels[0];
+	const int32 Base = InOut.Positions.Num();
+	int32 Read = 0;
+	TArray<TPair<int32, float>> Influences;
+	for (const FSkelMeshSection& Section : LOD.Sections)
+	{
+		for (const FSoftSkinVertex& Vertex : Section.SoftVertices)
+		{
+			Influences.Reset();
+			for (int32 Influence = 0; Influence < MAX_TOTAL_INFLUENCES; ++Influence)
+			{
+				const int32 Weight = Vertex.InfluenceWeights[Influence];
+				const int32 Local = Vertex.InfluenceBones[Influence];
+				const int32 Bone = Section.BoneMap.IsValidIndex(Local) ? static_cast<int32>(Section.BoneMap[Local]) : INDEX_NONE;
+				if (Weight > 0 && ToTarget.IsValidIndex(Bone) && ToTarget[Bone] != INDEX_NONE)
+				{
+					Influences.Emplace(ToTarget[Bone], static_cast<float>(Weight) / 65535.0f);
+				}
+			}
+			InOut.AddVertex(Vertex.Position, Influences);
+			++Read;
+		}
+	}
+	// The index buffer counts vertices across every section, in their order.
+	for (const FSkelMeshSection& Section : LOD.Sections)
+	{
+		const int32 End = static_cast<int32>(Section.BaseIndex + Section.NumTriangles * 3);
+		for (int32 Index = static_cast<int32>(Section.BaseIndex); Index < End && LOD.IndexBuffer.IsValidIndex(Index); ++Index)
+		{
+			const int32 Vertex = static_cast<int32>(LOD.IndexBuffer[Index]);
+			InOut.Indices.Add(Vertex < Read ? Base + Vertex : INDEX_NONE);
+		}
+	}
+	if (Read == 0)
+	{
+		OutError = FString::Printf(TEXT("%s has no vertices"), *Mesh.GetName());
+		return false;
+	}
+	return true;
+}
+
+bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Body, USkeletalMesh* Head, const FString& Folder, const FString& InName,
+	FMantleAutoRigResult& OutResult, FString& OutError)
+{
+	using namespace MantleUnriggedAsIsPrivate;
+	using namespace UE::Geometry;
+	OutResult = FMantleAutoRigResult();
+	const FString Name = FMantleMetaHumanSteps::AssetTag(InName);
+
+	// The posed model's LOD 0 source, read with Geometry Script's default options: material IDs are its slot numbers.
+	UDynamicMesh* Geometry = NewObject<UDynamicMesh>(GetTransientPackage());
+	const TStrongObjectPtr<UDynamicMesh> GeometryHeld(Geometry);
+	FGeometryScriptCopyMeshFromAssetOptions CopyOptions;
+	FGeometryScriptMeshReadLOD ReadLOD;
+	ReadLOD.LODType = EGeometryScriptLODType::SourceModel;
+	ReadLOD.LODIndex = 0;
+	EGeometryScriptOutcomePins Outcome = EGeometryScriptOutcomePins::Failure;
+	UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshFromStaticMeshV2(&Posed, Geometry, CopyOptions, ReadLOD, Outcome, /*bUseSectionMaterials*/ false);
+	if (Outcome != EGeometryScriptOutcomePins::Success || Geometry->GetTriangleCount() == 0)
+	{
+		OutError = FString::Printf(TEXT("%s's geometry could not be read"), *Posed.GetName());
+		return false;
+	}
+
+	// The skin: the A-pose body, and the head on it (its neck and face joints onto the body's neck and head).
+	TArray<USkinnedAsset*> Compiling = { &Body };
+	if (Head)
+	{
+		Compiling.Add(Head);
+	}
+	FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);
+	const FReferenceSkeleton& Reference = Body.GetRefSkeleton();
+	const int32 HeadBoneIndex = Reference.FindRawBoneIndex(HeadBone);
+	if (HeadBoneIndex == INDEX_NONE)
+	{
+		OutError = FString::Printf(TEXT("%s has no %s bone"), *Body.GetName(), *HeadBone.ToString());
+		return false;
+	}
+	OutResult.HeadCutZ = FAnimationRuntime::GetComponentSpaceTransformRefPose(Reference, HeadBoneIndex).GetLocation().Z;
+	FMantleAutoRigSkin Skin;
+	Skin.NumInfluences = MAX_TOTAL_INFLUENCES;
+	if (!ReadSkin(Body, Reference, Skin, OutError))
+	{
+		return false;
+	}
+	FString HeadError;
+	if (Head && !ReadSkin(*Head, Reference, Skin, HeadError))
+	{
+		// The body alone still carries the model; the cut puts the head on its bone.
+		UE_LOG(LogMantle, Warning, TEXT("MANTLE_CONVERT_ASISRIG the head's skin was not read (%s): the neck takes the body's weights"), *HeadError);
+	}
+
+	// The model's points, in vertex id order.
+	TArray<FVector3f> Points;
+	TArray<int32> PointOf;
+	Geometry->ProcessMesh([&Points, &PointOf](const FDynamicMesh3& Read)
+	{
+		PointOf.Init(INDEX_NONE, Read.MaxVertexID());
+		for (const int32 Vertex : Read.VertexIndicesItr())
+		{
+			PointOf[Vertex] = Points.Add(FVector3f(Read.GetVertex(Vertex)));
+		}
+	});
+
+	// On the body: the conform fits the body to the model where it stands, so the gap is small as it is; when it isn't, the model
+	// is first put on the body's feet and middle, then the gap closed (the clothing's own distance from the skin stays).
+	{
+		double Gap = 0.0;
+		FVector3f Offset = FMantleGarmentOutfit::AlignTranslation(Points, Skin.Positions, Gap);
+		if (Gap > AlignedGapCm)
+		{
+			FBox3f ModelBox(ForceInit);
+			FBox3f BodyBox(ForceInit);
+			for (const FVector3f& Point : Points)
+			{
+				ModelBox += Point;
+			}
+			for (const FVector3f& Position : Skin.Positions)
+			{
+				BodyBox += Position;
+			}
+			const FVector3f Start(BodyBox.GetCenter().X - ModelBox.GetCenter().X, BodyBox.GetCenter().Y - ModelBox.GetCenter().Y, BodyBox.Min.Z - ModelBox.Min.Z);
+			TArray<FVector3f> Moved = Points;
+			for (FVector3f& Point : Moved)
+			{
+				Point += Start;
+			}
+			double MovedGap = 0.0;
+			const FVector3f Refined = FMantleGarmentOutfit::AlignTranslation(Moved, Skin.Positions, MovedGap);
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG align: as it stands %s (gap %.2f cm); from the body's feet and middle %s (gap %.2f cm)"),
+				*Offset.ToString(), Gap, *(Start + Refined).ToString(), MovedGap);
+			if (MovedGap < Gap)
+			{
+				Offset = Start + Refined;
+				Gap = MovedGap;
+			}
+		}
+		OutResult.Offset = Offset;
+		OutResult.AlignGapCm = Gap;
+		for (FVector3f& Point : Points)
+		{
+			Point += Offset;
+		}
+	}
+
+	if (!TransferWeights(Points, Skin, HeadBoneIndex, OutResult.HeadCutZ, OutResult.Weights, OutError))
+	{
+		return false;
+	}
+	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG %s: offset %s (gap %.2f cm), head cut at %.2f cm; %s"), *Posed.GetName(), *OutResult.Offset.ToString(),
+		OutResult.AlignGapCm, OutResult.HeadCutZ, *OutResult.Weights.ToString());
+
+	// The slots: the posed model's own materials, by unique slot name (the build matches sections to slots by name).
+	const TArray<FStaticMaterial>& StaticMaterials = Posed.GetStaticMaterials();
+	TArray<FName> SlotNames = UniqueSlotNames(StaticMaterials);
+	if (SlotNames.IsEmpty())
+	{
+		SlotNames.Add(FName(TEXT("Slot_0")));
+	}
+	TArray<FSkeletalMaterial> Materials;
+	for (int32 Slot = 0; Slot < SlotNames.Num(); ++Slot)
+	{
+		UMaterialInterface* Material = StaticMaterials.IsValidIndex(Slot) ? StaticMaterials[Slot].MaterialInterface.Get() : nullptr;
+		Materials.Add(FSkeletalMaterial(Material, /*bInEnableShadowCasting*/ true, /*bInRecomputeTangent*/ false, SlotNames[Slot], SlotNames[Slot]));
+	}
+
+	// The description: the body's bones, one vertex per model vertex with its weights, one vertex instance per triangle corner (the
+	// build welds the identical ones), a polygon group per slot used.
+	FMeshDescription Description;
+	FSkeletalMeshAttributes Attributes(Description);
+	Attributes.Register();
+	bool bNormals = false;
+	Geometry->ProcessMesh([&](const FDynamicMesh3& Read)
+	{
+		const FDynamicMeshAttributeSet* Overlays = Read.HasAttributes() ? Read.Attributes() : nullptr;
+		const FDynamicMeshNormalOverlay* NormalOverlay = Overlays ? Overlays->PrimaryNormals() : nullptr;
+		const FDynamicMeshColorOverlay* ColorOverlay = Overlays && Overlays->HasPrimaryColors() ? Overlays->PrimaryColors() : nullptr;
+		const FDynamicMeshMaterialAttribute* MaterialIDs = Overlays && Overlays->HasMaterialID() ? Overlays->GetMaterialID() : nullptr;
+		const int32 NumUVs = FMath::Clamp(Overlays ? Overlays->NumUVLayers() : 0, 1, static_cast<int32>(MAX_TEXCOORDS));
+		bNormals = NormalOverlay != nullptr;
+		Attributes.GetVertexInstanceUVs().SetNumChannels(NumUVs);
+		{
+			FSkeletalMeshAttributes::FBoneNameAttributesRef BoneNames = Attributes.GetBoneNames();
+			FSkeletalMeshAttributes::FBoneParentIndexAttributesRef BoneParents = Attributes.GetBoneParentIndices();
+			FSkeletalMeshAttributes::FBonePoseAttributesRef BonePoses = Attributes.GetBonePoses();
+			for (int32 Bone = 0; Bone < Reference.GetRawBoneNum(); ++Bone)
+			{
+				const FBoneID Id = Attributes.CreateBone();
+				BoneNames.Set(Id, Reference.GetRawRefBoneInfo()[Bone].Name);
+				BoneParents.Set(Id, Reference.GetRawParentIndex(Bone));
+				BonePoses.Set(Id, Reference.GetRawRefBonePose()[Bone]);
+			}
+		}
+		const TVertexAttributesRef<FVector3f> Positions = Attributes.GetVertexPositions();
+		const TVertexInstanceAttributesRef<FVector3f> Normals = Attributes.GetVertexInstanceNormals();
+		const TVertexInstanceAttributesRef<float> Signs = Attributes.GetVertexInstanceBinormalSigns();
+		const TVertexInstanceAttributesRef<FVector4f> Colors = Attributes.GetVertexInstanceColors();
+		const TVertexInstanceAttributesRef<FVector2f> UVs = Attributes.GetVertexInstanceUVs();
+		FSkinWeightsVertexAttributesRef SkinWeights = Attributes.GetVertexSkinWeights();
+		const FMantleAutoRigWeights& Weights = OutResult.Weights;
+
+		TArray<FVertexID> VertexOf;
+		VertexOf.Init(FVertexID(INDEX_NONE), Read.MaxVertexID());
+		TArray<FBoneWeight> Influence;
+		for (const int32 Vertex : Read.VertexIndicesItr())
+		{
+			const int32 Point = PointOf[Vertex];
+			const FVertexID Made = Description.CreateVertex();
+			Positions.Set(Made, Points[Point]);
+			Influence.Reset();
+			for (int32 Slot = 0; Slot < Weights.NumInfluences; ++Slot)
+			{
+				const int32 Index = Point * Weights.NumInfluences + Slot;
+				if (Weights.Weights[Index] > 0.0f)
+				{
+					Influence.Add(FBoneWeight(static_cast<FBoneIndexType>(Weights.Bones[Index]), Weights.Weights[Index]));
+				}
+			}
+			SkinWeights.Set(Made, TArrayView<const FBoneWeight>(Influence));
+			VertexOf[Vertex] = Made;
+		}
+
+		TMap<int32, FPolygonGroupID> Groups;
+		auto GroupOf = [&](const int32 MaterialID)
+		{
+			const int32 Slot = SlotNames.IsValidIndex(MaterialID) ? MaterialID : 0;
+			if (const FPolygonGroupID* Found = Groups.Find(Slot))
+			{
+				return *Found;
+			}
+			const FPolygonGroupID Made = Description.CreatePolygonGroup();
+			Attributes.GetPolygonGroupMaterialSlotNames().Set(Made, SlotNames[Slot]);
+			Groups.Add(Slot, Made);
+			return Made;
+		};
+		for (const int32 Triangle : Read.TriangleIndicesItr())
+		{
+			const FIndex3i Corners = Read.GetTriangle(Triangle);
+			FVertexInstanceID Instances[3];
+			for (int32 Corner = 0; Corner < 3; ++Corner)
+			{
+				const FVertexInstanceID Instance = Description.CreateVertexInstance(VertexOf[Corners[Corner]]);
+				if (NormalOverlay && NormalOverlay->IsSetTriangle(Triangle))
+				{
+					Normals.Set(Instance, NormalOverlay->GetElement(NormalOverlay->GetTriangle(Triangle)[Corner]));
+				}
+				Signs.Set(Instance, 1.0f);
+				for (int32 Channel = 0; Channel < NumUVs; ++Channel)
+				{
+					const FDynamicMeshUVOverlay* UVOverlay = Overlays && Channel < Overlays->NumUVLayers() ? Overlays->GetUVLayer(Channel) : nullptr;
+					if (UVOverlay && UVOverlay->IsSetTriangle(Triangle))
+					{
+						UVs.Set(Instance, Channel, UVOverlay->GetElement(UVOverlay->GetTriangle(Triangle)[Corner]));
+					}
+				}
+				Colors.Set(Instance, ColorOverlay && ColorOverlay->IsSetTriangle(Triangle)
+					? ColorOverlay->GetElement(ColorOverlay->GetTriangle(Triangle)[Corner]) : FVector4f(1.0f, 1.0f, 1.0f, 1.0f));
+				Instances[Corner] = Instance;
+			}
+			Description.CreateTriangle(GroupOf(MaterialIDs ? MaterialIDs->GetValue(Triangle) : 0), TArrayView<const FVertexInstanceID>(Instances, 3));
+		}
+	});
+
+	FBox Bounds(ForceInit);
+	for (const FVector3f& Point : Points)
+	{
+		Bounds += FVector(Point);
+	}
+
+	// The mesh on the body's reference skeleton (its joints where the conform put them) and its skeleton (Epic's MetaHuman body
+	// skeleton, which the clips play on); one LOD, every triangle kept, tangents from the UVs.
+	const FString PackageName = FMantleMetaHumanSteps::UniquePackageName(Folder, FString::Printf(TEXT("SK_%s_AsIs"), *Name));
+	const FString AssetName = FPackageName::GetShortName(PackageName);
+	UPackage* Package = CreatePackage(*PackageName);
+	USkeletalMesh* Mesh = Package ? NewObject<USkeletalMesh>(Package, FName(*AssetName), RF_Public | RF_Standalone | RF_Transactional) : nullptr;
+	if (!Mesh)
+	{
+		OutError = FString::Printf(TEXT("could not create %s"), *PackageName);
+		return false;
+	}
+	OutResult.Created.Add(Mesh);
+	Mesh->PreEditChange(nullptr);
+	Mesh->SetRefSkeleton(Reference);
+	Mesh->GetRefBasesInvMatrix().Reset();
+	Mesh->CalculateInvRefMatrices();
+	Mesh->SetMaterials(Materials);
+	FSkeletalMeshLODInfo& LODInfo = Mesh->AddLODInfo();
+	LODInfo.BuildSettings.bRecomputeNormals = !bNormals;
+	LODInfo.BuildSettings.bRecomputeTangents = true;
+	LODInfo.ReductionSettings.NumOfTrianglesPercentage = 1.0f;
+	LODInfo.ReductionSettings.NumOfVertPercentage = 1.0f;
+	Mesh->GetImportedModel()->LODModels.Add(new FSkeletalMeshLODModel);
+	Mesh->CreateMeshDescription(0, MoveTemp(Description));
+	Mesh->CommitMeshDescription(0);
+	Mesh->SetImportedBounds(FBoxSphereBounds(Bounds));
+	USkeleton* Skeleton = Body.GetSkeleton();
+	const bool bTransientSkeleton = !Skeleton || Skeleton->HasAnyFlags(RF_Transient) || Skeleton->GetPackage() == GetTransientPackage();
+	if (!bTransientSkeleton)
+	{
+		Mesh->SetSkeleton(Skeleton);
+	}
+	Mesh->PostEditChange();
+	TArray<USkinnedAsset*> Built = { Mesh };
+	FSkinnedAssetCompilingManager::Get().FinishCompilation(Built);
+	FAssetRegistryModule::AssetCreated(Mesh);
+	if (bTransientSkeleton)
+	{
+		// The export's skeleton lives in memory only: the mesh gets a saved one of the same bones, next to it.
+		const FString SkeletonPackageName = FMantleMetaHumanSteps::UniquePackageName(Folder, AssetName + TEXT("_Skeleton"));
+		UPackage* SkeletonPackage = CreatePackage(*SkeletonPackageName);
+		USkeleton* Made = SkeletonPackage ? NewObject<USkeleton>(SkeletonPackage, FName(*FPackageName::GetShortName(SkeletonPackageName)), RF_Public | RF_Standalone) : nullptr;
+		if (Made)
+		{
+			OutResult.Created.Add(Made);
+		}
+		if (!Made || !Made->MergeAllBonesToBoneTree(Mesh, false))
+		{
+			OutError = TEXT("the skinned mesh's bones could not make a skeleton");
+			return false;
+		}
+		Mesh->SetSkeleton(Made);
+		Made->SetPreviewMesh(Mesh);
+		Made->MarkPackageDirty();
+		FAssetRegistryModule::AssetCreated(Made);
+	}
+	Mesh->MarkPackageDirty();
+	OutResult.Mesh = Mesh;
+	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG made %s: %d vertices, %d triangles, %d slots, on %s's skeleton (%d bones)"), *Mesh->GetPathName(),
+		Points.Num(), Geometry->GetTriangleCount(), Materials.Num(), *Body.GetName(), Reference.GetRawBoneNum());
+	return true;
+}
+
+void FMantleUnriggedAsIsFixer::Analyze(const FMantleConvertContext& Context, TArray<FMantleConvertFix>& OutFixes) const
+{
+	for (int32 PartIndex = 0; PartIndex < Context.Parts.Num(); ++PartIndex)
+	{
+		if (!FMantleUnriggedAsIs::IsUnriggedAsIs(Context, PartIndex))
+		{
+			continue;
+		}
+		FMantleConvertFix& Fix = OutFixes.AddDefaulted_GetRef();
+		Fix.FixerId = GetId();
+		Fix.PartIndex = PartIndex;
+		Fix.Problem = TEXT("it has no rig to keep");
+		// The conform's own refusals, in its words.
+		if (GUsingNullRHI)
+		{
+			Fix.Action = TEXT("Can't: fitting a skeleton takes a front portrait of the face, which needs a renderer, and this editor runs without one.");
+			Fix.bCanFix = false;
+			Fix.bEnabled = false;
+			continue;
+		}
+		if (!FSlateApplication::IsInitialized())
+		{
+			Fix.Action = TEXT("Can't: MetaHuman's geometry export needs the editor's UI, and this editor runs without it.");
+			Fix.bCanFix = false;
+			Fix.bEnabled = false;
+			continue;
+		}
+		Fix.Action = FMantleUnriggedAsIs::PlainMessage()
+			+ TEXT(" Epic's conform places the skeleton, guided by a front portrait of the face (it needs a human-like face looking forward). Everything above the neck follows the head; hair, capes and skirts follow the nearest body bone. The face doesn't animate (no jaw).");
+	}
+}
+
+bool FMantleUnriggedAsIsFixer::Apply(const FMantleConvertFix& Fix, FMantleConvertContext& Context, FString& OutError) const
+{
+	if (Fix.FixerId != GetId() || !FMantleUnriggedAsIs::IsUnriggedAsIs(Context, Fix.PartIndex))
+	{
+		OutError = TEXT("there is no model without a rig to fit");
+		return false;
+	}
+	FMantleConvertPart& Part = Context.Parts[Fix.PartIndex];
+	const FString Name = FMantleMetaHumanSteps::AssetTag(Part.Name);
+	const FString WorkFolder = Context.OutputFolder / TEXT("Work");
+	const FString CharacterFolder = Context.OutputFolder / Name;
+	// Nothing of Epic's, MetaHuman Creator's or the source's may change; the step writes only into <output> (Work, the
+	// character's folder and the skinned mesh).
+	const TArray<FString> Roots = FMantleMetaHumanSteps::ProtectedRoots(Context, Fix.PartIndex);
+	const TSet<FString> DirtyBefore = FMantleMetaHumanSteps::DirtyUnder(Roots, Context.OutputFolder);
+	TArray<TWeakObjectPtr<UObject>> Made;
+
+	// 1. The model bent into the conform's pose and scaled to the default height (the unrigged Convert route's first step).
+	FMantleUnriggedBodyResult Posed;
+	bool bDone = FMantleUnriggedBody::MakePosedMesh(Part, WorkFolder, Part.Name, FMantleAvatarHeight::TargetCm(), Posed, OutError);
+	Made.Append(Posed.Created);
+	// 2. Epic's conform: a MetaHuman Character fitted inside it, its A-pose body (Epic's skeleton, the joints in the model) exported.
+	FMantleMetaHumanConformResult Conformed;
+	if (bDone)
+	{
+		bDone = FMantleMetaHumanConform::Conform(*Posed.PosedMesh.Get(), TOptional<FVector>(), CharacterFolder, Name, Conformed, OutError);
+		Made.Append(Conformed.Created);
+		if (bDone && !Conformed.APoseBody.IsValid())
+		{
+			OutError = TEXT("MetaHuman's conform gave no A-pose body");
+			bDone = false;
+		}
+	}
+	// 3. The model skinned to that body.
+	FMantleAutoRigResult Rigged;
+	if (bDone)
+	{
+		bDone = FMantleUnriggedAsIs::MakeSkinnedMesh(*Posed.PosedMesh.Get(), *Conformed.APoseBody.Get(), Conformed.APoseHead.Get(), Context.OutputFolder, Part.Name,
+			Rigged, OutError);
+		Made.Append(Rigged.Created);
+	}
+	// Checked whether the step finished or not: one that stopped half-way may have changed something too.
+	FString Dirtied;
+	if (!FMantleMetaHumanSteps::CheckUnchanged(Roots, Context.OutputFolder, DirtyBefore, TEXT("The auto-rig"), Dirtied))
+	{
+		OutError = bDone ? Dirtied : FString::Printf(TEXT("%s. %s"), *OutError, *Dirtied);
+		bDone = false;
+	}
+	if (!bDone)
+	{
+		// The fixer contract: a failed Apply leaves nothing behind and the context as it was.
+		FMantleMetaHumanSteps::Discard(Made);
+		return false;
+	}
+	for (const TWeakObjectPtr<UObject>& Created : Made)
+	{
+		Context.CreatedAssets.AddUnique(Created);
+	}
+	// The part is now a skinned mesh on Epic's body skeleton: the As-is fixers after this take it as any As-is body.
+	Part.Mesh = Rigged.Mesh;
+	Part.SkeletonId = TEXT("metahuman");
+	Part.bAutoRigged = true;
+	const USkeletalMesh* Mesh = Rigged.Mesh.Get();
+	const FMantleAutoRigWeights& Weights = Rigged.Weights;
+	Context.Notes.Add(FString::Printf(TEXT("%s: %s Made %s on Epic's MetaHuman body skeleton: %d of %d points weighted from the fitted body's skin (on average %.1f cm from it; %d more than %.0f cm away, such as hair or a cape, follow their nearest bone), %d above the neck on the head. Scaled by %.4f from %.1f cm toward the default height. The face doesn't animate (no jaw)."),
+		*Part.Name, *FMantleUnriggedAsIs::PlainMessage(), Mesh ? *Mesh->GetName() : TEXT("?"), Weights.SkinPoints, Weights.SkinPoints + Weights.HeadPoints,
+		Weights.MeanDistanceCm, Weights.FarPoints, FMantleUnriggedAsIs::FarCm, Weights.HeadPoints, Posed.InputScale, Posed.HeightCm));
+	return true;
+}
+
+void RegisterMantleUnriggedAsIsFixer()
+{
+	FMantleAvatarFixers::Register(MakeShared<FMantleUnriggedAsIsFixer>());
+}

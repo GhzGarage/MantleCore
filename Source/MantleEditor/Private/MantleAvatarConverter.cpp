@@ -10,6 +10,7 @@
 #include "MantleReferenceBodies.h"
 #include "MantleRuntime.h"
 #include "MantleSettings.h"
+#include "MantleUnriggedAsIs.h"
 #include "MantleUnriggedBody.h"
 
 #include "AssetRegistry/AssetData.h"
@@ -89,10 +90,10 @@ namespace MantleAvatarConverterPrivate
 		return FMantleReferenceBodies::Describe(Object);
 	}
 
-	/** The Convert route's own steps (pipeline steps 01 to 05 and the hand-off): one that fails stops the run. */
+	/** The Convert route's own steps (pipeline steps 01 to 05 and the hand-off), and As-is's auto-rig: one that fails stops the run. */
 	bool ConverterIsConvertStep(const FName FixerId)
 	{
-		return FixerId == MantleAvatarFixerIds::Strip || FixerId == MantleAvatarFixerIds::MHUnrigged || FixerId == MantleAvatarFixerIds::MHPose
+		return FixerId == MantleAvatarFixerIds::AsIsRig || FixerId == MantleAvatarFixerIds::Strip || FixerId == MantleAvatarFixerIds::MHUnrigged || FixerId == MantleAvatarFixerIds::MHPose
 			|| FixerId == MantleAvatarFixerIds::MHConform
 			|| FixerId == MantleAvatarFixerIds::MHSource || FixerId == MantleAvatarFixerIds::MHBuild;
 	}
@@ -100,6 +101,10 @@ namespace MantleAvatarConverterPrivate
 	/** The progress line while a step runs (the panel's Convert dialog shows it). */
 	FText ConverterStepText(const FName FixerId)
 	{
+		if (FixerId == MantleAvatarFixerIds::AsIsRig)
+		{
+			return NSLOCTEXT("MantleAvatarConverter", "StepAsIsRig", "Fitting Epic's MetaHuman skeleton inside the model and skinning it to it...");
+		}
 		if (FixerId == MantleAvatarFixerIds::RigMap)
 		{
 			return NSLOCTEXT("MantleAvatarConverter", "StepRigMap", "Mapping the rig onto a supported skeleton...");
@@ -348,14 +353,10 @@ bool FMantleAvatarConverter::MakeContext(UObject* Selection, const FMantleConver
 	}
 
 	// A static mesh has no skeleton: the Convert route fits it to a MetaHuman body (FMantleUnriggedBody; the MHUnrigged step
-	// takes Strip's and the A-pose step's place). One avatar part with no skeletal mesh until the build hands it on.
+	// takes Strip's and the A-pose step's place); chunk 7: As-is keeps its look, skinned to Epic's MetaHuman body skeleton (the
+	// AsIsRig step, FMantleUnriggedAsIs). One avatar part with no skeletal mesh until the build (or AsIsRig) hands it on.
 	if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Selection))
 	{
-		if (OutContext.Route != EMantleAvatarRoute::Convert)
-		{
-			OutError = FString::Printf(TEXT("%s has no skeleton: it can only be fitted to a MetaHuman body, on the Convert route."), *StaticMesh->GetName());
-			return false;
-		}
 		if (!Options.Slot.TrimStartAndEnd().IsEmpty() && !Options.Slot.TrimStartAndEnd().Equals(AvatarSlot, ESearchCase::CaseSensitive))
 		{
 			OutError = FString::Printf(TEXT("%s has no skeleton, so it can only become an avatar (a MetaHuman body), not \"%s\"."), *StaticMesh->GetName(),
@@ -370,7 +371,7 @@ bool FMantleAvatarConverter::MakeContext(UObject* Selection, const FMantleConver
 		Part.StaticSource = StaticMesh;
 		Part.bUnrigged = true;
 		Part.Name = FMantleAvatarAssemblyFixer::DisplayName(StaticMesh->GetName());
-		OutContext.Notes.Add(FMantleUnriggedBody::PlainMessage());
+		OutContext.Notes.Add(OutContext.Route == EMantleAvatarRoute::AsIs ? FMantleUnriggedAsIs::PlainMessage() : FMantleUnriggedBody::PlainMessage());
 		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT context static mesh=%s slot=%s output=%s"), *StaticMesh->GetPathName(), *Part.Slot, *OutContext.OutputFolder);
 		return true;
 	}
@@ -421,11 +422,26 @@ bool FMantleAvatarConverter::MakeContext(UObject* Selection, const FMantleConver
 	Part.Mesh = Mesh;
 	Part.Original = Mesh;
 	Part.Name = FMantleAvatarAssemblyFixer::DisplayName(Mesh->GetName());
-	// A skeletal mesh with one bone has no skeleton to speak of: it is fitted to a MetaHuman body as a static mesh is.
-	if (!InAssembly && Class == EMantleCosmeticClass::Avatar && OutContext.Route == EMantleAvatarRoute::Convert && Mesh->GetRefSkeleton().GetRawBoneNum() == 1)
+	// A skeletal mesh whose weights don't carry it (one bone, every vertex on one bone, or too few bones weighted for any
+	// supported skeleton) has no skeleton to speak of: it is fitted to a MetaHuman body as a static mesh is (Convert), or keeps
+	// its look on Epic's MetaHuman body skeleton (As-is, chunk 7). As-is leaves Mesh null until AsIsRig makes it, so no other
+	// As-is fixer reads its rig (Original keeps the source).
+	if (!InAssembly && Class == EMantleCosmeticClass::Avatar)
 	{
-		Part.bUnrigged = true;
-		OutContext.Notes.Add(FMantleUnriggedBody::PlainMessage());
+		const bool bOneBone = Mesh->GetRefSkeleton().GetRawBoneNum() == 1;
+		const FMantleSkinWeightRead Weights = FMantleUnriggedBody::ReadSkinWeights(*Mesh);
+		if (bOneBone || FMantleUnriggedBody::HasNoUsableWeights(Weights))
+		{
+			Part.bUnrigged = true;
+			if (OutContext.Route == EMantleAvatarRoute::AsIs)
+			{
+				Part.Mesh = nullptr;
+			}
+			OutContext.Notes.Add(OutContext.Route == EMantleAvatarRoute::AsIs ? FMantleUnriggedAsIs::PlainMessage()
+				: bOneBone ? FMantleUnriggedBody::PlainMessage() : FMantleUnriggedBody::NoUsableWeightsMessage());
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT context %s unrigged: %d bones, %s (at least %d weighted bones and two dominant ones carry a body)"),
+				*Mesh->GetName(), Mesh->GetRefSkeleton().GetRawBoneNum(), *Weights.ToString(), FMantleUnriggedBody::MinWeightedBones());
+		}
 	}
 	if (InAssembly && Class != EMantleCosmeticClass::Avatar)
 	{

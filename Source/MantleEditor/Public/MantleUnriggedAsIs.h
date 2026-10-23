@@ -1,0 +1,159 @@
+// Copyright Joshua Eger. All Rights Reserved.
+#pragma once
+
+#include "CoreMinimal.h"
+#include "MantleAvatarConvertFixer.h"
+
+class USkeletalMesh;
+class UStaticMesh;
+struct FReferenceSkeleton;
+
+/**
+ * Chunk 7: a skin to take weights from (FMantleUnriggedAsIs::TransferWeights): the A-pose body (and head) Epic's conform placed
+ * inside the model. Its vertices, its triangles, and per vertex NumInfluences (bone, weight) slots; bones index the reference
+ * skeleton the new mesh is built on, unused slots weigh 0.
+ */
+struct MANTLEEDITOR_API FMantleAutoRigSkin
+{
+	TArray<FVector3f> Positions;
+
+	/** Triangle list of indices into Positions. */
+	TArray<int32> Indices;
+
+	/** Slots per vertex; set before the first AddVertex. */
+	int32 NumInfluences = 0;
+	TArray<int32> Bones;
+	TArray<float> Weights;
+
+	/** Adds a vertex with Influences (bone, weight); the heaviest NumInfluences kept, the rest of the slots empty. Its index. */
+	int32 AddVertex(const FVector3f& Position, TConstArrayView<TPair<int32, float>> Influences);
+};
+
+/** What FMantleUnriggedAsIs::TransferWeights gave each point: NumInfluences (bone, weight) slots per point, weights summing to 1. */
+struct MANTLEEDITOR_API FMantleAutoRigWeights
+{
+	int32 NumInfluences = 0;
+	TArray<int32> Bones;
+	TArray<float> Weights;
+
+	/** Points above the head cut, all on the head bone; points weighted from the skin's closest point. */
+	int32 HeadPoints = 0;
+	int32 SkinPoints = 0;
+
+	/** Of the skin points: their mean and largest distance to the skin (cm), and how many were over FMantleUnriggedAsIs::FarCm away. */
+	double MeanDistanceCm = 0.0;
+	double MaxDistanceCm = 0.0;
+	int32 FarPoints = 0;
+
+	/** Point's weight on Bone (0 when it has none). */
+	float WeightOf(int32 Point, int32 Bone) const;
+
+	/** Point's heaviest bone; INDEX_NONE without. */
+	int32 Dominant(int32 Point) const;
+
+	/** "12000 points: 1800 above the neck on head, 10200 from the skin (mean 1.2 cm, largest 14.0 cm, 90 over 5 cm)". */
+	FString ToString() const;
+};
+
+/** What FMantleUnriggedAsIs::MakeSkinnedMesh made. */
+struct MANTLEEDITOR_API FMantleAutoRigResult
+{
+	/** The model's geometry and textures, skinned to the conform's A-pose body skeleton. */
+	TWeakObjectPtr<USkeletalMesh> Mesh;
+
+	/** The translation that put the posed model on the conform's body (cm), and the mean gap after it. */
+	FVector3f Offset = FVector3f::ZeroVector;
+	double AlignGapCm = 0.0;
+
+	/** The head cut: the head bone's height in the A-pose (cm). */
+	double HeadCutZ = 0.0;
+
+	FMantleAutoRigWeights Weights;
+
+	/** Every asset made, for the converter to record, or to discard on failure. */
+	TArray<TWeakObjectPtr<UObject>> Created;
+};
+
+/**
+ * Chunk 7, auto-rig for As-is: a model with no rig (a static mesh, or a skeletal mesh with no usable weights) keeps its own geometry
+ * and textures, skinned to the MetaHuman body skeleton. The unrigged Convert route's first two steps place Epic's skeleton inside it
+ * (FMantleUnriggedBody::MakePosedMesh, then FMantleMetaHumanConform::Conform, whose A-pose body export carries the skeleton); then
+ * each vertex of the posed model takes the A-pose body's (and head's) skin weights at its closest point, everything above the head
+ * joint goes to the head bone, and a skeletal mesh is built of the posed model on the body's skeleton. No MetaHuman build, texture
+ * synthesis or Epic cloud; never a Convert output (FMantleAvatarConverter::IsConvertOutput).
+ *
+ * Limits: the conform needs a renderer (no -nullrhi) and a human-like face looking forward (+Y); the body skeleton has no jaw, so the
+ * face does not animate; hair, capes and skirts follow the nearest body bone rigidly.
+ */
+class MANTLEEDITOR_API FMantleUnriggedAsIs
+{
+public:
+	/** Influences per vertex on the made mesh (the upload keeps eight). */
+	static constexpr int32 MaxInfluences = 8;
+
+	/** A point farther than this from the skin is counted (hair, a cape, a skirt's hem): it follows its nearest bone rigidly. */
+	static constexpr double FarCm = 5.0;
+
+	/** The posed model is taken as already on the body when the mean gap from it to the body's skin is under this (cm). */
+	static constexpr double AlignedGapCm = 3.0;
+
+	/** The bone everything above the neck follows. */
+	static const FName HeadBone;
+
+	/**
+	 * For the panel (chunk 2's As-is choice): whether Selection is a model with no rig that As-is can auto-rig: a static mesh, or a
+	 * skeletal mesh with one bone or no usable weights (FMantleUnriggedBody::HasNoUsableWeights). OutNote says why, in plain words:
+	 * PlainMessage when it can; when it can't for this editor (no renderer), why. False and empty for anything with a rig of its own.
+	 */
+	static bool CanAutoRig(const UObject* Selection, FString& OutNote);
+
+	/** Whether Selection has no rig to keep (a static mesh, a skeletal mesh with one bone or no usable weights). */
+	static bool HasNoRig(const UObject* Selection);
+
+	/** "This model has no rig, so we'll fit Epic's MetaHuman skeleton inside it and skin it to that. It keeps its own look." */
+	static FString PlainMessage();
+
+	/** Whether Context.Parts[PartIndex] is a model with no rig the As-is route auto-rigs (not yet done). */
+	static bool IsUnriggedAsIs(const FMantleConvertContext& Context, int32 PartIndex);
+
+	/**
+	 * Pure (tested): each of Points takes Skin's weights at its closest point on Skin's surface (the three corners' weights blended by
+	 * the point's barycentrics, the heaviest MaxInfluences kept, renormalised); a point above HeadCutZ takes HeadBoneIndex alone.
+	 * False with why when Skin has no triangles or no weights.
+	 */
+	static bool TransferWeights(TConstArrayView<FVector3f> Points, const FMantleAutoRigSkin& Skin, int32 HeadBoneIndex, double HeadCutZ,
+		FMantleAutoRigWeights& Out, FString& OutError);
+
+	/**
+	 * Appends Mesh's LOD 0 (its imported model: vertices, triangles, weights) to InOut, its bones mapped by name onto Target's raw
+	 * bones; a bone Target lacks (the face's FACIAL_ joints) maps to its nearest ancestor Target has. False with why.
+	 */
+	static bool ReadSkin(const USkeletalMesh& Mesh, const FReferenceSkeleton& Target, FMantleAutoRigSkin& InOut, FString& OutError);
+
+	/**
+	 * The skinned mesh: Posed's geometry (its LOD 0 source, each slot its material), moved onto Body when it is not already on it
+	 * (FMantleGarmentOutfit::AlignTranslation), weighted from Body and Head (TransferWeights; the head cut at Body's head joint), as a
+	 * new skeletal mesh Folder/SK_<Name>_AsIs on Body's reference skeleton and skeleton. False with why (OutResult.Created lists what
+	 * was made).
+	 */
+	static bool MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Body, USkeletalMesh* Head, const FString& Folder, const FString& Name,
+		FMantleAutoRigResult& OutResult, FString& OutError);
+};
+
+/**
+ * MantleAvatarFixerIds::AsIsRig (the As-is route): one line for a model with no rig. Apply makes the posed mesh into <output>/Work
+ * (FMantleUnriggedBody::MakePosedMesh), conforms a MetaHuman Character to it in <output>/<Name> (FMantleMetaHumanConform::Conform),
+ * and builds the skinned mesh (FMantleUnriggedAsIs::MakeSkinnedMesh) into <output>; the part becomes that mesh on the metahuman
+ * skeleton (FMantleConvertPart::bAutoRigged), for AsIsHeight, Atlas and Bake after it (RigMap skips it). A failed Apply deletes what
+ * it made and leaves the context as it was; so does one that dirtied a protected package outside <output>.
+ */
+class MANTLEEDITOR_API FMantleUnriggedAsIsFixer final : public IMantleAvatarFixer
+{
+public:
+	virtual FName GetId() const override { return MantleAvatarFixerIds::AsIsRig; }
+	virtual void Analyze(const FMantleConvertContext& Context, TArray<FMantleConvertFix>& OutFixes) const override;
+	virtual bool Apply(const FMantleConvertFix& Fix, FMantleConvertContext& Context, FString& OutError) const override;
+};
+
+/** Registers FMantleUnriggedAsIsFixer with FMantleAvatarFixers (MantleEditor's StartupModule). */
+MANTLEEDITOR_API void RegisterMantleUnriggedAsIsFixer();

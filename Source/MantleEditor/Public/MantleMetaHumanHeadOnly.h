@@ -101,7 +101,7 @@ public:
 	static bool FindNeck(TConstArrayView<FVector3f> Vertices, FVector& OutJoint, double& OutTop);
 
 	/**
-	 * MakeCleanHead for a model with no skeleton: a static mesh (StaticSource) or a skeletal mesh with one bone (SkeletalSource). With no
+	 * MakeCleanHead for a model with no skeleton: a static mesh (StaticSource) or a skeletal mesh with no usable weights (SkeletalSource). With no
 	 * head bone or skin weights the head is what is above FindNeck's neck; the eyes come from the eye slots, else EyeShareAboveNeck of the
 	 * way from the neck to the top; the rest (face slots, position cut, size, the static mesh made) is MakeCleanHead's.
 	 */
