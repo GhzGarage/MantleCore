@@ -180,6 +180,9 @@ struct FMantlePublishList
 	/** The next row after After (INDEX_NONE: from the top) that is ticked, not greyed and not uploaded yet; INDEX_NONE when none. Pure (tested). */
 	static int32 Next(TConstArrayView<FMantlePublishRow> Rows, int32 After);
 
+	/** The clothing rows after the Outfits were made: a piece whose Outfit failed (a high heel) is greyed with why and unticked. Pure (tested). */
+	static void Sync(const FMantleConvertContext& Context, TArray<FMantlePublishRow>& Rows);
+
 	/** The row's heading word: "Body", "Top", "Bottom", "Footwear", "Hair", "Eyebrows" (the slot, capitalised; the avatar slot is "Body"). Pure. */
 	static FString SlotWord(const FString& Slot);
 };

@@ -83,6 +83,22 @@ bool FMantlePublishListTest::RunTest(const FString& Parameters)
 	Rows[2].bTicked = false;
 	TestEqual(TEXT("nothing ticked left"), FMantlePublishList::Next(Rows, INDEX_NONE), INDEX_NONE);
 
+	// The Outfits made: a piece whose Outfit failed (high heels are found then) is greyed and unticked; a made one stays.
+	{
+		Context.Garments[0].Outfit = TEXT("/Game/OA_Corset");
+		FMantleConvertGarment& Boots = Context.Garments.AddDefaulted_GetRef();
+		Boots.Slot = TEXT("footwear");
+		Boots.Name = TEXT("Boots");
+		Boots.Mesh = Mesh(TEXT("SK_Boots"));
+		TArray<FMantlePublishRow> Synced = FMantlePublishList::Make(Context, &Review, HairSlots);
+		TestTrue(TEXT("boots ticked before the Outfits are made"), Synced.Last().bTicked && Synced.Last().Why.IsEmpty());
+		Context.Garments.Last().Error = TEXT("SK_Boots is a high heel");
+		FMantlePublishList::Sync(Context, Synced);
+		TestTrue(TEXT("failed Outfit: greyed and unticked"), !Synced.Last().bTicked && Synced.Last().Why.Contains(TEXT("high heel")));
+		TestTrue(TEXT("made Outfit: still ticked"), Synced[2].bTicked && Synced[2].Why.IsEmpty());
+		TestEqual(TEXT("the walk never opens the failed piece"), FMantlePublishList::Next(Synced, 2), INDEX_NONE);
+	}
+
 	// A part Convert didn't make is greyed; a part left out starts unticked.
 	{
 		FMantleConvertContext Empty;

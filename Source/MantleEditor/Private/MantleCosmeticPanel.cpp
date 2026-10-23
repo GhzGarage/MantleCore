@@ -3930,10 +3930,25 @@ TArray<FMantlePublishRow> FMantlePublishList::Make(const FMantleConvertContext& 
 		Row.Index = Index;
 		Row.Slot = Garment.Slot;
 		Row.Name = Garment.Name;
-		Row.Why = Garment.Why;
-		Row.bTicked = Garment.Why.IsEmpty();
+		Row.bTicked = true;
 	}
+	Sync(Context, Rows);
 	return Rows;
+}
+
+void FMantlePublishList::Sync(const FMantleConvertContext& Context, TArray<FMantlePublishRow>& Rows)
+{
+	for (FMantlePublishRow& Row : Rows)
+	{
+		const FMantleConvertGarment* Garment = Row.Kind == FMantlePublishRow::EKind::Garment && Context.Garments.IsValidIndex(Row.Index) ? &Context.Garments[Row.Index] : nullptr;
+		if (!Garment || !Row.Why.IsEmpty())
+		{
+			continue;
+		}
+		// A piece that can't be an Outfit, or whose Outfit couldn't be made (high heels are found then), is greyed and unticked.
+		Row.Why = !Garment->Why.IsEmpty() ? Garment->Why : Garment->Error.IsEmpty() ? FString() : FString::Printf(TEXT("Couldn't make the Outfit: %s"), *Garment->Error);
+		Row.bTicked &= Row.Why.IsEmpty();
+	}
 }
 
 int32 FMantlePublishList::Next(TConstArrayView<FMantlePublishRow> Rows, const int32 After)
@@ -4986,6 +5001,7 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 				*Garment.Outfit, *Garment.Error);
 		}
 		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT garment outfits on %s: body gap %.2f cm, %s"), *Result.Character, Result.BodyGapCm, bMade ? TEXT("made") : *Refusal);
+		FMantlePublishList::Sync(*ConvertContext, PublishRows);
 	}
 	const FMantleConvertGarment Garment = ConvertContext->Garments[GarmentIndex];
 	UChaosOutfitAsset* Outfit = Garment.Outfit.IsEmpty() ? nullptr : LoadObject<UChaosOutfitAsset>(nullptr, *Garment.Outfit);
