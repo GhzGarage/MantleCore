@@ -1,6 +1,9 @@
 // Copyright Joshua Eger. All Rights Reserved.
 //
 // Maintainer command: Mantle.Dev.RenderOutfitFits <Outfit> <Directory> [female|male|auto] [slot] [size] [anim=<AnimSequence>...]
+//   [on=<MetaHuman Character> onbody=<its converted body> onface=<its converted face>]
+// With on=, the Outfit is fitted onto that one converted MetaHuman (as the panel's added fit bodies are) instead of the standard
+// bodies, rendered as <Outfit>_on_<Character>_*.png.
 // Fits an Outfit onto the standard bodies exactly as CheckCosmetic does (FMantleEditorActions::MakeCosmeticDraft, then
 // FMantleParametricOutfit::Prepare per fit body) and renders each fit as the catalog thumbnail does (FMantleCosmeticThumbnail,
 // GarmentSubject: the engine's thumbnail scene, reference pose, framed on the garment, on that size's own body and face), from
@@ -29,6 +32,7 @@
 #include "Engine/SkeletalMeshSocket.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
+#include "MetaHumanCharacter.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
@@ -226,6 +230,39 @@ namespace MantleDevRenderOutfitFitsPrivate
 		const FString Slot = Args.Num() > 3 ? Args[3] : FString(TEXT("top"));
 		const int32 Size = Args.Num() > 4 ? FMath::Clamp(FCString::Atoi(*Args[4]), 128, 2048) : 1024;
 		TArray<UAnimSequence*> Clips;
+		// on=<Character> onbody=<Body> onface=<Face>: fit onto that converted MetaHuman (as the panel's "Add fit body" does)
+		// instead of the standard bodies.
+		FMantleOutfitAuthoringTarget On;
+		for (int32 Index = 5; Index < Args.Num(); ++Index)
+		{
+			const FString& Arg = Args[Index];
+			const bool bCharacter = Arg.StartsWith(TEXT("on="));
+			const bool bBody = Arg.StartsWith(TEXT("onbody="));
+			const bool bFace = Arg.StartsWith(TEXT("onface="));
+			if (!bCharacter && !bBody && !bFace)
+			{
+				continue;
+			}
+			FString OnPath = Arg.RightChop(bCharacter ? 3 : 7);
+			if (!FPackageName::GetShortName(OnPath).Contains(TEXT(".")))
+			{
+				OnPath += TEXT(".") + FPackageName::GetShortName(OnPath);
+			}
+			if (bCharacter)
+			{
+				On.Character = LoadObject<UMetaHumanCharacter>(nullptr, *OnPath);
+				On.Id = TEXT("on_") + FPackageName::ObjectPathToObjectName(OnPath);
+			}
+			else
+			{
+				(bBody ? On.Body : On.Face) = LoadObject<USkeletalMesh>(nullptr, *OnPath);
+			}
+		}
+		if (!On.Id.IsEmpty() && (!On.Character.IsValid() || !On.Body.IsValid() || !On.Face.IsValid()))
+		{
+			UE_LOG(LogMantleRenderOutfitFits, Error, TEXT("MANTLE_RENDER_FITS failed: on= needs a MetaHuman Creator character with onbody= and onface= (its converted body and face)"));
+			return;
+		}
 		for (int32 Index = 5; Index < Args.Num(); ++Index)
 		{
 			FString ClipPath;
@@ -313,6 +350,10 @@ namespace MantleDevRenderOutfitFitsPrivate
 					UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s %s %s %s"), Stage, View, bWritten ? *File : TEXT("FAILED"), bWritten ? TEXT("") : *Why);
 				}
 			}
+		}
+		if (!On.Id.IsEmpty())
+		{
+			Draft.OutfitTargets = { On };
 		}
 		UE_LOG(LogMantleRenderOutfitFits, Display, TEXT("MANTLE_RENDER_FITS %s: %d fit bodies (%s)"), *Outfit->GetPathName(), Draft.OutfitTargets.Num(), *Draft.FitBodiesStatus);
 		for (const FMantleOutfitAuthoringTarget& Target : Draft.OutfitTargets)
