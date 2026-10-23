@@ -55,6 +55,12 @@ struct FMantleAvatarSight
 	 * Convert fits it to a MetaHuman body as it does a static mesh.
 	 */
 	bool bUnrigged = false;
+	/**
+	 * Chunk 7: As is can auto-rig this model with no rig (FMantleUnriggedAsIs::CanAutoRig: skinned to Epic's MetaHuman body
+	 * skeleton, keeping its look), and why not when it can't in this editor (no renderer); empty when it has a rig.
+	 */
+	bool bAutoRigs = false;
+	FString AutoRigNote;
 	/** Strip read the body as covered by clothing (its face-only line ticked by default). */
 	bool bCovered = false;
 	/** A MetaHuman Blueprint's clothing meshes and hair pieces. */
@@ -113,16 +119,10 @@ struct FMantleConvertSection
 
 	/**
 	 * Why As is is greyed for Sight, empty when it isn't: a MetaHuman Creator character ("it's already a MetaHuman"); a
-	 * static mesh or a skeleton with no usable weights ("no rig to keep") until AutoRigsAsIs. Pure (tested).
+	 * static mesh or a skeleton with no usable weights only when it can't be auto-rigged here (its AutoRigNote, else "no rig
+	 * to keep"). Pure (tested).
 	 */
 	static FString AsIsGreyedWhy(const FMantleAvatarSight& Sight);
-
-	/**
-	 * Chunk 7's hook: whether As is can auto-rig a model with no rig (skin it to the MetaHuman body skeleton and keep its
-	 * look). False until that fixer lands; then AsIsGreyedWhy stops greying static meshes and weightless skeletons, and
-	 * FMantleAvatarConverter::MakeContext takes them on the As-is route.
-	 */
-	static bool AutoRigsAsIs();
 
 	/** The route the Avatar door uses: Picked while it is offered (EffectiveRoute) and not greyed for Sight, else Convert. Pure (tested). */
 	static EMantleAvatarRoute DoorRoute(EMantleAvatarRoute Picked, const FMantleAvatarSight& Sight);

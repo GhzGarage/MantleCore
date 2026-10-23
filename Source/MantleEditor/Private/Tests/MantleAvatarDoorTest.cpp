@@ -85,11 +85,20 @@ bool FMantleAvatarDoorTest::RunTest(const FString& Parameters)
 
 	// As is greyed, with why.
 	TestEqual(TEXT("Creator character: already a MetaHuman"), FMantleConvertSection::AsIsGreyedWhy(Creator), FString(TEXT("it's already a MetaHuman")));
-	if (!FMantleConvertSection::AutoRigsAsIs())
-	{
-		TestEqual(TEXT("static mesh: no rig to keep"), FMantleConvertSection::AsIsGreyedWhy(Static), FString(TEXT("no rig to keep")));
-		TestEqual(TEXT("weightless skeleton: no rig to keep"), FMantleConvertSection::AsIsGreyedWhy(Weightless), FString(TEXT("no rig to keep")));
-	}
+	TestEqual(TEXT("static mesh it can't auto-rig: no rig to keep"), FMantleConvertSection::AsIsGreyedWhy(Static), FString(TEXT("no rig to keep")));
+	TestEqual(TEXT("weightless skeleton it can't auto-rig: no rig to keep"), FMantleConvertSection::AsIsGreyedWhy(Weightless), FString(TEXT("no rig to keep")));
+	// Chunk 7: a model with no rig goes As is when it can be auto-rigged here; else the auto-rig's own why.
+	FMantleAvatarSight Rigs = Static;
+	Rigs.bAutoRigs = true;
+	TestEqual(TEXT("static mesh it can auto-rig: As is offered"), FMantleConvertSection::AsIsGreyedWhy(Rigs), FString());
+	FMantleAvatarSight WeightlessRigs = Weightless;
+	WeightlessRigs.bAutoRigs = true;
+	TestEqual(TEXT("weightless skeleton it can auto-rig: As is offered"), FMantleConvertSection::AsIsGreyedWhy(WeightlessRigs), FString());
+	FMantleAvatarSight NoRenderer = Static;
+	NoRenderer.AutoRigNote = TEXT("It has no rig, and fitting one needs a renderer, which this editor runs without.");
+	TestEqual(TEXT("can't auto-rig here: says why"), FMantleConvertSection::AsIsGreyedWhy(NoRenderer), NoRenderer.AutoRigNote);
+	TestTrue(TEXT("static mesh it can auto-rig: As is used"), FMantleConvertSection::DoorRoute(EMantleAvatarRoute::AsIs, Rigs)
+		== (UMantleSettings::AllowsAsIsAvatars() ? EMantleAvatarRoute::AsIs : EMantleAvatarRoute::Convert));
 	TestEqual(TEXT("rigged skeletal mesh: As is offered"), FMantleConvertSection::AsIsGreyedWhy(Skeletal), FString());
 	TestEqual(TEXT("Blueprint: As is offered"), FMantleConvertSection::AsIsGreyedWhy(Blueprint), FString());
 

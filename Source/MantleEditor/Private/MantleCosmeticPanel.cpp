@@ -12,6 +12,7 @@
 #include "MantleCosmeticPreviewViewport.h"
 #include "MantleCosmeticThumbnail.h"
 #include "MantleThumbnailStore.h"
+#include "MantleUnriggedAsIs.h"
 #include "SMantleThumbnailSection.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
@@ -3697,9 +3698,8 @@ FMantleAvatarSight FMantleConvertSection::SeeKind(const UObject* Selection)
 	{
 		Sight.Kind = FMantleAvatarSight::EKind::SkeletalMesh;
 		Sight.Bones = Mesh->GetRefSkeleton().GetRawBoneNum();
-		// One bone carries nothing, as MakeContext reads it. Chunk 4 (#161) adds the weights rule there
-		// (FMantleUnriggedBody::HasNoUsableWeights), which SeeContext takes once Convert has looked.
-		Sight.bUnrigged = Sight.Bones == 1;
+		// One bone, or no usable weights (FMantleUnriggedBody::HasNoUsableWeights), as MakeContext reads it.
+		Sight.bUnrigged = FMantleUnriggedAsIs::HasNoRig(Mesh);
 	}
 	else if (Selection->IsA<UStaticMesh>())
 	{
@@ -3717,6 +3717,8 @@ FMantleAvatarSight FMantleConvertSection::SeeKind(const UObject* Selection)
 	{
 		Sight.Name.Reset();
 	}
+	// Chunk 7: a model with no rig can go As is, skinned to Epic's MetaHuman body skeleton (not in an editor without a renderer).
+	Sight.bAutoRigs = FMantleUnriggedAsIs::CanAutoRig(Selection, Sight.AutoRigNote);
 	return Sight;
 }
 
@@ -3802,12 +3804,6 @@ FString FMantleConvertSection::WhatISee(const FMantleAvatarSight& Sight)
 	return Sight.Name.IsEmpty() ? Seen : FString::Printf(TEXT("%s: %s"), *Sight.Name, *Seen);
 }
 
-bool FMantleConvertSection::AutoRigsAsIs()
-{
-	// Chunk 7 (auto-rig for As is) turns this on with its fixer.
-	return false;
-}
-
 FString FMantleConvertSection::AsIsGreyedWhy(const FMantleAvatarSight& Sight)
 {
 	if (Sight.Kind == FMantleAvatarSight::EKind::CreatorCharacter)
@@ -3815,7 +3811,11 @@ FString FMantleConvertSection::AsIsGreyedWhy(const FMantleAvatarSight& Sight)
 		return TEXT("it's already a MetaHuman");
 	}
 	const bool bNoRig = Sight.Kind == FMantleAvatarSight::EKind::StaticMesh || (Sight.Kind == FMantleAvatarSight::EKind::SkeletalMesh && Sight.bUnrigged);
-	return bNoRig && !AutoRigsAsIs() ? FString(TEXT("no rig to keep")) : FString();
+	if (!bNoRig || Sight.bAutoRigs)
+	{
+		return FString();
+	}
+	return Sight.AutoRigNote.IsEmpty() ? FString(TEXT("no rig to keep")) : Sight.AutoRigNote;
 }
 
 EMantleAvatarRoute FMantleConvertSection::DoorRoute(const EMantleAvatarRoute Picked, const FMantleAvatarSight& Sight)
