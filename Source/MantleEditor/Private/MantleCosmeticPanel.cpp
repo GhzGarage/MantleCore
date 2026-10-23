@@ -78,6 +78,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -3675,15 +3676,46 @@ FString FMantleConvertSection::ActionText(const FMantleConvertFix& Fix)
 
 bool FMantleConvertSection::CanConvert(TConstArrayView<FMantleConvertFix> Fixes)
 {
-	if (Fixes.ContainsByPredicate([](const FMantleConvertFix& Fix) { return Fix.bNeedsConfirm && Fix.bCanFix && !Fix.bEnabled; }))
+	// The converter's own rule (a bare-skin line counts only while the body is kept).
+	if (Fixes.ContainsByPredicate([Fixes](const FMantleConvertFix& Fix) { return Fix.bCanFix && FMantleAvatarStripFixer::IsUnconfirmed(Fixes, Fix); }))
 	{
 		return false;
 	}
-	// #770: with the face kept, one body line (masculine or feminine) must be ticked.
+	// #770: with the face on a MetaHuman body, one body (Women's or Men's) must be picked.
 	return !Fixes.ContainsByPredicate([Fixes](const FMantleConvertFix& Fix)
 	{
 		return Fix.Kind == FMantleAvatarStripFixer::KindFaceOnly && !FMantleAvatarStripFixer::MissingBodyChoice(Fixes, Fix.PartIndex).IsEmpty();
 	});
+}
+
+void FMantleConvertSection::PickBody(TArray<FMantleConvertFix>& Fixes, const int32 PartIndex, const bool bFaceOnBody, const TOptional<bool> Feminine)
+{
+	for (FMantleConvertFix& Fix : Fixes)
+	{
+		if (Fix.FixerId != MantleAvatarFixerIds::Strip || Fix.PartIndex != PartIndex)
+		{
+			continue;
+		}
+		if (Fix.Kind == FMantleAvatarStripFixer::KindFaceOnly)
+		{
+			Fix.bEnabled = bFaceOnBody;
+		}
+		else if (Feminine.IsSet() && (Fix.Kind == FMantleAvatarStripFixer::KindFeminineBody || Fix.Kind == FMantleAvatarStripFixer::KindMasculineBody))
+		{
+			Fix.bEnabled = (Fix.Kind == FMantleAvatarStripFixer::KindFeminineBody) == Feminine.GetValue();
+		}
+	}
+}
+
+void FMantleConvertSection::KeptPartsChanged(TArray<FMantleConvertFix>& Fixes, const int32 PartIndex)
+{
+	for (FMantleConvertFix& Fix : Fixes)
+	{
+		if (Fix.FixerId == MantleAvatarFixerIds::Strip && Fix.PartIndex == PartIndex && Fix.Kind == FMantleAvatarStripFixer::KindBareSkin)
+		{
+			Fix.bEnabled = false;
+		}
+	}
 }
 
 FMantleAvatarSight FMantleConvertSection::SeeKind(const UObject* Selection)
@@ -4164,9 +4196,14 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 			AddLine(FString::Printf(TEXT("Clothing: %s. After Convert, each piece gets a Use button that makes it a MetaHuman Outfit on this character's MetaHuman."),
 				*FString::Join(Clothing, TEXT("; "))), FSlateColor::UseSubduedForeground());
 		}
+		AddBodyRows();
 		for (int32 Index = 0; Index < ConvertFixes.Num(); ++Index)
 		{
 			const FMantleConvertFix& Fix = ConvertFixes[Index];
+			if (FMantleAvatarStripFixer::IsBodyRowLine(Fix))
+			{
+				continue; // In the body row above.
+			}
 			const bool bCanFix = Fix.bCanFix;
 			ConvertBox->AddSlot().AutoHeight().Padding(0, 4)
 			[
@@ -4188,19 +4225,10 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 						if (ConvertFixes.IsValidIndex(Index))
 						{
 							ConvertFixes[Index].bEnabled = State == ECheckBoxState::Checked;
-							// #770: the two body lines are one choice: ticking one unticks the other.
-							const FMantleConvertFix& Ticked = ConvertFixes[Index];
-							const bool bBody = Ticked.Kind == FMantleAvatarStripFixer::KindFeminineBody || Ticked.Kind == FMantleAvatarStripFixer::KindMasculineBody;
-							if (bBody && Ticked.bEnabled)
+							// Chunk 5: a changed slot or piece line changes the kept parts, so the bare-skin tick is the creator's again.
+							if (ConvertFixes[Index].FixerId == MantleAvatarFixerIds::Strip)
 							{
-								for (FMantleConvertFix& Other : ConvertFixes)
-								{
-									const bool bOtherBody = Other.Kind == FMantleAvatarStripFixer::KindFeminineBody || Other.Kind == FMantleAvatarStripFixer::KindMasculineBody;
-									if (&Other != &Ticked && bOtherBody && Other.FixerId == Ticked.FixerId && Other.PartIndex == Ticked.PartIndex)
-									{
-										Other.bEnabled = false;
-									}
-								}
+								FMantleConvertSection::KeptPartsChanged(ConvertFixes, ConvertFixes[Index].PartIndex);
 							}
 						}
 					})
@@ -4398,6 +4426,148 @@ void SMantleCosmeticPanel::RefreshConvertRowsLater(const bool bAnalyze)
 		}
 		return EActiveTimerReturnType::Stop;
 	}));
+}
+
+void SMantleCosmeticPanel::AddBodyRows()
+{
+	using namespace MantleCosmeticPanelPrivate;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get();
+	auto Find = [this](const int32 PartIndex, const FName Kind)
+	{
+		return ConvertFixes.IndexOfByPredicate([PartIndex, Kind](const FMantleConvertFix& Fix)
+		{
+			return Fix.FixerId == MantleAvatarFixerIds::Strip && Fix.PartIndex == PartIndex && Fix.Kind == Kind;
+		});
+	};
+	for (int32 PartIndex = 0; ConvertContext.IsValid() && PartIndex < ConvertContext->Parts.Num(); ++PartIndex)
+	{
+		const int32 FaceIndex = Find(PartIndex, FMantleAvatarStripFixer::KindFaceOnly);
+		const int32 BareIndex = Find(PartIndex, FMantleAvatarStripFixer::KindBareSkin);
+		if (FaceIndex == INDEX_NONE || BareIndex == INDEX_NONE)
+		{
+			continue;
+		}
+		// The row's lines by their kind each time (the list is rebuilt on every look).
+		auto Line = [this, Find, PartIndex](const FName Kind) -> FMantleConvertFix*
+		{
+			const int32 Index = Find(PartIndex, Kind);
+			return ConvertFixes.IsValidIndex(Index) ? &ConvertFixes[Index] : nullptr;
+		};
+		auto IsFace = [Line] { const FMantleConvertFix* Face = Line(FMantleAvatarStripFixer::KindFaceOnly); return Face && Face->bEnabled; };
+		const bool bCanKeep = ConvertFixes[BareIndex].bCanFix;
+		const FString Label = ConvertContext->Parts.Num() > 1 && Contract
+			? FMantleAvatarConverter::DescribePart(ConvertContext->Parts[PartIndex], *Contract) + TEXT(", body:") : FString(TEXT("Body:"));
+		auto Radio = [](const FText& Text, TFunction<bool()> IsOn, TFunction<void()> Pick, const bool bEnabled)
+		{
+			return SNew(SCheckBox)
+				.Style(&FAppStyle::Get(), "RadioButton")
+				.IsEnabled(bEnabled)
+				.IsChecked_Lambda([IsOn] { return IsOn() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+				.OnCheckStateChanged_Lambda([Pick](const ECheckBoxState State) { if (State == ECheckBoxState::Checked) { Pick(); } })
+				[
+					SNew(STextBlock).Text(Text)
+				];
+		};
+		auto IsBody = [Line](const FName Kind) { const FMantleConvertFix* Body = Line(Kind); return Body && Body->bEnabled; };
+		ConvertBox->AddSlot().AutoHeight().Padding(0, 4, 0, 6)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SWrapBox)
+				.UseAllottedSize(true)
+				.InnerSlotPadding(FVector2D(12, 4))
+				+ SWrapBox::Slot().VAlign(VAlign_Center)
+				[
+					SNew(STextBlock).Font(FAppStyle::GetFontStyle("NormalFontBold")).Text(FText::FromString(Label))
+				]
+				+ SWrapBox::Slot().VAlign(VAlign_Center)
+				[
+					Radio(LOCTEXT("BodyRowKeep", "Keep this character's body"), [IsFace] { return !IsFace(); },
+						[this, PartIndex] { FMantleConvertSection::PickBody(ConvertFixes, PartIndex, false); }, bCanKeep)
+				]
+				+ SWrapBox::Slot().VAlign(VAlign_Center)
+				[
+					Radio(LOCTEXT("BodyRowFace", "Put the face on a MetaHuman body"), IsFace,
+						[this, PartIndex] { FMantleConvertSection::PickBody(ConvertFixes, PartIndex, true); }, true)
+				]
+				+ SWrapBox::Slot().VAlign(VAlign_Center)
+				[
+					SNew(SHorizontalBox)
+					.IsEnabled_Lambda([IsFace] { return IsFace(); })
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+					[
+						Radio(LOCTEXT("BodyRowWomens", "Women's"), [IsBody] { return IsBody(FMantleAvatarStripFixer::KindFeminineBody); },
+							[this, PartIndex] { FMantleConvertSection::PickBody(ConvertFixes, PartIndex, true, true); }, true)
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						Radio(LOCTEXT("BodyRowMens", "Men's"), [IsBody] { return IsBody(FMantleAvatarStripFixer::KindMasculineBody); },
+							[this, PartIndex] { FMantleConvertSection::PickBody(ConvertFixes, PartIndex, true, false); }, true)
+					]
+				]
+			]
+			// Why it is pre-picked.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+			[
+				SNew(STextBlock)
+				.AutoWrapText(true)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.Text(FText::Format(LOCTEXT("BodyRowWhy", "Picked because {0}."), FText::FromString(ConvertFixes[FaceIndex].Problem)))
+			]
+			// With the face on a MetaHuman body: the pick still to make.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+			[
+				SNew(STextBlock)
+				.AutoWrapText(true)
+				.ColorAndOpacity(SeverityColour(EMantleCosmeticSeverity::Warning))
+				.Visibility_Lambda([this, PartIndex] { return FMantleAvatarStripFixer::MissingBodyChoice(ConvertFixes, PartIndex).IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+				.Text_Lambda([this, PartIndex] { return FText::FromString(FMantleAvatarStripFixer::MissingBodyChoice(ConvertFixes, PartIndex) + TEXT(".")); })
+			]
+			// Keeping the body: the one bare-skin tick, ticked only when a bare body was clearly found.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+			[
+				SNew(SHorizontalBox)
+				.Visibility_Lambda([IsFace, bCanKeep] { return bCanKeep && !IsFace() ? EVisibility::Visible : EVisibility::Collapsed; })
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(0, 0, 6, 0)
+				[
+					SNew(SCheckBox)
+					.ToolTipText(LOCTEXT("ConvertFixConfirm", "Tick to confirm. Convert stays off until you do."))
+					.IsChecked_Lambda([Line]
+					{
+						const FMantleConvertFix* Bare = Line(FMantleAvatarStripFixer::KindBareSkin);
+						return Bare && Bare->bEnabled ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+					})
+					.OnCheckStateChanged_Lambda([Line](const ECheckBoxState State)
+					{
+						if (FMantleConvertFix* Bare = Line(FMantleAvatarStripFixer::KindBareSkin))
+						{
+							Bare->bEnabled = State == ECheckBoxState::Checked;
+						}
+					})
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.0f)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock).AutoWrapText(true).Text(LOCTEXT("BodyRowBare", "The kept parts are bare skin"))
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SNew(STextBlock)
+						.AutoWrapText(true)
+						.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+						.Text_Lambda([Line]
+						{
+							const FMantleConvertFix* Bare = Line(FMantleAvatarStripFixer::KindBareSkin);
+							return Bare ? FText::FromString(Bare->Problem + TEXT(". ") + Bare->Action) : FText::GetEmpty();
+						})
+					]
+				]
+			]
+		];
+	}
 }
 
 void SMantleCosmeticPanel::AddPackReviewRows()
@@ -5017,6 +5187,15 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 			}
 		}
 		Panel->RefreshConvertRows();
+		// Chunk 5: the body row as it stands (the picture shows the same).
+		for (const FMantleConvertFix& Fix : Panel->ConvertFixes)
+		{
+			if (FMantleAvatarStripFixer::IsBodyRowLine(Fix))
+			{
+				UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT body row part %d %s: %s%s (%s)"), Fix.PartIndex, *Fix.Kind.ToString(),
+					Fix.bEnabled ? TEXT("ticked") : TEXT("unticked"), Fix.bCanFix ? TEXT("") : TEXT(", greyed"), *Fix.Problem);
+			}
+		}
 		Save(Panel->ConvertSectionBox.ToSharedRef(), File, 820.0f, 4000.0f);
 		// What Convert would take from the rows as they stand (OnRunConvert's own call).
 		if (Panel->ConvertReview.IsValid() && Panel->ConvertContext.IsValid() && Panel->ConvertContext->Parts.IsValidIndex(0) && Panel->ConvertContext->Parts[0].Original.IsValid())

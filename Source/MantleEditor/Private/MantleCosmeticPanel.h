@@ -101,6 +101,15 @@ struct FMantleConvertSection
 	/** Whether Convert is on for Fixes: no fixable line that needs confirming (Strip's bare-skin line) is left unticked. */
 	static bool CanConvert(TConstArrayView<FMantleConvertFix> Fixes);
 
+	/**
+	 * Chunk 5, the body row: keep PartIndex's body (bFaceOnBody false) or put its face on a MetaHuman body, and which one
+	 * (Feminine: Women's; unset leaves the pick as it is). Ticks Strip's face line and at most one body line.
+	 */
+	static void PickBody(TArray<FMantleConvertFix>& Fixes, int32 PartIndex, bool bFaceOnBody, TOptional<bool> Feminine = {});
+
+	/** The creator changed which of PartIndex's parts are kept (a Strip slot or piece line): the bare-skin tick is theirs to give again. */
+	static void KeptPartsChanged(TArray<FMantleConvertFix>& Fixes, int32 PartIndex);
+
 	/** The Avatar door's first look at Selection: its kind, name and bones (null or another kind: None). */
 	static FMantleAvatarSight SeeKind(const UObject* Selection);
 
@@ -378,6 +387,9 @@ private:
 
 	/** #55: the "Found in this pack" rows, above the fix list. */
 	void AddPackReviewRows();
+
+	/** Chunk 5: the body row per part (Strip's face, Women's / Men's and bare-skin lines), above the fix list. */
+	void AddBodyRows();
 
 	/** #55: rebuilds the rows on the next tick (bAnalyze: lists the fixes again first): a row's combo box outlives its own callback. */
 	void RefreshConvertRowsLater(bool bAnalyze);

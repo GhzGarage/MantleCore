@@ -55,8 +55,84 @@ FString FMantleAvatarStripFixer::MissingBodyChoice(TConstArrayView<FMantleConver
 	{
 		return FString();
 	}
-	return Bodies == 0 ? TEXT("pick the body the face goes on: tick Masculine body or Feminine body")
-		: TEXT("tick only one body: Masculine body or Feminine body");
+	return Bodies == 0 ? TEXT("pick the MetaHuman body the face goes on: Women's or Men's")
+		: TEXT("pick only one MetaHuman body: Women's or Men's");
+}
+
+void FMantleAvatarStripFixer::AddBodyRow(TArray<FMantleConvertFix>& OutFixes, const int32 PartIndex, const FBodyRow& Row)
+{
+	auto Add = [&OutFixes, PartIndex](const FName Kind) -> FMantleConvertFix&
+	{
+		FMantleConvertFix& Fix = OutFixes.AddDefaulted_GetRef();
+		Fix.FixerId = MantleAvatarFixerIds::Strip;
+		Fix.PartIndex = PartIndex;
+		Fix.Kind = Kind;
+		return Fix;
+	};
+	// Applied in this order: the face line, then the body it goes on, then the bare-skin line (which strips while the body is kept).
+	FMantleConvertFix& Face = Add(KindFaceOnly);
+	Face.bEnabled = Row.bFaceOnBody;
+	Face.Problem = Row.Why;
+	Face.Action = Row.bCanKeep
+		? TEXT("Puts the face on a MetaHuman body (Women's or Men's) at Mantle's default height; players shape it with the Weight, Muscle, Chest and Hips sliders. Everything below the face (clothing, armour, hair) is left out of the body. Untick it to keep this character's body, which needs bare skin from head to feet.")
+		: TEXT("Puts the face on a MetaHuman body (Women's or Men's) at Mantle's default height; players shape it with the Weight, Muscle, Chest and Hips sliders. This body can't be kept: untick it and the conversion stops.");
+	for (const bool bFeminine : { false, true })
+	{
+		FMantleConvertFix& Body = Add(bFeminine ? KindFeminineBody : KindMasculineBody);
+		Body.bEnabled = false;
+		Body.Problem = TEXT("With the face on a MetaHuman body: which one? Pick one");
+		Body.Action = bFeminine ? TEXT("Women's body.") : TEXT("Men's body.");
+	}
+	FMantleConvertFix& Bare = Add(KindBareSkin);
+	Bare.bNeedsConfirm = true;
+	// A body that can't be kept has no bare skin to confirm: the panel greys "Keep this character's body".
+	Bare.bCanFix = Row.bCanKeep;
+	Bare.bEnabled = Row.bBareFound;
+	Bare.Problem = Row.BareProblem;
+	Bare.Action = Row.bBareFound
+		? TEXT("Ticked: a bare body was found. Untick it if any kept part is really clothing. Convert won't fix a body for you.")
+		: TEXT("Tick to confirm the kept parts are bare skin. Convert won't fix a body for you: a character whose clothing is part of its body, with no skin under it, can't keep its body.");
+}
+
+bool FMantleAvatarStripFixer::BareBodyFound(const FMantleStripPlan& Plan, const bool bAllKept, FString& OutWhy)
+{
+	if (FMantleMetaHumanHeadOnly::IsCovered(Plan, OutWhy))
+	{
+		return false;
+	}
+	for (const FMantleStripSlot& Slot : Plan.Slots)
+	{
+		if (bAllKept && !Slot.bSkin)
+		{
+			OutWhy = FString::Printf(TEXT("'%s' doesn't read as skin"), *Slot.SlotName.ToString());
+			return false;
+		}
+	}
+	OutWhy.Reset();
+	return true;
+}
+
+bool FMantleAvatarStripFixer::IsBodyRowLine(const FMantleConvertFix& Fix)
+{
+	return Fix.FixerId == MantleAvatarFixerIds::Strip
+		&& (Fix.Kind == KindFaceOnly || Fix.Kind == KindFeminineBody || Fix.Kind == KindMasculineBody || Fix.Kind == KindBareSkin);
+}
+
+bool FMantleAvatarStripFixer::IsUnconfirmed(TConstArrayView<FMantleConvertFix> Fixes, const FMantleConvertFix& Fix)
+{
+	if (!Fix.bNeedsConfirm || Fix.bEnabled)
+	{
+		return false;
+	}
+	// With the face on a MetaHuman body nothing is stripped, so there is no bare skin to confirm.
+	if (Fix.FixerId == MantleAvatarFixerIds::Strip && Fix.Kind == KindBareSkin)
+	{
+		return !Fixes.ContainsByPredicate([&Fix](const FMantleConvertFix& Other)
+		{
+			return Other.FixerId == MantleAvatarFixerIds::Strip && Other.PartIndex == Fix.PartIndex && Other.Kind == KindFaceOnly && Other.bEnabled;
+		});
+	}
+	return true;
 }
 const FName FMantleAvatarStripFixer::KindOneSlot(TEXT("OneSlot"));
 
@@ -711,43 +787,26 @@ void FMantleAvatarStripFixer::Analyze(const FMantleConvertContext& Context, TArr
 	}
 	for (int32 PartIndex = 0; PartIndex < Context.Parts.Num(); ++PartIndex)
 	{
-		// #875: an assembled MetaHuman (no mesh on its part yet: MHSource makes it a character) is offered #770's choice, so it can
-		// keep only its face: the same three lines, the same keys and the same Apply as a covered body below. The face line is ticked
-		// when MetaHuman Creator can't fit the body (the clothing is merged into the body mesh); the creator may tick it on any body,
-		// because a body scaled to Mantle's height can look wrong. Nothing is stripped (the body mesh is never read)
-		// and nothing is guessed: with the face line ticked, one body line must be (MissingBodyChoice).
+		// #875: an assembled MetaHuman (no mesh on its part yet: MHSource makes it a character) gets the body row too. The face goes on
+		// a MetaHuman body when MetaHuman Creator can't fit its body (the clothing is merged into the body mesh), and then the body
+		// can't be kept; otherwise its body is kept, and a MetaHuman body with separate clothing is a bare body. Nothing is stripped.
 		FString CantFitWhy;
 		const bool bCantFit = FMantleMetaHumanBuild::AssemblyBodyNeedsFaceOnly(Context, PartIndex, CantFitWhy);
 		if (bCantFit || (Context.AssemblyBodyToFit.IsValid() && Context.AssemblyFaceToFit.IsValid() && !Cast<UMetaHumanCharacter>(Context.Source.Get())
 			&& FMantleMetaHumanSourceFixer::IsCharacterToBuild(Context, PartIndex)))
 		{
-			for (const FName Kind : { KindFaceOnly, KindMasculineBody, KindFeminineBody })
-			{
-				FMantleConvertFix& Line = OutFixes.AddDefaulted_GetRef();
-				Line.FixerId = GetId();
-				Line.PartIndex = PartIndex;
-				Line.Kind = Kind;
-				if (Kind == KindFaceOnly)
-				{
-					Line.bEnabled = bCantFit;
-					Line.Problem = bCantFit
-						? FString::Printf(TEXT("This character's body can't be fitted by MetaHuman Creator (%s), so it can't be rebuilt as it is"), *CantFitWhy)
-						: FString(TEXT("Keep only this character's face? Its own body is rebuilt at Mantle's height, which can look wrong on a child or a stylised body"));
-					Line.Action = bCantFit
-						? TEXT("Keeps the face and puts it on MetaHuman's own body at Mantle's default height; players shape that body with the Weight, Muscle, Chest and Hips sliders. The body mesh and the clothing merged into it are left out. Untick it and the conversion stops: a MetaHuman is never uploaded as it is.")
-						: TEXT("Keeps the face and puts it on MetaHuman's own body at Mantle's default height instead of its own body; players shape that body with the Weight, Muscle, Chest and Hips sliders.");
-				}
-				else
-				{
-					Line.bEnabled = false;
-					Line.Problem = TEXT("With the face kept: which body does it go on? Tick one");
-					Line.Action = Kind == KindFeminineBody ? TEXT("Feminine body.") : TEXT("Masculine body.");
-				}
-			}
+			FBodyRow Row;
+			Row.bFaceOnBody = bCantFit;
+			Row.bCanKeep = !bCantFit;
+			Row.bBareFound = !bCantFit;
+			Row.Why = bCantFit ? FString::Printf(TEXT("MetaHuman Creator can't fit this body (%s)"), *CantFitWhy)
+				: FString(TEXT("a MetaHuman body with its clothing separate is a bare body"));
+			Row.BareProblem = TEXT("Keeping the body needs it bare: its clothing in separate pieces, none merged into the body");
+			AddBodyRow(OutFixes, PartIndex, Row);
 			continue;
 		}
-		// #50: a model with no skeleton has no body to strip, but it can keep its face too: the same three lines, the face line ticked
-		// when its body is covered (no bare skin, or clothing built into it). Its head is cut by height (MakeCleanHeadUnrigged).
+		// #50: a model with no skeleton has no body to strip; its head is cut by height (MakeCleanHeadUnrigged). Nothing is removed,
+		// so every slot is kept and must read as skin for the bare body to be found.
 		if (FMantleUnriggedBody::IsUnriggedBody(Context, PartIndex))
 		{
 			const FMantleConvertPart& Unrigged = Context.Parts[PartIndex];
@@ -759,27 +818,15 @@ void FMantleAvatarStripFixer::Analyze(const FMantleConvertContext& Context, TArr
 				: SkeletalSource ? FMantleAvatarStrip::Plan(*SkeletalSource, nullptr, UnriggedPlan, PlanError) : false;
 			FString CoveredWhy;
 			const bool bCovered = bRead && FMantleMetaHumanHeadOnly::IsCovered(UnriggedPlan, CoveredWhy);
-			for (const FName Kind : { KindFaceOnly, KindMasculineBody, KindFeminineBody })
-			{
-				FMantleConvertFix& Line = OutFixes.AddDefaulted_GetRef();
-				Line.FixerId = GetId();
-				Line.PartIndex = PartIndex;
-				Line.Kind = Kind;
-				if (Kind == KindFaceOnly)
-				{
-					Line.bEnabled = bCovered;
-					Line.Problem = bCovered
-						? FString::Printf(TEXT("This model's body is covered (%s), so the body underneath can't be seen"), *CoveredWhy)
-						: FString(TEXT("Optional: keep only this model's face"));
-					Line.Action = TEXT("Keeps the face and puts it on MetaHuman's own body at Mantle's default height; players shape that body with the Weight, Muscle, Chest and Hips sliders. Everything below the face (clothing, armour, hair) is left out. Untick it to fit the whole model to a MetaHuman body instead, which needs bare skin from head to feet.");
-				}
-				else
-				{
-					Line.bEnabled = false;
-					Line.Problem = TEXT("With the face kept: which body does it go on? Tick one");
-					Line.Action = Kind == KindFeminineBody ? TEXT("Feminine body.") : TEXT("Masculine body.");
-				}
-			}
+			FString BareWhy;
+			FBodyRow Row;
+			Row.bFaceOnBody = bCovered;
+			Row.bBareFound = bRead && BareBodyFound(UnriggedPlan, /*bAllKept*/ true, BareWhy);
+			Row.Why = bCovered ? FString::Printf(TEXT("the body is covered by clothing (%s)"), *CoveredWhy)
+				: Row.bBareFound ? FString(TEXT("a bare body was found"))
+				: FString::Printf(TEXT("the body may be bare, but %s: tick the bare-skin line yourself if it is"), bRead ? *BareWhy : *PlanError);
+			Row.BareProblem = TEXT("Keeping the body fits the whole model to a MetaHuman body: it must be bare skin from head to feet");
+			AddBodyRow(OutFixes, PartIndex, Row);
 			continue;
 		}
 		if (!IsBodyToStrip(Context, PartIndex, *Contract))
@@ -849,31 +896,19 @@ void FMantleAvatarStripFixer::Analyze(const FMantleConvertContext& Context, TArr
 			}
 		}
 
-		// #770: a body with no skin under its clothing keeps its face and goes on MetaHuman's own body instead.
+		// #770: a body with no skin under its clothing puts its face on a MetaHuman body instead.
 		FString CoveredWhy;
 		const bool bCovered = FMantleMetaHumanHeadOnly::IsCovered(Plan, CoveredWhy);
-		FMantleConvertFix& Face = AddFix(KindFaceOnly);
-		Face.bEnabled = bCovered;
-		Face.Problem = bCovered
-			? FString::Printf(TEXT("This character's body is covered (%s), so the body underneath can't be seen"), *CoveredWhy)
-			: FString(TEXT("Optional: keep only this character's face"));
-		Face.Action = TEXT("Keeps the face and puts it on MetaHuman's own body at Mantle's default height; players shape that body with the Weight, Muscle, Chest and Hips sliders. Everything below the face (clothing, armour, hair) is left out. Untick it to convert the whole body instead, which needs bare skin from head to feet.");
-		for (const bool bFeminine : { false, true })
-		{
-			FMantleConvertFix& Body = AddFix(bFeminine ? KindFeminineBody : KindMasculineBody);
-			Body.bEnabled = false;
-			Body.Problem = TEXT("With the face kept: which body does it go on? Tick one");
-			Body.Action = bFeminine ? TEXT("Feminine body.") : TEXT("Masculine body.");
-		}
-
-		FMantleConvertFix& Confirm = AddFix(KindBareSkin);
-		// With the face line ticked by default nothing is stripped, so there is nothing to confirm.
-		Confirm.bNeedsConfirm = !bCovered;
-		Confirm.bEnabled = false;
-		Confirm.Problem = KeptNames.Num() > 0
-			? FString::Printf(TEXT("Convert needs a bare body: the kept parts (%s) must be skin, with no clothing merged into the body"), *FString::Join(KeptNames, TEXT(", ")))
-			: FString(TEXT("Convert needs a bare body, and no material here reads as bare skin: untick the ones that are"));
-		Confirm.Action = TEXT("Tick to confirm the kept parts are bare skin. Convert won't fix a body for you: a character whose clothing is part of its body, with no skin under it, can't become a MetaHuman.");
+		FString BareWhy;
+		FBodyRow Row;
+		Row.bFaceOnBody = bCovered;
+		// The kept slots are the ones read as skin (the slot lines' defaults): only the covered check can say no here.
+		Row.bBareFound = BareBodyFound(Plan, /*bAllKept*/ false, BareWhy);
+		Row.Why = bCovered ? FString::Printf(TEXT("the body is covered by clothing (%s)"), *CoveredWhy) : FString(TEXT("a bare body was found"));
+		Row.BareProblem = KeptNames.Num() > 0
+			? FString::Printf(TEXT("Keeping the body needs it bare: the kept parts (%s) must be skin, with no clothing merged into the body"), *FString::Join(KeptNames, TEXT(", ")))
+			: FString(TEXT("Keeping the body needs it bare, and no material here reads as bare skin: untick the ones that are"));
+		AddBodyRow(OutFixes, PartIndex, Row);
 	}
 }
 
@@ -918,8 +953,8 @@ bool FMantleAvatarStripFixer::Apply(const FMantleConvertFix& Fix, FMantleConvert
 		if (FMantleConvertMetaHumanWork* Work = Context.MetaHuman.Find(Fix.PartIndex); Work && Work->bFaceOnly)
 		{
 			Work->bFeminineBody = Fix.Kind == KindFeminineBody;
-			Context.Notes.Add(FString::Printf(TEXT("%s: the face goes on a %s body."), *Context.Parts[Fix.PartIndex].Name,
-				Work->bFeminineBody ? TEXT("feminine") : TEXT("masculine")));
+			Context.Notes.Add(FString::Printf(TEXT("%s: the face goes on a MetaHuman %s body."), *Context.Parts[Fix.PartIndex].Name,
+				Work->bFeminineBody ? TEXT("Women's") : TEXT("Men's")));
 		}
 		return true;
 	}
@@ -933,6 +968,12 @@ bool FMantleAvatarStripFixer::Apply(const FMantleConvertFix& Fix, FMantleConvert
 	if (const FMantleConvertMetaHumanWork* Work = Context.MetaHuman.Find(Fix.PartIndex); Work && Work->bFaceOnly)
 	{
 		// #770: the face route takes the head from the source itself; there is no body to strip.
+		return true;
+	}
+	if (Part.bUnrigged || !Context.AssemblyFolder.IsEmpty())
+	{
+		// The body row's bare-skin line on a model with no rig or an assembled MetaHuman: the creator's word, nothing to strip.
+		Context.Notes.Add(FString::Printf(TEXT("%s: its body is kept; the kept parts are bare skin."), *Part.Name));
 		return true;
 	}
 	USkeletalMesh* Mesh = Part.Mesh.Get();

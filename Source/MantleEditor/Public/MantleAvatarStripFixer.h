@@ -136,8 +136,9 @@ public:
 /**
  * MantleAvatarFixerIds::Strip (the Convert route): for an avatar body that is not already a MetaHuman (no assembly, no
  * Mantle reference topology), one line per material slot ("removes 'Hair'", ticked for a slot that isn't bare skin,
- * unticked for one that is), one per piece inside the head skin (ticked), a warning in one-slot mode, and last the bare-
- * skin line (bNeedsConfirm, unticked): "the kept parts are bare skin". Convert runs nothing until it is ticked. The slot
+ * unticked for one that is), one per piece inside the head skin (ticked), a warning in one-slot mode, and last the body row
+ * (AddBodyRow) with its bare-skin line (bNeedsConfirm): "the kept parts are bare skin", ticked only when a bare body is
+ * clearly found (BareBodyFound). While the body is kept, Convert runs nothing until it is ticked. The slot
  * and piece lines record the creator's choice (FMantleConvertContext::StripSlots, StripPieces); the bare-skin line strips
  * (FMantleAvatarStrip::WriteSkinOnly into <output>/Work, then InputCheck) and points the part at the skin-only copy.
  * Clothing pieces are listed and removed; clothing items from them come later.
@@ -159,7 +160,7 @@ public:
 	 */
 	static const FName KindFaceOnly;
 	/**
-	 * #770: the body the face goes on, which the creator picks ("Strip.<part>.FeminineBody" / "Strip.<part>.MasculineBody"):
+	 * #770: the body the face goes on, Women's or Men's, which the creator picks ("Strip.<part>.FeminineBody" / "Strip.<part>.MasculineBody"):
 	 * both start unticked, and with the face line ticked exactly one must be (MissingBodyChoice). Nothing is guessed.
 	 */
 	static const FName KindFeminineBody;
@@ -167,6 +168,45 @@ public:
 
 	/** Why Convert can't run yet for PartIndex: its face line is ticked and not exactly one body line is; empty when it can. */
 	static FString MissingBodyChoice(TConstArrayView<FMantleConvertFix> Fixes, int32 PartIndex);
+
+	/** What the body row says for one part: the pre-picked choice with its reason, and whether a bare body was clearly found. */
+	struct FBodyRow
+	{
+		/** Pre-picked: put the face on a MetaHuman body (true) or keep this character's body (false). */
+		bool bFaceOnBody = false;
+
+		/** Why it is pre-picked, shown next to it ("the body is covered by clothing (...)"). */
+		FString Why;
+
+		/** A bare body was clearly found: the bare-skin line starts ticked. Otherwise the creator ticks it. */
+		bool bBareFound = false;
+
+		/** False when this body can't be kept (MetaHuman Creator can't fit it): keeping it stops the conversion. */
+		bool bCanKeep = true;
+
+		/** The bare-skin line's text: what keeping the body needs to be bare skin. */
+		FString BareProblem;
+	};
+
+	/**
+	 * Chunk 5: the one place the body row is written, for all three cases (an assembled MetaHuman, a model with no rig, a
+	 * stripped skeletal body): the face line ("put the face on a MetaHuman body", ticked when Row.bFaceOnBody), the two body
+	 * lines (Men's, Women's: both unticked, the creator picks), and the bare-skin line (bNeedsConfirm; ticked only when
+	 * Row.bBareFound). The keys stay Strip.<part>.FaceOnly / MasculineBody / FeminineBody / BareSkin.
+	 */
+	static void AddBodyRow(TArray<FMantleConvertFix>& OutFixes, int32 PartIndex, const FBodyRow& Row);
+
+	/**
+	 * The one bare-skin rule: a bare body is clearly found when the plan doesn't read as covered (FMantleMetaHumanHeadOnly::
+	 * IsCovered) and every kept slot reads as skin (bAllKept: nothing is stripped, so every slot is kept). False with why.
+	 */
+	static bool BareBodyFound(const FMantleStripPlan& Plan, bool bAllKept, FString& OutWhy);
+
+	/** A line that must be confirmed and isn't (bNeedsConfirm, unticked); a part's bare-skin line counts only while its body is kept. */
+	static bool IsUnconfirmed(TConstArrayView<FMantleConvertFix> Fixes, const FMantleConvertFix& Fix);
+
+	/** Whether Fix is one of the body row's lines (face, Men's, Women's, bare skin). */
+	static bool IsBodyRowLine(const FMantleConvertFix& Fix);
 
 	/** "Slot<index>": a slot line. */
 	static FName SlotKind(int32 SlotIndex);
