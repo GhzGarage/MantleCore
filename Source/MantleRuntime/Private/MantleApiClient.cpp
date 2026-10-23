@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleApiClient.h"
 #include "MantleConnection.h"
+#include "MantleCosmeticItem.h"
 #include "MantlePreviewLaunch.h"
 #include "MantleRuntime.h"
 
@@ -59,6 +60,26 @@ namespace
 		Result.Code = TEXT("preview_offline");
 		Result.Message = TEXT("Online services are unavailable in creator preview.");
 		return Result;
+	}
+
+	/**
+	 * A local-draft avatar id (an unpublished avatar under test in the offline preview) is never a catalog id, so no
+	 * request may carry one in its path or body. Logged, and answered local_draft_not_sent.
+	 */
+	bool RefuseLocalDraft(const FString& Verb, const FString& Path, const FString& Body, FMantleApiResult& OutResult)
+	{
+		if (!MantleCosmetic::ContainsLocalDraftId(Path) && !MantleCosmetic::ContainsLocalDraftId(Body))
+		{
+			return false;
+		}
+		int32 QueryStart = INDEX_NONE;
+		const FString Target = Path.FindChar(TEXT('?'), QueryStart) ? Path.Left(QueryStart) : Path;
+		UE_LOG(LogMantle, Error, TEXT("MANTLE_COSMETIC refused %s %s: it names a local-draft avatar item, which only exists in this offline preview and is never sent to the backend"),
+			*Verb, *Target);
+		OutResult = FMantleApiResult();
+		OutResult.Code = TEXT("local_draft_not_sent");
+		OutResult.Message = TEXT("A draft avatar is only for testing locally. It cannot be saved or sent online.");
+		return true;
 	}
 
 	/** The async form: the callback runs on the game thread, after the caller's call returns, as a failed request's would. */
@@ -154,6 +175,12 @@ namespace
 		if (MantlePreviewLaunch::IsRequested())
 		{
 			RefusePreviewRequestAsync(TEXT("POST"), Path, OnDone);
+			return;
+		}
+		FMantleApiResult Refused;
+		if (RefuseLocalDraft(TEXT("POST"), Path, Body, Refused))
+		{
+			AsyncTask(ENamedThreads::GameThread, [OnDone, Refused]() { OnDone.ExecuteIfBound(Refused); });
 			return;
 		}
 
@@ -268,6 +295,10 @@ FMantleApiResult FMantleApiClient::Send(
 	}
 
 	FMantleApiResult Result;
+	if (RefuseLocalDraft(Verb, Path, Body, Result))
+	{
+		return Result;
+	}
 
 	const float Budget = TimeoutOverrideSeconds > 0.0f ? TimeoutOverrideSeconds : TimeoutSeconds;
 
@@ -311,6 +342,12 @@ void DispatchMantleAsyncRequest(const TSharedRef<IHttpRequest, ESPMode::ThreadSa
 	if (MantlePreviewLaunch::IsRequested())
 	{
 		RefusePreviewRequestAsync(Verb, Path, OnDone);
+		return;
+	}
+	FMantleApiResult Refused;
+	if (RefuseLocalDraft(Verb, Path, Request->GetContentAsString(), Refused))
+	{
+		AsyncTask(ENamedThreads::GameThread, [OnDone, Refused]() { OnDone.ExecuteIfBound(Refused); });
 		return;
 	}
 	// Verb and Path are copied into the lambda because the caller's strings may be gone by
