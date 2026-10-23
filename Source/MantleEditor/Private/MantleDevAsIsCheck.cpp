@@ -1,7 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 //
 // Maintainer command: Mantle.Dev.AsIsCheck <SkeletalMesh> <Directory> <Label> [anim=<AnimSequence>] [size]
-// #46: converts a skeletal mesh As-is exactly as the panel's Convert does (FMantleAvatarConverter, every fix at its default,
+// #46: draws the source mesh as it is (<Label>_source_{front,side}.png, the reference), then converts it As-is exactly as the panel's Convert does (FMantleAvatarConverter, every fix at its default,
 // nothing saved), logs the fix list, what ran and the upload checks' issues, the converted avatar's depth, height, LOD 0
 // section count and morph targets; then draws it as the catalog thumbnail does (FMantleCosmeticThumbnail: the engine's
 // thumbnail scene), the whole standing body from the front and the side, into <Directory>/<Label>_{front,side}.png, and with
@@ -113,6 +113,20 @@ namespace MantleDevAsIsCheckPrivate
 			UE_LOG(LogMantleAsIsCheck, Error, TEXT("MANTLE_ASIS_CHECK failed: %s"), *Error);
 			return;
 		}
+		// The reference: the source mesh as it is, before anything converts it.
+		FString NoRender;
+		const bool bCanRender = FMantleCosmeticThumbnail::CanCapture(&NoRender);
+		if (bCanRender)
+		{
+			IFileManager::Get().MakeDirectory(*Args[1], /*Tree*/ true);
+			for (const FMantleConvertPart& Part : Context.Parts)
+			{
+				if (Part.Slot == TEXT("avatar") && Part.Mesh.IsValid())
+				{
+					AsIsShots(Part.Mesh.Get(), Args[1], Args[2] + TEXT("_source"), Size, nullptr, 0.0f);
+				}
+			}
+		}
 		const TArray<FMantleConvertFix> Fixes = FMantleAvatarConverter::Analyze(Context);
 		const TArray<FString> Keys = FMantleAvatarConverter::FixKeys(Fixes);
 		for (int32 Index = 0; Index < Fixes.Num(); ++Index)
@@ -167,14 +181,12 @@ namespace MantleDevAsIsCheckPrivate
 		UE_LOG(LogMantleAsIsCheck, Display, TEXT("MANTLE_ASIS_CHECK result %s: width %.1f cm, depth %.1f cm, height %.1f cm, %d LOD 0 sections, %d morph targets (%s)"),
 			*Avatar->GetPathName(), Extent.X, Extent.Y, Extent.Z, Sections, Morphs.Num(), *FString::Join(Morphs, TEXT(", ")));
 
-		FString WhyNot;
-		if (!FMantleCosmeticThumbnail::CanCapture(&WhyNot))
+		if (!bCanRender)
 		{
-			UE_LOG(LogMantleAsIsCheck, Display, TEXT("MANTLE_ASIS_CHECK no pictures: nothing can render (%s)"), *WhyNot);
+			UE_LOG(LogMantleAsIsCheck, Display, TEXT("MANTLE_ASIS_CHECK no pictures: nothing can render (%s)"), *NoRender);
 			UE_LOG(LogMantleAsIsCheck, Display, TEXT("MANTLE_ASIS_CHECK done"));
 			return;
 		}
-		IFileManager::Get().MakeDirectory(*Args[1], /*Tree*/ true);
 		AsIsShots(Avatar, Args[1], Args[2], Size, nullptr, 0.0f);
 		if (!ClipPath.IsEmpty())
 		{
