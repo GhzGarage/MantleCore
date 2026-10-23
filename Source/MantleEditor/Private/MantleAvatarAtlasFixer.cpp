@@ -1958,7 +1958,8 @@ void FMantleAvatarAtlasFixer::AnalyzePart(const FMantleConvertContext& Context, 
 		Fix.Action = FString::Printf(TEXT("can't: %s has no source geometry to rebuild (a generated or cooked mesh); reimport it"), *Mesh->GetName());
 		return;
 	}
-	if (Mesh->GetMeshClothingAssets().Num() > 0)
+	// #46: As-is drops the simulation in its Props step, before this one (FMantleAvatarPropsFixer).
+	if (Mesh->GetMeshClothingAssets().Num() > 0 && Context.Route != EMantleAvatarRoute::AsIs)
 	{
 		Fix.bCanFix = false;
 		Fix.bEnabled = false;

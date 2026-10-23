@@ -65,6 +65,9 @@ struct MANTLEEDITOR_API FMantleOutfitSections
 	/** Whether the slot's or the material's name has a weapon or prop word (bow, arrow, gun, sword, shield ...). Pure (tested). */
 	static bool IsProp(const FMantleOutfitSection& Section);
 
+	/** #46: whether a name (a bone's, "sword_handle_l", "dagger_base_r") has a weapon or prop word. Pure (tested). */
+	static bool IsPropName(const FString& Name);
+
 	/** The words of a name (see the class comment). */
 	static TArray<FString> Words(const FString& Name);
 
