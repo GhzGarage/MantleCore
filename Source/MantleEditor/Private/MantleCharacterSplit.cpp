@@ -799,18 +799,18 @@ FMantlePackReview FMantleCharacterSplit::Review(const TConstArrayView<FMantleSpl
 		}
 		Piece.Place = PlaceOf(Weights, Height.X <= Height.Y ? Height : FVector2f::ZeroVector, BodyHeight);
 		const FString Where = Piece.Place.Describe();
-		// Hair: mostly on the head or neck, and reaching above the face (a choker or earrings stay below it).
-		const bool bOnHead = Piece.Place.IsPlaced() && (Piece.Place.Main == EMantleBodyRegion::Head || Piece.Place.Main == EMantleBodyRegion::Neck);
-		const bool bAboveFace = BodyHeight > 0.0f && Height.X <= Height.Y && Height.Y >= HairTopShare * BodyHeight;
+		// Hair: mostly on the head (by its weights, or its height band with none); long hair hangs below it, so its length doesn't
+		// count. Mostly on the neck is an accessory (a choker).
+		const bool bOnHead = Piece.Place.IsPlaced() && Piece.Place.Main == EMantleBodyRegion::Head;
 		if (Skin > 0 && Covering.IsEmpty())
 		{
 			Piece.Why = FString::Printf(TEXT("all skin, on the %s: part of a body, not clothing"), *Where);
 		}
-		else if (bOnHead && bAboveFace)
+		else if (bOnHead)
 		{
 			Piece.Slot = TEXT("hair");
 			Piece.bTicked = true;
-			Piece.Why = FString::Printf(TEXT("sits on the %s and reaches above the face: hair"), *Where);
+			Piece.Why = FString::Printf(TEXT("sits on the %s: hair"), *Where);
 		}
 		else if (Skin > 0)
 		{

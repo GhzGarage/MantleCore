@@ -254,6 +254,7 @@ bool FMantleCharacterSplitPackReviewTest::RunTest(const FString& Parameters)
 		PackTestMesh(TEXT("SK_Pants"), TEXT("M_VG_Pants"), { { TEXT("pelvis"), 200 }, { TEXT("thigh_l"), 400 }, { TEXT("calf_r"), 400 } }, 90.0f, 5.0f, 3000),
 		PackTestMesh(TEXT("SK_Shoes"), TEXT("M_VG_Shoes"), { { TEXT("foot_l"), 300 }, { TEXT("ball_r"), 100 } }, 15.0f, 0.0f, 1500),
 		PackTestMesh(TEXT("SK_Piece_B"), TEXT("M_VG_Strands"), { { TEXT("head"), 800 }, { TEXT("neck_01"), 100 } }, 30.0f, 140.0f, 8000),
+		PackTestMesh(TEXT("SK_Piece_C"), TEXT("M_VG_Strands"), { { TEXT("head"), 500 }, { TEXT("neck_01"), 200 }, { TEXT("spine_05"), 150 } }, 70.0f, 100.0f, 6000),
 		PackTestMesh(TEXT("SK_Torso"), TEXT("M_VG_Body"), { { TEXT("spine_03"), 900 } }, 60.0f, 90.0f),
 		PackTestMesh(TEXT("SK_Nightwear_Top"), TEXT("M_VG_Nightwear"), { { TEXT("spine_03"), 900 } }, 40.0f, 95.0f, 1800),
 		PackTestMesh(TEXT("SK_Mystery"), TEXT("M_VG_Thing"), { { TEXT("root"), 300 } }, 0.0f),
@@ -261,11 +262,11 @@ bool FMantleCharacterSplitPackReviewTest::RunTest(const FString& Parameters)
 	Meshes[0].Sections.Insert(PackTestSection(TEXT("M_VG_Body")), 0);
 	Meshes[2].Sections.Add(PackTestSection(TEXT("M_VG_Underwear")));
 	Meshes[3].Sections.Add(PackTestSection(TEXT("M_VG_Nightwear")));
-	Meshes[13].SectionHeights[0] = FVector2f::ZeroVector;
+	Meshes[14].SectionHeights[0] = FVector2f::ZeroVector;
 	// Everything is part of the dressed character but the nightwear top (as measured on its surface).
 	for (int32 Index = 4; Index < Meshes.Num(); ++Index)
 	{
-		Meshes[Index].OnPicked = Index == 12 ? 0.1f : 0.95f;
+		Meshes[Index].OnPicked = Index == 13 ? 0.1f : 0.95f;
 	}
 	// The trim rule (FMantleGarmentOutfit::TrimNear) as measured: the lace lies on the corset.
 	const FMantlePackReview Review = FMantleCharacterSplit::Review(Meshes, 0, [](const int32 Trim, const int32 On) { return Trim == 5 && On == 4 ? 1.0 : 0.0; });
@@ -290,8 +291,9 @@ bool FMantleCharacterSplitPackReviewTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the choker is an accessory on the neck"), Review.Pieces[Neck].Slot == TEXT("accessory") && Review.Pieces[Neck].Place.Main == EMantleBodyRegion::Neck);
 	TestEqual(TEXT("the trousers are a bottom"), Review.Pieces[PackFind(Review, TEXT("SK_Pants"))].Slot, FString(TEXT("bottom")));
 	TestEqual(TEXT("the shoes are footwear"), Review.Pieces[PackFind(Review, TEXT("SK_Shoes"))].Slot, FString(TEXT("footwear")));
-	TestEqual(TEXT("a nameless piece on the head, above the face, is hair"), Review.Pieces[PackFind(Review, TEXT("SK_Piece_B"))].Slot, FString(TEXT("hair")));
-	TestEqual(TEXT("the choker below the face is not hair"), Review.Pieces[Neck].Slot, FString(TEXT("accessory")));
+	TestEqual(TEXT("a nameless piece on the head is hair"), Review.Pieces[PackFind(Review, TEXT("SK_Piece_B"))].Slot, FString(TEXT("hair")));
+	TestEqual(TEXT("long hair hanging below the head is still hair"), Review.Pieces[PackFind(Review, TEXT("SK_Piece_C"))].Slot, FString(TEXT("hair")));
+	TestEqual(TEXT("the choker, mostly on the neck, is not hair"), Review.Pieces[Neck].Slot, FString(TEXT("accessory")));
 	TestTrue(TEXT("a torso of skin is not used"), Review.Pieces[PackFind(Review, TEXT("SK_Torso"))].Slot.IsEmpty());
 	TestTrue(TEXT("another outfit is not used, and says so"), Review.Pieces[Night].Slot.IsEmpty() && Review.Pieces[Night].Why.Contains(TEXT("another outfit")));
 	TestEqual(TEXT("but would be a top"), Review.Pieces[Night].ProposedSlot, FString(TEXT("top")));
