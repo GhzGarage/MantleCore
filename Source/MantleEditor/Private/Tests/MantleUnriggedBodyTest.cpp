@@ -375,6 +375,37 @@ bool FMantleUnriggedBodyWeldSoupTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleUnriggedBodyUnusedVerticesTest,
+	"Mantle.Editor.UnriggedBody.UnusedVertices",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleUnriggedBodyUnusedVerticesTest::RunTest(const FString& Parameters)
+{
+	using namespace MantleUnriggedBodyTestPrivate;
+
+	// #165: a closed cube with two vertices no triangle uses (one far off, as ElfArden's were) loses those two, nothing else.
+	UDynamicMesh* Cube = UnriggedCubeMesh(false);
+	const TStrongObjectPtr<UDynamicMesh> CubeHeld(Cube);
+	Cube->EditMesh([](UE::Geometry::FDynamicMesh3& Edit)
+	{
+		Edit.AppendVertex(FVector(0.0, 0.0, 500.0));
+		Edit.AppendVertex(UnriggedCubeCorner(0));
+	});
+	TestEqual(TEXT("the cube has 8 corners and 2 unused vertices"), Cube->GetMeshRef().VertexCount(), 10);
+	TestEqual(TEXT("both unused vertices are removed"), FMantleUnriggedBody::RemoveUnusedVertices(*Cube), 2);
+	TestEqual(TEXT("the 8 corners stay"), Cube->GetMeshRef().VertexCount(), 8);
+	TestEqual(TEXT("all 12 triangles stay"), Cube->GetTriangleCount(), 12);
+	TArray<FVector> Points = UnriggedWeldPoints(*Cube);
+	TestTrue(TEXT("nothing is left 500 cm up"), !Points.ContainsByPredicate([](const FVector& Point) { return Point.Z > 100.0; }));
+	TestEqual(TEXT("a mesh with none loses none"), FMantleUnriggedBody::RemoveUnusedVertices(*Cube), 0);
+
+	// The weld then reads only the drawn vertices.
+	const FMantleUnriggedWeld Weld = FMantleUnriggedBody::WeldVertices(*Cube);
+	TestEqual(TEXT("the weld starts from the 8 drawn corners"), Weld.VerticesBefore, 8);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMantleUnriggedBodyWeldKeepsWeldedTest,
 	"Mantle.Editor.UnriggedBody.WeldKeepsWelded",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

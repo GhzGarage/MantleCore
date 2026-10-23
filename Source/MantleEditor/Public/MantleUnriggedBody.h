@@ -61,6 +61,9 @@ struct MANTLEEDITOR_API FMantleUnriggedWeld
 	int32 LooseTriangles = 0;
 	int32 LooseVertices = 0;
 
+	/** #165: vertices no triangle used, removed before the weld (FMantleUnriggedBody::RemoveUnusedVertices); not in VerticesBefore. */
+	int32 UnusedRemoved = 0;
+
 	/** More than FMantleUnriggedBody::MaxLooseVertexShare of the vertices are in loose triangles: the surface is loose pieces. */
 	bool bLoosePieces = false;
 
@@ -139,6 +142,12 @@ public:
 	 * loose. Positions don't move. Tested.
 	 */
 	static FMantleUnriggedWeld WeldVertices(UDynamicMesh& Mesh, double Tolerance = WeldToleranceCm);
+
+	/**
+	 * #165: removes Mesh's vertices that no triangle uses; how many. Epic's conform reads every vertex of the posed mesh, its render
+	 * only the drawn ones, so a left-over one fails the conform's input check. Positions and triangles don't change. Tested.
+	 */
+	static int32 RemoveUnusedVertices(UDynamicMesh& Mesh);
 
 	/** "This model's surface is made of loose pieces, so it can't be fitted. Re-export it with its vertices merged." */
 	static FString LoosePiecesMessage();
