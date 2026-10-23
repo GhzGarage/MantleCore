@@ -9,7 +9,8 @@ class UToolCallAsyncResultString;
 
 /**
  * Mantle: check, preview, export, publish and follow a Mantle place from the level open in the
- * Unreal editor, and check and upload cosmetics (clothing, hair, avatars) from skeletal meshes.
+ * Unreal editor, and convert, check and upload cosmetics (clothing, hair, avatars, overlays, emotes) exactly as the
+ * Cosmetics panel does, with the panel's own messages.
  * Place tools work on the editor's current level. Pass every parameter a tool lists, with ""
  * for one that may be empty: a call that leaves them out is refused before the tool runs.
  * Every tool returns one JSON object as text.
@@ -132,12 +133,22 @@ public:
 	static FString MeasureHead(const FString& BodyPath, const FString& FacePath = TEXT(""));
 
 	/**
-	 * Check a cosmetic: the Cosmetics panel's "Check only" on a skeletal mesh, a Chaos cloth asset, a MetaHuman Outfit
-	 * (an imported .mhpkg outfit, checked as clothing), a Groom or hair cards static mesh (hair slots only), or an animation
-	 * sequence (an emote, slot emote: one on the MetaHuman, UE5 or UE4 Mannequin skeleton is retargeted onto the UEFN
-	 * mannequin first, at most 10 s), with the panel's defaults (the authoring body
-	 * it finds, generated LODs, thumbnail). Exports in memory; nothing is uploaded. Read-only.
-	 * @param AssetPath The skeletal mesh, Outfit, Groom, cards mesh or animation sequence, e.g. /Game/Clothing/SKM_Jacket or /Game/Outfits/Survivor/OA_SurvivorOutfit.
+	 * Check a cosmetic: the Cosmetics panel's "Check only", with the panel's defaults (the authoring body it finds, generated
+	 * LODs, thumbnail) and its messages. Exports in memory; nothing is uploaded. Read-only. It takes:
+	 * - a skeletal mesh: clothing (a garment slot), hair (a hair slot), or an avatar body (slot avatar; see below);
+	 * - a Chaos cloth asset: clothing only;
+	 * - a MetaHuman Outfit (an imported .mhpkg outfit): clothing, or a rigid accessory such as a hat (an accessory slot);
+	 * - a Groom or a hair cards static mesh: hair slots only;
+	 * - a texture: an overlay (a tattoo, scar or makeup mask; an overlay slot). A scar's optional normal map and placing a
+	 *   picture on the body are set in the panel;
+	 * - an animation sequence: an emote (slot emote; one on the MetaHuman, UE5 or UE4 Mannequin skeleton is retargeted onto
+	 *   the UEFN mannequin first, at most 10 s).
+	 * An avatar uploads the body ConvertCosmetic made, as the panel's Use picks it: its converted face is found with it, and it
+	 * is checked as the route it was converted on (Convert: a converted MetaHuman; As is). A character that has not been
+	 * converted (any other skeletal mesh, a static mesh, a MetaHuman Creator character, a Blueprint) goes through
+	 * ConvertCosmetic first.
+	 * @param AssetPath The asset, e.g. /Game/Clothing/SKM_Jacket, /Game/Outfits/Survivor/OA_SurvivorOutfit, or a converted body
+	 * such as /Game/Characters/Converted/Vampire/SKM_Vampire_Body.
 	 * @param Slot The item's slot (a garment slot such as top, a hair slot such as hair, avatar, or, for a MetaHuman
 	 * Outfit hat or other rigid piece, an accessory slot such as acc_hat: it uploads fitted to the reference head);
 	 * "" takes the panel's default, the first 3D clothing slot. Always pass it.
@@ -150,14 +161,16 @@ public:
 	 * A MetaHuman Outfit uploads as clothing with garment variants made automatically: it is resized onto Epic's standard
 	 * body types (by default the medium-height underweight, normal and overweight bodies of one sex, named like
 	 * "f_med_nrw"), made in memory, so nothing needs converting and no Epic sign-in is needed. The sex follows FitSex;
-	 * with "" it is chosen from the Outfit's own sizes. A note in "notes" says which and why.
+	 * with "" it is chosen from the Outfit's own sizes. A note in "notes" says which and why. When those bodies cannot be
+	 * made, the check fails with an error, as the panel's does: it never uploads such an Outfit in one size.
 	 * @param FitSex For a MetaHuman Outfit: the style of body the clothing was made on, as the panel's "Made for":
 	 * "female" (women's bodies, f_...), "male" (men's bodies, m_...), or "" / "auto" to let Mantle choose from the
 	 * Outfit's sizes. Ask the creator when you do not know; ignored for anything but clothing from an Outfit.
 	 * @return JSON: {"ok", "asset", "class", "slot", "name", "canUpload" (no errors), "issues":
 	 * [{"severity": "error"|"warning"|"info", "message", "hint"}], "notes": [lines], "files":
-	 * [{"key", "label", "bytes"}]}, or a refusal (not_found, not_skeletal_mesh, unknown_slot,
-	 * outfit_not_clothing, cards_not_hair, accessory_needs_outfit, animation_not_emote, unknown_section, unknown_fit_sex).
+	 * [{"key", "label", "bytes"}]}, or a refusal (not_found, not_skeletal_mesh, unknown_slot, convert_first,
+	 * outfit_not_clothing, cards_not_hair, cloth_not_clothing, accessory_needs_outfit, animation_not_emote, texture_not_overlay,
+	 * unknown_section, unknown_fit_sex, bad_item_id).
 	 */
 	UFUNCTION(meta = (AICallable))
 	static FString CheckCosmetic(const FString& AssetPath, const FString& Slot = TEXT(""), const FString& Name = TEXT(""), const FString& Sections = TEXT(""),
@@ -173,7 +186,8 @@ public:
 	 * for this specific upload. A MetaHuman Outfit uploads with garment variants fitted to Epic's standard body types,
 	 * made automatically (as CheckCosmetic says); no converted MetaHuman is needed. Refused, with nothing sent, when the creator is not signed in, the
 	 * check finds errors, or an upload started here is still running.
-	 * @param AssetPath The skeletal mesh, Outfit, Groom, cards mesh or animation sequence (an emote), as for CheckCosmetic.
+	 * @param AssetPath Any asset CheckCosmetic takes: a skeletal mesh, Chaos cloth asset, Outfit, Groom, cards mesh, texture (an
+	 * overlay), animation sequence (an emote), or a converted avatar body (its face goes with it).
 	 * @param Slot The item's slot, as for CheckCosmetic.
 	 * @param Name The item's name players see; "" takes the asset's name. Always pass it.
 	 * @param Sections The sections to upload, as for CheckCosmetic. Always pass it.
@@ -194,9 +208,14 @@ public:
 	 * Converted folder next to the character (the creator's own assets are never changed; an
 	 * earlier conversion of the same character there is replaced), then runs the upload checks on
 	 * each converted part. Nothing is uploaded. Without Apply it is read-only.
-	 * @param AssetPath A skeletal mesh (/Game/Characters/SKM_Hero), a MetaHuman Creator character's
-	 * Blueprint or body (/Game/CharacterAssemblies/Vampire/BP_Vampire), or such a character's folder
-	 * (/Game/CharacterAssemblies/Vampire): a character yields its avatar, clothing and hair as parts.
+	 * Like the panel's Avatar door it says what it sees ("sees"), and for a skeletal mesh converted as an avatar it looks at
+	 * what the pack holds beside it ("packReview": the body it converts, each piece of clothing in its slot, hair, and what
+	 * is not used, at the panel's defaults).
+	 * @param AssetPath Any character the panel's Avatar picker takes: a skeletal mesh (/Game/Characters/SKM_Hero; one with no
+	 * usable skin weights is treated like a static mesh), a static mesh (a model with no skeleton, fitted to a MetaHuman
+	 * body), a MetaHuman Creator character (an Epic preset or the creator's own, built as it is), a MetaHuman Blueprint or
+	 * its body (/Game/CharacterAssemblies/Vampire/BP_Vampire), or such a character's folder (/Game/CharacterAssemblies/Vampire):
+	 * a Blueprint yields its avatar, clothing and hair as parts.
 	 * @param Slot For a single skeletal mesh, the slot it converts for (avatar, top, bottom,
 	 * footwear, hair, eyebrows, eyelashes, facial_hair); "" takes its slot in its character, else
 	 * avatar. Ignored for a whole character. Always pass it.
@@ -206,16 +225,21 @@ public:
 	 * @param Confirm Comma-separated keys of the fixes that need confirming ("needsConfirm", e.g.
 	 * "Strip.0.BareSkin": the kept parts are bare skin) that you confirm. Convert does nothing while
 	 * one is unconfirmed. Only confirm what the person asking told you is true. "" for none.
-	 * @return JSON: {"ok", "source", "assembly", "outputFolder", "route", "parts": [{"index", "slot", "class",
+	 * @param Route How it should go up, the panel's "How should it go up?": "convert" (Convert to MetaHuman, the default) or
+	 * "asis" (As is: it keeps its own look; offered only while As-is uploads are allowed, and refused with the panel's
+	 * reason when the panel greys it, e.g. a MetaHuman Creator character, "it's already a MetaHuman"). "" is convert.
+	 * Always pass it.
+	 * @return JSON: {"ok", "source", "assembly", "outputFolder", "route", "sees", "packReview": [lines], "parts": [{"index", "slot", "class",
 	 * "name", "mesh", "original", "face", "section", "skeleton", "authoringBody", "authoringFace",
 	 * "included", "clothAsset"}], "fixes": [{"key", "fixer", "kind", "part", "problem", "action",
 	 * "canFix", "enabled", "needsConfirm"}], "notes", "unknownTurnOff", "unknownConfirm", "applied", and with Apply "result":
 	 * {"removedPrevious", "applied", "failed", "leftAlone" (fixes with a "reason"), "created" (asset
 	 * paths), "checks": [{"part", "canUpload", "standingHeightCm", "issues": [{"severity",
-	 * "message", "hint"}]}], "blocked"}}, or a refusal (not_convertible, no_contract).
+	 * "message", "hint"}]}], "blocked"}}, or a refusal (not_convertible, no_contract, unknown_route, as_is_greyed).
 	 */
 	UFUNCTION(meta = (AICallable))
-	static FString ConvertCosmetic(const FString& AssetPath, const FString& Slot, bool bApply, const FString& TurnOff = TEXT(""), const FString& Confirm = TEXT(""));
+	static FString ConvertCosmetic(const FString& AssetPath, const FString& Slot, bool bApply, const FString& TurnOff = TEXT(""), const FString& Confirm = TEXT(""),
+		const FString& Route = TEXT(""));
 
 	/**
 	 * Make a MetaHuman Outfit from a third-party character's clothing: the garment meshes plus that character's bare

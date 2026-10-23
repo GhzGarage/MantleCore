@@ -165,6 +165,12 @@ public:
 	 */
 	static void DevPanelShot(const TArray<FString>& Args);
 
+	/**
+	 * Chunk 8, agent = panel (tests): a new panel, Class chosen, Source picked and Slot chosen as a creator does, then its
+	 * Check (BuildPackage). OutIssues are the issues the panel shows; returns whether the check passed.
+	 */
+	static bool DevCheck(EMantleCosmeticClass Class, UObject* Source, const FString& Slot, TArray<FMantleCosmeticIssue>& OutIssues);
+
 private:
 	void SetClass(EMantleCosmeticClass Class);
 	void SetSource(UObject* Source);
@@ -426,6 +432,8 @@ private:
 	TSharedPtr<SVerticalBox> RolesBox;
 	TSharedPtr<SVerticalBox> SocketsBox;
 	TSharedPtr<SVerticalBox> IssuesBox;
+	/** The issues ShowIssues showed last (DevCheck). */
+	TArray<FMantleCosmeticIssue> ShownIssues;
 
 	/** #483: the garment mesh's sections (material slots at LOD 0), their slot indices, pieces and ticks, by row. */
 	TArray<FMantleOutfitSection> OutfitSections;

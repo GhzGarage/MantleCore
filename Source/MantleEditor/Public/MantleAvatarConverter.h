@@ -258,7 +258,7 @@ public:
 	 * Blueprint nor an assembly's folder.
 	 */
 	static FString RunForAgent(const FString& Path, const FString& Slot, bool bApply, const FString& TurnOff, const FString& Confirm = FString(),
-		const FMantleConvertOptions* OptionsOverride = nullptr);
+		const FString& Route = FString(), const FMantleConvertOptions* OptionsOverride = nullptr);
 
 	/**
 	 * The body an assembly's garments are made on once this conversion has replaced it: the avatar part converted from

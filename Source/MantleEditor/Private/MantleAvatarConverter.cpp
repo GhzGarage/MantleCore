@@ -4,6 +4,7 @@
 #include "MantleCharacterSplit.h"
 #include "MantleAvatarStripFixer.h"
 #include "MantleAvatarContract.h"
+#include "MantleCosmeticPanel.h"
 #include "MantleEditorActions.h"
 #include "MantleGarmentOutfit.h"
 #include "MantleMetaHumanBuild.h"
@@ -74,6 +75,25 @@ namespace MantleAvatarConverterPrivate
 	}
 
 	/** The object path for "/Game/A/B" or "/Game/A/B.B". */
+	FString ConverterObjectPath(const FString& Path);
+
+	/** The asset at Path (in memory first, a new unsaved asset, then on disk: a wrong path is null, not a load warning). */
+	UObject* ConverterAssetAt(const FString& Path)
+	{
+		const FString ObjectPath = ConverterObjectPath(Path.TrimStartAndEnd());
+		const FString PackageName = FPackageName::ObjectPathToPackageName(ObjectPath);
+		if (PackageName.IsEmpty() || !FPackageName::IsValidLongPackageName(PackageName))
+		{
+			return nullptr;
+		}
+		UObject* Asset = FindObject<UObject>(nullptr, *ObjectPath);
+		if (!Asset && FPackageName::DoesPackageExist(PackageName))
+		{
+			Asset = LoadObject<UObject>(nullptr, *ObjectPath);
+		}
+		return Asset;
+	}
+
 	FString ConverterObjectPath(const FString& Path)
 	{
 		FString ObjectPath = Path.TrimStartAndEnd();
@@ -495,18 +515,7 @@ bool FMantleAvatarConverter::MakeContextForPath(const FString& Path, const FMant
 {
 	using namespace MantleAvatarConverterPrivate;
 	const FString Trimmed = Path.TrimStartAndEnd();
-	const FString ObjectPath = ConverterObjectPath(Trimmed);
-	const FString PackageName = FPackageName::ObjectPathToPackageName(ObjectPath);
-	UObject* Asset = nullptr;
-	if (!PackageName.IsEmpty() && FPackageName::IsValidLongPackageName(PackageName))
-	{
-		// In memory first (a new, unsaved asset), then on disk: a wrong path is a refusal, not a load warning.
-		Asset = FindObject<UObject>(nullptr, *ObjectPath);
-		if (!Asset && FPackageName::DoesPackageExist(PackageName))
-		{
-			Asset = LoadObject<UObject>(nullptr, *ObjectPath);
-		}
-	}
+	UObject* Asset = ConverterAssetAt(Trimmed);
 	if (Asset)
 	{
 		return MakeContext(Asset, Options, Contract, OutContext, OutError);
@@ -1224,7 +1233,7 @@ TSharedRef<FJsonObject> FMantleAvatarConverter::ToJson(const FMantleConvertConte
 }
 
 FString FMantleAvatarConverter::RunForAgent(const FString& Path, const FString& Slot, const bool bApply, const FString& TurnOff,
-	const FString& Confirm, const FMantleConvertOptions* OptionsOverride)
+	const FString& Confirm, const FString& Route, const FMantleConvertOptions* OptionsOverride)
 {
 	using namespace MantleAvatarConverterPrivate;
 	FString ContractError;
@@ -1235,13 +1244,82 @@ FString FMantleAvatarConverter::RunForAgent(const FString& Path, const FString& 
 	}
 	FMantleConvertOptions Options = OptionsOverride ? *OptionsOverride : FMantleConvertOptions();
 	Options.Slot = Slot.TrimStartAndEnd();
+
+	// Chunk 8, agent = panel: the Avatar door's choices, made as the panel makes them (FMantleConvertSection). The route:
+	// Convert unless As is is asked for, offered (MakeContext refuses it while As-is uploads are off) and not greyed.
+	const FString RouteName = Route.TrimStartAndEnd();
+	EMantleAvatarRoute Picked = EMantleAvatarRoute::Convert;
+	if (RouteName.Equals(TEXT("asis"), ESearchCase::IgnoreCase) || RouteName.Equals(TEXT("as_is"), ESearchCase::IgnoreCase)
+		|| RouteName.Equals(TEXT("as is"), ESearchCase::IgnoreCase))
+	{
+		Picked = EMantleAvatarRoute::AsIs;
+	}
+	else if (!RouteName.IsEmpty() && !RouteName.Equals(TEXT("convert"), ESearchCase::IgnoreCase))
+	{
+		return ConverterRefusal(TEXT("unknown_route"), FString::Printf(
+			TEXT("\"%s\" is not a route. Use \"convert\" (Convert to MetaHuman, the default), \"asis\" (As is), or \"\"."), *Route));
+	}
+	UObject* Asset = ConverterAssetAt(Path);
+	FMantleAvatarSight Sight = FMantleConvertSection::SeeKind(Asset);
+	if (Picked == EMantleAvatarRoute::AsIs)
+	{
+		const FString Greyed = FMantleConvertSection::AsIsGreyedWhy(Sight);
+		if (!Greyed.IsEmpty())
+		{
+			return ConverterRefusal(TEXT("as_is_greyed"), FString::Printf(
+				TEXT("As is is greyed for %s: %s. Convert it instead (Route \"convert\")."), *Sight.Name, *Greyed));
+		}
+	}
+	Options.Route = FMantleConvertSection::DoorRoute(Picked, Sight);
+
+	// #55: what the pack holds beside a character's skeletal mesh converted as an avatar, as the panel's review proposes it
+	// (the rows at their defaults; not for a MetaHuman Creator assembly, whose folder scans as one).
+	USkeletalMesh* PickedMesh = Cast<USkeletalMesh>(Asset);
+	UObject* Selection = Asset;
+	TSharedPtr<FMantlePackReview> Review;
+	const bool bAvatarSlot = Options.Slot.IsEmpty() || Options.Slot.Equals(AvatarSlot, ESearchCase::CaseSensitive);
+	const FString AssemblyFolder = PickedMesh ? FMantleAvatarAssemblyFixer::AssemblyFolderOf(PickedMesh) : FString();
+	FMantleAssemblyScan AssemblyScan;
+	FString ScanError;
+	const bool bAssembly = !AssemblyFolder.IsEmpty() && FMantleAvatarAssemblyFixer::Scan(AssemblyFolder, AssemblyScan, ScanError);
+	if (PickedMesh && bAvatarSlot && Options.Route == EMantleAvatarRoute::Convert && PickedMesh->GetRefSkeleton().GetRawBoneNum() > 1 && !bAssembly)
+	{
+		const TSharedRef<FMantlePackReview> Found = MakeShared<FMantlePackReview>(FMantleCharacterSplit::ReviewFor(*PickedMesh));
+		const int32 BodyMesh = Found->BodyMesh();
+		if (Found->HasRows() && Found->Meshes.IsValidIndex(BodyMesh) && Found->Meshes[BodyMesh].IsValid())
+		{
+			Review = Found;
+			Selection = Found->Meshes[BodyMesh].Get();
+			Options.Review = Found;
+		}
+	}
+
 	FMantleConvertContext Context;
 	FString Error;
-	if (!MakeContextForPath(Path, Options, *Contract, Context, Error))
+	if (!(Selection ? MakeContext(Selection, Options, *Contract, Context, Error) : MakeContextForPath(Path, Options, *Contract, Context, Error)))
 	{
 		return ConverterRefusal(TEXT("not_convertible"), Error);
 	}
 	TArray<FMantleConvertFix> Fixes = Analyze(Context);
+	// The "what I see" line, from what the converter found before any tick changes (the panel's SeeContext and SeeAssembly).
+	if (Selection == Asset)
+	{
+		FMantleConvertSection::SeeContext(Context, Fixes, Sight);
+	}
+	else
+	{
+		Sight.bLooked = true;
+	}
+	if (Sight.Kind == FMantleAvatarSight::EKind::Blueprint)
+	{
+		FMantleAssemblyScan Scan;
+		FString BlueprintScanError;
+		const FString Folder = FMantleAvatarAssemblyFixer::AssemblyFolderOf(Asset);
+		if (!Folder.IsEmpty() && FMantleAvatarAssemblyFixer::Scan(Folder, Scan, BlueprintScanError))
+		{
+			FMantleConvertSection::SeeAssembly(Scan, Sight);
+		}
+	}
 	const TArray<FString> Keys = FixKeys(Fixes);
 
 	// The fixes the caller switches off, by key; a key the list lacks is reported, never guessed at.
@@ -1292,6 +1370,16 @@ FString FMantleAvatarConverter::RunForAgent(const FString& Path, const FString& 
 		Result = Convert(Context, Fixes, Options, *Contract);
 	}
 	TSharedRef<FJsonObject> Object = ToJson(Context, Fixes, Result.GetPtrOrNull(), *Contract);
+	Object->SetStringField(TEXT("sees"), FMantleConvertSection::WhatISee(Sight));
+	TArray<TSharedPtr<FJsonValue>> ReviewLines;
+	if (Review.IsValid())
+	{
+		for (const FString& Line : Review->Describe(Asset->GetName()))
+		{
+			ReviewLines.Add(MakeShared<FJsonValueString>(Line));
+		}
+	}
+	Object->SetArrayField(TEXT("packReview"), ReviewLines);
 	Object->SetArrayField(TEXT("unknownTurnOff"), Unknown);
 	Object->SetArrayField(TEXT("unknownConfirm"), UnknownConfirm);
 	return ConverterWriteJson(Object);

@@ -2,6 +2,7 @@
 #include "MantleEditorActions.h"
 
 #include "MantleAvatarContract.h"
+#include "MantleAvatarConverter.h"
 #include "MantleCosmeticExport.h"
 #include "MantleCosmeticPackage.h"
 #include "MantleCosmeticValidation.h"
@@ -10,6 +11,7 @@
 #include "MantleParametricOutfit.h"
 #include "MantlePublishPanel.h"
 
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Engine/SkeletalMesh.h"
 #include "MetaHumanCharacter.h"
 #include "Misc/PackageName.h"
@@ -282,4 +284,68 @@ TOptional<TArray<int32>> FMantleEditorActions::CosmeticKeepSlots(TConstArrayView
 		return TOptional<TArray<int32>>();
 	}
 	return TOptional<TArray<int32>>(MoveTemp(Kept));
+}
+
+bool FMantleEditorActions::PrepareCosmeticBuild(FMantleCosmeticDraft& Draft, const EMantleAvatarRoute Route, TArray<FMantleCosmeticIssue>& OutBlockers)
+{
+	OutBlockers.Reset();
+	Draft.AvatarPublicationMode = AvatarPublicationMode(Draft.Class, Route);
+	if (Draft.Class == EMantleCosmeticClass::Avatar && !Draft.Face.IsValid())
+	{
+		Draft.Face = FindConvertedFace(Cast<USkeletalMesh>(Draft.Source.Get()));
+	}
+	if (Draft.Class == EMantleCosmeticClass::Garment && FMantleParametricOutfit::IsSource(Draft.Source.Get()) && Draft.OutfitTargets.IsEmpty())
+	{
+		OutBlockers.Add(FMantleCosmeticChecks::Error(FString(TEXT("Mantle could not make its standard fit bodies for this Outfit, so add at least one fit source in Parametric clothing before checking or uploading it. ")) + Draft.FitBodiesStatus));
+	}
+	return OutBlockers.IsEmpty();
+}
+
+EMantleAvatarRoute FMantleEditorActions::CosmeticRouteOf(const UObject* Body)
+{
+	UPackage* Package = Body ? Body->GetPackage() : nullptr;
+	const FString* Route = Package ? Package->GetMetaData().FindValue(Body, FMantleAvatarConverter::RouteKey) : nullptr;
+	return Route && Route->Equals(LexToString(EMantleAvatarRoute::AsIs), ESearchCase::CaseSensitive) ? EMantleAvatarRoute::AsIs : EMantleAvatarRoute::Convert;
+}
+
+FString FMantleEditorActions::AvatarPublicationMode(const EMantleCosmeticClass Class, const EMantleAvatarRoute Route)
+{
+	if (Class != EMantleCosmeticClass::Avatar)
+	{
+		return FString();
+	}
+	return Route == EMantleAvatarRoute::AsIs ? TEXT("as_is") : TEXT("converted");
+}
+
+USkeletalMesh* FMantleEditorActions::FindConvertedFace(const USkeletalMesh* Body)
+{
+	if (!FMantleAvatarConverter::IsConvertOutput(Body))
+	{
+		return nullptr;
+	}
+	const FString* Built = Body->GetPackage()->GetMetaData().FindValue(Body, FMantleAvatarConverter::BuiltKey);
+	if (!Built || Built->IsEmpty())
+	{
+		return nullptr;
+	}
+	FARFilter Filter;
+	Filter.PackagePaths.Add(FName(**Built));
+	Filter.ClassPaths.Add(USkeletalMesh::StaticClass()->GetClassPathName());
+	Filter.bRecursivePaths = true;
+	TArray<FAssetData> Assets;
+	FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().GetAssets(Filter, Assets);
+	for (const FAssetData& Asset : Assets)
+	{
+		USkeletalMesh* Face = Cast<USkeletalMesh>(Asset.GetAsset());
+		if (!Face || Face == Body || Face->GetRefSkeleton().FindBoneIndex(TEXT("FACIAL_C_FacialRoot")) == INDEX_NONE)
+		{
+			continue;
+		}
+		const FString* FaceBuilt = Face->GetPackage()->GetMetaData().FindValue(Face, FMantleAvatarConverter::BuiltKey);
+		if (FaceBuilt && *FaceBuilt == *Built)
+		{
+			return Face;
+		}
+	}
+	return nullptr;
 }
