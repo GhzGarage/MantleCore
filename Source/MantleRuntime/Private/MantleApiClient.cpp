@@ -345,7 +345,9 @@ void DispatchMantleAsyncRequest(const TSharedRef<IHttpRequest, ESPMode::ThreadSa
 		return;
 	}
 	FMantleApiResult Refused;
-	if (RefuseLocalDraft(Verb, Path, Request->GetContentAsString(), Refused))
+	const TArray<uint8>& Content = Request->GetContent();
+	const FUTF8ToTCHAR ContentText(reinterpret_cast<const ANSICHAR*>(Content.GetData()), Content.Num());
+	if (RefuseLocalDraft(Verb, Path, FString(ContentText.Length(), ContentText.Get()), Refused))
 	{
 		AsyncTask(ENamedThreads::GameThread, [OnDone, Refused]() { OnDone.ExecuteIfBound(Refused); });
 		return;
