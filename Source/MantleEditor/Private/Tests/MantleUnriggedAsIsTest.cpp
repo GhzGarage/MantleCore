@@ -162,4 +162,71 @@ bool FMantleUnriggedAsIsTransferTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+// A finger's skin follows one finger: a point between two fingers, weighted half to each by the closest-point transfer, keeps
+// only its nearest finger; a point on one finger, and one on the hand alone, keep what they have.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleUnriggedAsIsFingerTest,
+	"Mantle.Editor.UnriggedAsIs.KeepOneFinger",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleUnriggedAsIsFingerTest::RunTest(const FString& Parameters)
+{
+	// lowerarm_l, hand_l, two fingers of two bones each along +Y (index at X 0, middle at X 3), and a twist bone under the hand
+	// that is no finger.
+	const TArray<FName> Names = { TEXT("lowerarm_l"), TEXT("hand_l"), TEXT("index_01_l"), TEXT("index_02_l"), TEXT("middle_01_l"), TEXT("middle_02_l"),
+		TEXT("hand_twist_l") };
+	const TArray<int32> Parents = { INDEX_NONE, 0, 1, 2, 1, 4, 1 };
+	const TArray<FVector3f> Joints = { FVector3f(0, -20, 0), FVector3f(0, 0, 0), FVector3f(0, 8, 0), FVector3f(0, 12, 0), FVector3f(3, 8, 0),
+		FVector3f(3, 12, 0), FVector3f(1, -2, 0) };
+	constexpr int32 Hand = 1;
+	constexpr int32 Index2 = 3;
+	constexpr int32 Middle2 = 5;
+
+	FMantleAutoRigWeights Weights;
+	Weights.NumInfluences = 4;
+	auto AddPoint = [&Weights](TConstArrayView<TPair<int32, float>> Influences)
+	{
+		for (int32 Slot = 0; Slot < Weights.NumInfluences; ++Slot)
+		{
+			Weights.Bones.Add(Influences.IsValidIndex(Slot) ? Influences[Slot].Key : 0);
+			Weights.Weights.Add(Influences.IsValidIndex(Slot) ? Influences[Slot].Value : 0.0f);
+		}
+	};
+	const TArray<FVector3f> Points = {
+		FVector3f(1.0f, 11.0f, 0.0f),   // 0: between the fingers, nearer the index: half each
+		FVector3f(2.4f, 13.0f, 0.0f),   // 1: between them, nearer the middle, past its tip: half each and some hand
+		FVector3f(0.2f, 10.0f, 0.0f),   // 2: on the index: all index
+		FVector3f(0.5f, -1.0f, 0.0f),   // 3: on the palm: hand and twist, no finger
+		FVector3f(1.6f, 10.0f, 0.0f),   // 4: nearer the middle, but weighted all to the index
+	};
+	AddPoint({ TPair<int32, float>(Index2, 0.5f), TPair<int32, float>(Middle2, 0.5f) });
+	AddPoint({ TPair<int32, float>(Index2, 0.4f), TPair<int32, float>(Middle2, 0.4f), TPair<int32, float>(Hand, 0.2f) });
+	AddPoint({ TPair<int32, float>(Index2, 1.0f) });
+	AddPoint({ TPair<int32, float>(Hand, 0.7f), TPair<int32, float>(6, 0.3f) });
+	AddPoint({ TPair<int32, float>(Index2, 1.0f) });
+
+	const FMantleFingerFix Fix = FMantleUnriggedAsIs::KeepOneFinger(Points, Names, Parents, Joints, Weights);
+	TestEqual(TEXT("four points are on a finger"), Fix.FingerPoints, 4);
+	TestEqual(TEXT("two of them reach both fingers"), Fix.MixedPoints, 2);
+	TestEqual(TEXT("three are kept to their nearest finger"), Fix.Changed, 3);
+	TestTrue(TEXT("the point nearer the index is all index"), FMath::IsNearlyEqual(Weights.WeightOf(0, Index2), 1.0f, 1e-5f));
+	TestEqual(TEXT("and nothing on the middle"), Weights.WeightOf(0, Middle2), 0.0f);
+	TestTrue(TEXT("the point nearer the middle keeps the middle and the hand"), FMath::IsNearlyEqual(Weights.WeightOf(1, Middle2), 2.0f / 3.0f, 1e-5f)
+		&& FMath::IsNearlyEqual(Weights.WeightOf(1, Hand), 1.0f / 3.0f, 1e-5f));
+	TestEqual(TEXT("and nothing on the index"), Weights.WeightOf(1, Index2), 0.0f);
+	TestTrue(TEXT("the point on the index keeps it"), FMath::IsNearlyEqual(Weights.WeightOf(2, Index2), 1.0f, 1e-5f));
+	TestTrue(TEXT("the palm keeps its hand and twist"), FMath::IsNearlyEqual(Weights.WeightOf(3, Hand), 0.7f, 1e-5f)
+		&& FMath::IsNearlyEqual(Weights.WeightOf(3, 6), 0.3f, 1e-5f));
+	TestTrue(TEXT("a point on the wrong finger alone goes to its nearest bone"), FMath::IsNearlyEqual(Weights.WeightOf(4, Middle2), 1.0f, 1e-5f));
+
+	// No hand in the skeleton: nothing changes.
+	FMantleAutoRigWeights Same = Weights;
+	const TArray<FName> NoHand = { TEXT("root"), TEXT("pelvis"), TEXT("index_01_l"), TEXT("index_02_l"), TEXT("middle_01_l"), TEXT("middle_02_l"), TEXT("spine") };
+	const FMantleFingerFix None = FMantleUnriggedAsIs::KeepOneFinger(Points, NoHand, Parents, Joints, Same);
+	TestEqual(TEXT("without a hand there are no fingers"), None.FingerPoints, 0);
+	TestTrue(TEXT("and no weight changes"), Same.Weights == Weights.Weights);
+	return true;
+}
+
 #endif

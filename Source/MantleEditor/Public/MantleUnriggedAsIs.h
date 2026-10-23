@@ -55,11 +55,30 @@ struct MANTLEEDITOR_API FMantleAutoRigWeights
 	FString ToString() const;
 };
 
+/** What FMantleUnriggedAsIs::KeepOneFinger did. */
+struct MANTLEEDITOR_API FMantleFingerFix
+{
+	/** Points weighted to any finger. */
+	int32 FingerPoints = 0;
+
+	/** Of those, points whose weights reached two or more fingers (they stretch when the fingers curl apart). */
+	int32 MixedPoints = 0;
+
+	/** Points whose weights changed: kept to their nearest finger. */
+	int32 Changed = 0;
+
+	/** "1200 finger points: 310 on two or more fingers, 340 kept to their nearest finger". */
+	FString ToString() const;
+};
+
 /** What FMantleUnriggedAsIs::MakeSkinnedMesh made. */
 struct MANTLEEDITOR_API FMantleAutoRigResult
 {
 	/** The model's geometry and textures, skinned to the conform's A-pose body skeleton. */
 	TWeakObjectPtr<USkeletalMesh> Mesh;
+
+	/** The finger weights kept to one finger each (KeepOneFinger). */
+	FMantleFingerFix Fingers;
 
 	/** How far the model and its skeleton were moved up to put its lowest point on the floor (cm; negative is down). */
 	double FloorShiftCm = 0.0;
@@ -123,6 +142,17 @@ public:
 	 */
 	static bool TransferWeights(TConstArrayView<FVector3f> Points, const FMantleAutoRigSkin& Skin, int32 HeadBoneIndex, double HeadCutZ,
 		FMantleAutoRigWeights& Out, FString& OutError);
+
+	/**
+	 * Pure (tested): a finger's skin follows one finger. Closest-point weights between two fingers blend both (or take the
+	 * neighbour's), and those points stretch when the fingers curl apart. For each point weighted to a finger, the finger is the
+	 * one whose bones (each a segment from its parent's joint to its own, a fingertip carried on past its last joint) pass
+	 * nearest the point; its weights on other fingers are dropped and the rest renormalised (all on that nearest bone when
+	 * nothing is left). Fingers are the chains under a "hand_*" bone whose root is named thumb, index, middle, ring or pinky
+	 * (Epic's MetaHuman skeleton). Joints are component-space, as Points are.
+	 */
+	static FMantleFingerFix KeepOneFinger(TConstArrayView<FVector3f> Points, TConstArrayView<FName> Names, TConstArrayView<int32> Parents,
+		TConstArrayView<FVector3f> Joints, FMantleAutoRigWeights& InOut);
 
 	/**
 	 * Appends Mesh's LOD 0 (its imported model: vertices, triangles, weights) to InOut, its bones mapped by name onto Target's raw

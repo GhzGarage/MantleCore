@@ -162,6 +162,165 @@ FString FMantleAutoRigWeights::ToString() const
 		HeadPoints + SkinPoints, HeadPoints, SkinPoints, MeanDistanceCm, MaxDistanceCm, FarPoints, FMantleUnriggedAsIs::FarCm);
 }
 
+FString FMantleFingerFix::ToString() const
+{
+	return FString::Printf(TEXT("%d finger points: %d on two or more fingers, %d kept to their nearest finger"), FingerPoints, MixedPoints, Changed);
+}
+
+FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVector3f> Points, const TConstArrayView<FName> Names,
+	const TConstArrayView<int32> Parents, const TConstArrayView<FVector3f> Joints, FMantleAutoRigWeights& InOut)
+{
+	FMantleFingerFix Out;
+	const int32 NumBones = Names.Num();
+	if (Parents.Num() != NumBones || Joints.Num() != NumBones || InOut.NumInfluences <= 0)
+	{
+		return Out;
+	}
+	// Each bone's finger: the root of its chain (a child of a hand bone, named for a finger), and that hand.
+	const TCHAR* const FingerWords[] = { TEXT("thumb"), TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky") };
+	auto IsFingerRoot = [&](const int32 Bone)
+	{
+		const int32 Parent = Parents[Bone];
+		if (Parent < 0 || Parent >= NumBones || !Names[Parent].ToString().StartsWith(TEXT("hand_")))
+		{
+			return false;
+		}
+		const FString Name = Names[Bone].ToString();
+		for (const TCHAR* Word : FingerWords)
+		{
+			if (Name.StartsWith(Word))
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+	TArray<int32> FingerOf;
+	FingerOf.Init(INDEX_NONE, NumBones);
+	TArray<int32> HandOf;
+	HandOf.Init(INDEX_NONE, NumBones);
+	TArray<bool> HasChild;
+	HasChild.Init(false, NumBones);
+	for (int32 Bone = 0; Bone < NumBones; ++Bone)
+	{
+		if (Parents[Bone] >= 0 && Parents[Bone] < NumBones)
+		{
+			HasChild[Parents[Bone]] = true;
+		}
+		for (int32 Walk = Bone; Walk >= 0 && Walk < NumBones; Walk = Parents[Walk])
+		{
+			if (IsFingerRoot(Walk))
+			{
+				FingerOf[Bone] = Walk;
+				HandOf[Bone] = Parents[Walk];
+				break;
+			}
+		}
+	}
+	// The fingers' bones as segments: parent joint to joint, a fingertip carried on half its bone's length past its last joint.
+	struct FFingerSegment
+	{
+		FVector3f A;
+		FVector3f B;
+		int32 Bone;
+	};
+	TArray<FFingerSegment> Segments;
+	for (int32 Bone = 0; Bone < NumBones; ++Bone)
+	{
+		const int32 Parent = Parents[Bone];
+		if (FingerOf[Bone] == INDEX_NONE || Parent < 0)
+		{
+			continue;
+		}
+		Segments.Add({ Joints[Parent], Joints[Bone], Bone });
+		if (!HasChild[Bone])
+		{
+			Segments.Add({ Joints[Bone], Joints[Bone] + 0.5f * (Joints[Bone] - Joints[Parent]), Bone });
+		}
+	}
+	if (Segments.IsEmpty())
+	{
+		return Out;
+	}
+	const int32 Slots = InOut.NumInfluences;
+	for (int32 Point = 0; Point < Points.Num(); ++Point)
+	{
+		// The fingers (and the hand) its weights reach.
+		TSet<int32> Fingers;
+		int32 Hand = INDEX_NONE;
+		for (int32 Slot = 0; Slot < Slots; ++Slot)
+		{
+			const int32 Index = Point * Slots + Slot;
+			const int32 Bone = InOut.Bones.IsValidIndex(Index) ? InOut.Bones[Index] : INDEX_NONE;
+			if (InOut.Weights.IsValidIndex(Index) && InOut.Weights[Index] > 0.0f && FingerOf.IsValidIndex(Bone) && FingerOf[Bone] != INDEX_NONE)
+			{
+				Fingers.Add(FingerOf[Bone]);
+				Hand = HandOf[Bone];
+			}
+		}
+		if (Fingers.IsEmpty())
+		{
+			continue;
+		}
+		++Out.FingerPoints;
+		Out.MixedPoints += Fingers.Num() > 1 ? 1 : 0;
+		// The nearest finger bone of that hand.
+		int32 Nearest = INDEX_NONE;
+		float NearestSquared = TNumericLimits<float>::Max();
+		for (const FFingerSegment& Segment : Segments)
+		{
+			if (HandOf[Segment.Bone] != Hand)
+			{
+				continue;
+			}
+			const FVector3f Closest = FMath::ClosestPointOnSegment(Points[Point], Segment.A, Segment.B);
+			const float Squared = FVector3f::DistSquared(Points[Point], Closest);
+			if (Squared < NearestSquared)
+			{
+				NearestSquared = Squared;
+				Nearest = Segment.Bone;
+			}
+		}
+		if (Nearest == INDEX_NONE)
+		{
+			continue;
+		}
+		// Its weights on the other fingers dropped, the rest renormalised.
+		const int32 Keep = FingerOf[Nearest];
+		bool bDropped = false;
+		float Sum = 0.0f;
+		for (int32 Slot = 0; Slot < Slots; ++Slot)
+		{
+			const int32 Index = Point * Slots + Slot;
+			const int32 Bone = InOut.Bones[Index];
+			if (InOut.Weights[Index] > 0.0f && FingerOf.IsValidIndex(Bone) && FingerOf[Bone] != INDEX_NONE && FingerOf[Bone] != Keep)
+			{
+				InOut.Weights[Index] = 0.0f;
+				bDropped = true;
+			}
+			Sum += InOut.Weights[Index];
+		}
+		if (!bDropped)
+		{
+			continue;
+		}
+		++Out.Changed;
+		if (Sum > 0.0f)
+		{
+			for (int32 Slot = 0; Slot < Slots; ++Slot)
+			{
+				InOut.Weights[Point * Slots + Slot] /= Sum;
+			}
+		}
+		else
+		{
+			InOut.Bones[Point * Slots] = Nearest;
+			InOut.Weights[Point * Slots] = 1.0f;
+		}
+	}
+	return Out;
+}
+
 bool FMantleUnriggedAsIs::HasNoRig(const UObject* Selection)
 {
 	if (Cast<UStaticMesh>(Selection))
@@ -468,6 +627,20 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 	if (!TransferWeights(Points, Skin, HeadBoneIndex, OutResult.HeadCutZ, OutResult.Weights, OutError))
 	{
 		return false;
+	}
+	// A finger's skin follows one finger: closest points between fingers blend neighbours, which stretch when the fingers curl.
+	{
+		TArray<FName> BoneNames;
+		TArray<int32> BoneParents;
+		TArray<FVector3f> BoneJoints;
+		for (int32 Bone = 0; Bone < Reference.GetRawBoneNum(); ++Bone)
+		{
+			BoneNames.Add(Reference.GetRawRefBoneInfo()[Bone].Name);
+			BoneParents.Add(Reference.GetRawParentIndex(Bone));
+			BoneJoints.Add(FVector3f(FAnimationRuntime::GetComponentSpaceTransformRefPose(Reference, Bone).GetLocation()));
+		}
+		OutResult.Fingers = KeepOneFinger(Points, BoneNames, BoneParents, BoneJoints, OutResult.Weights);
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG fingers: %s"), *OutResult.Fingers.ToString());
 	}
 
 	// On the floor: the game stands an avatar's root on the floor and plays it as tall as its top (the export's standing height), so
