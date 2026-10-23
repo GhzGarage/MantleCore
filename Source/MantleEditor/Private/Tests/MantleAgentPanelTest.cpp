@@ -159,7 +159,8 @@ bool FMantleAgentPanelTest::RunTest(const FString& Parameters)
 		FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Convert);
 		if (TestTrue(FString::Printf(TEXT("ConvertCosmetic answered (%s)"), *Json.Left(400)), Convert.IsValid()) && Convert->GetBoolField(TEXT("ok")))
 		{
-			TestTrue(TEXT("the what-I-see line names the piece"), Convert->GetStringField(TEXT("sees")).StartsWith(TEXT("SK_AgentPanelPiece: Skeletal mesh")));
+			TestTrue(FString::Printf(TEXT("the what-I-see line names the piece (%s)"), *Convert->GetStringField(TEXT("sees"))),
+				Convert->GetStringField(TEXT("sees")).StartsWith(Mesh->GetName() + TEXT(": Skeletal mesh")));
 			TestTrue(TEXT("the Convert button state is reported"), Convert->HasField(TEXT("canConvert")));
 			TestEqual(TEXT("route"), Convert->GetStringField(TEXT("route")), FString(TEXT("convert")));
 		}
