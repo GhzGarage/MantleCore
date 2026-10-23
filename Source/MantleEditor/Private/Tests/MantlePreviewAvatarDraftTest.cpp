@@ -178,7 +178,15 @@ bool FMantlePreviewAvatarDraftManifestTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the client materials as the create request names them"),
 		Item->GetArrayField(TEXT("faceMaterials"))[1]->AsObject()->GetStringField(TEXT("clientMaterial")), FString(TEXT("eye_left_v1")));
 
-	// The client reads it with the same parser it reads the catalog with.
+	// The client reads it with the same parser it reads the catalog with, once MantleBuiltinBundle::ReadEntry has given each
+	// reference its mantle-builtin: url.
+	for (const TCHAR* Field : { TEXT("mesh"), TEXT("faceMesh") })
+	{
+		const TSharedPtr<FJsonObject> Ref = Item->GetObjectField(Field);
+		FMantleContentHash Hash;
+		FMantleContentHash::Parse(Ref->GetStringField(TEXT("cookedHash")), Hash);
+		Ref->SetStringField(TEXT("url"), FString::Printf(TEXT("mantle-builtin:%s/assets/%s"), *Id, *Hash.ToHex()));
+	}
 	FString Wrapped;
 	FJsonSerializer::Serialize(Item.ToSharedRef(), TJsonWriterFactory<>::Create(&Wrapped));
 	TArray<FMantleCosmeticItem> Parsed;
