@@ -1,7 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleUnriggedAsIs.h"
 #include "MantleAvatarHeight.h"
-#include "MantleGarmentOutfit.h"
 #include "MantleMetaHumanConform.h"
 #include "MantleMetaHumanPose.h"
 #include "MantleRuntime.h"
@@ -449,9 +448,9 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 		}
 	});
 
-	// On the body: the conform fits the body to the model where it stands, so the model stays put (closing the gap would pull it
-	// toward its hair and clothing: RoninGirl rose 6 cm). Only a model whose feet or middle are MisplacedCm or more off the body's
-	// is moved: put on the body's feet and middle, then the gap closed.
+	// The conform fits the body to the model where it stands, so the model is weighted where it is: closing the gap to the body's
+	// skin pulled it toward its hair and clothing (RoninGirl rose 6 cm, the weightless Girl sank 5 cm), and its bounds are no
+	// guide either (RoninGirl's backpack moves their middle 11 cm back).
 	{
 		FBox3f ModelBox(ForceInit);
 		FBox3f BodyBox(ForceInit);
@@ -463,35 +462,46 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 		{
 			BodyBox += Position;
 		}
-		const FVector3f Start(BodyBox.GetCenter().X - ModelBox.GetCenter().X, BodyBox.GetCenter().Y - ModelBox.GetCenter().Y, BodyBox.Min.Z - ModelBox.Min.Z);
-		FVector3f Offset = FVector3f::ZeroVector;
-		double Gap = 0.0;
-		if (Start.GetAbsMax() >= MisplacedCm)
-		{
-			TArray<FVector3f> Moved = Points;
-			for (FVector3f& Point : Moved)
-			{
-				Point += Start;
-			}
-			Offset = Start + FMantleGarmentOutfit::AlignTranslation(Moved, Skin.Positions, Gap);
-		}
-		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG align: model %s, body %s; feet and middle %s off the body's; %s"), *ModelBox.ToString(),
-			*BodyBox.ToString(), *Start.ToString(),
-			Offset.IsZero() ? TEXT("left where it stands") : *FString::Printf(TEXT("moved by %s (gap %.2f cm)"), *Offset.ToString(), Gap));
-		OutResult.Offset = Offset;
-		OutResult.AlignGapCm = Gap;
-		for (FVector3f& Point : Points)
-		{
-			Point += Offset;
-		}
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG bounds: model %s, body %s"), *ModelBox.ToString(), *BodyBox.ToString());
 	}
 
 	if (!TransferWeights(Points, Skin, HeadBoneIndex, OutResult.HeadCutZ, OutResult.Weights, OutError))
 	{
 		return false;
 	}
-	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG %s: offset %s (gap %.2f cm), head cut at %.2f cm; %s"), *Posed.GetName(), *OutResult.Offset.ToString(),
-		OutResult.AlignGapCm, OutResult.HeadCutZ, *OutResult.Weights.ToString());
+
+	// On the floor: the game stands an avatar's root on the floor and plays it as tall as its top (the export's standing height), so
+	// the model's lowest point goes to Z 0, its skeleton with it (the bones under the root move as the skin does, the binding stays).
+	FReferenceSkeleton Rest = Reference;
+	{
+		float FloorZ = TNumericLimits<float>::Max();
+		for (const FVector3f& Point : Points)
+		{
+			FloorZ = FMath::Min(FloorZ, Point.Z);
+		}
+		OutResult.FloorShiftCm = FMath::Abs(FloorZ) > FloorToleranceCm ? -FloorZ : 0.0;
+		if (OutResult.FloorShiftCm != 0.0)
+		{
+			for (FVector3f& Point : Points)
+			{
+				Point.Z += static_cast<float>(OutResult.FloorShiftCm);
+			}
+			const FTransform Root = FAnimationRuntime::GetComponentSpaceTransformRefPose(Reference, 0);
+			const FVector Shift = Root.InverseTransformVectorNoScale(FVector(0.0, 0.0, OutResult.FloorShiftCm));
+			FReferenceSkeletonModifier Modifier(Rest, nullptr);
+			for (int32 Bone = 1; Bone < Reference.GetRawBoneNum(); ++Bone)
+			{
+				if (Reference.GetRawParentIndex(Bone) == 0)
+				{
+					FTransform Local = Reference.GetRawRefBonePose()[Bone];
+					Local.AddToTranslation(Shift);
+					Modifier.UpdateRefPoseTransform(Bone, Local);
+				}
+			}
+		}
+	}
+	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG %s: head cut at %.2f cm; %s; feet put on the floor (moved %.2f cm up, the skeleton with them)"), *Posed.GetName(),
+		OutResult.HeadCutZ, *OutResult.Weights.ToString(), OutResult.FloorShiftCm);
 
 	// The slots: the posed model's own materials, by unique slot name (the build matches sections to slots by name).
 	const TArray<FStaticMaterial>& StaticMaterials = Posed.GetStaticMaterials();
@@ -526,12 +536,12 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 			FSkeletalMeshAttributes::FBoneNameAttributesRef BoneNames = Attributes.GetBoneNames();
 			FSkeletalMeshAttributes::FBoneParentIndexAttributesRef BoneParents = Attributes.GetBoneParentIndices();
 			FSkeletalMeshAttributes::FBonePoseAttributesRef BonePoses = Attributes.GetBonePoses();
-			for (int32 Bone = 0; Bone < Reference.GetRawBoneNum(); ++Bone)
+			for (int32 Bone = 0; Bone < Rest.GetRawBoneNum(); ++Bone)
 			{
 				const FBoneID Id = Attributes.CreateBone();
-				BoneNames.Set(Id, Reference.GetRawRefBoneInfo()[Bone].Name);
-				BoneParents.Set(Id, Reference.GetRawParentIndex(Bone));
-				BonePoses.Set(Id, Reference.GetRawRefBonePose()[Bone]);
+				BoneNames.Set(Id, Rest.GetRawRefBoneInfo()[Bone].Name);
+				BoneParents.Set(Id, Rest.GetRawParentIndex(Bone));
+				BonePoses.Set(Id, Rest.GetRawRefBonePose()[Bone]);
 			}
 		}
 		const TVertexAttributesRef<FVector3f> Positions = Attributes.GetVertexPositions();
@@ -623,7 +633,7 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 	}
 	OutResult.Created.Add(Mesh);
 	Mesh->PreEditChange(nullptr);
-	Mesh->SetRefSkeleton(Reference);
+	Mesh->SetRefSkeleton(Rest);
 	Mesh->GetRefBasesInvMatrix().Reset();
 	Mesh->CalculateInvRefMatrices();
 	Mesh->SetMaterials(Materials);

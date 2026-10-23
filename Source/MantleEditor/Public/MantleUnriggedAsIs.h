@@ -61,9 +61,8 @@ struct MANTLEEDITOR_API FMantleAutoRigResult
 	/** The model's geometry and textures, skinned to the conform's A-pose body skeleton. */
 	TWeakObjectPtr<USkeletalMesh> Mesh;
 
-	/** The translation that put the posed model on the conform's body (cm), and the mean gap after it. */
-	FVector3f Offset = FVector3f::ZeroVector;
-	double AlignGapCm = 0.0;
+	/** How far the model and its skeleton were moved up to put its lowest point on the floor (cm; negative is down). */
+	double FloorShiftCm = 0.0;
 
 	/** The head cut: the head bone's height in the A-pose (cm). */
 	double HeadCutZ = 0.0;
@@ -83,7 +82,8 @@ struct MANTLEEDITOR_API FMantleAutoRigResult
  * synthesis or Epic cloud; never a Convert output (FMantleAvatarConverter::IsConvertOutput).
  *
  * Limits: the conform needs a renderer (no -nullrhi) and a human-like face looking forward (+Y); the body skeleton has no jaw, so the
- * face does not animate; hair, capes and skirts follow the nearest body bone rigidly.
+ * face does not animate; hair, capes and skirts follow the nearest body bone rigidly; a model standing on tiptoe (made for heels) has
+ * its feet turned flat by the clips, so its heels smear and its ankles pinch.
  */
 class MANTLEEDITOR_API FMantleUnriggedAsIs
 {
@@ -94,8 +94,8 @@ public:
 	/** A point farther than this from the skin is counted (hair, a cape, a skirt's hem): it follows its nearest bone rigidly. */
 	static constexpr double FarCm = 5.0;
 
-	/** The posed model is moved onto the body only when its feet or middle are this far or more off the body's (cm). */
-	static constexpr double MisplacedCm = 10.0;
+	/** A model whose lowest point is within this of the floor (cm) is left at its height. */
+	static constexpr double FloorToleranceCm = 0.05;
 
 	/** The bone everything above the neck follows. */
 	static const FName HeadBone;
@@ -131,9 +131,10 @@ public:
 	static bool ReadSkin(const USkeletalMesh& Mesh, const FReferenceSkeleton& Target, FMantleAutoRigSkin& InOut, FString& OutError);
 
 	/**
-	 * The skinned mesh: Posed's geometry (its LOD 0 source, each slot its material), moved onto Body when it is not already on it
-	 * (FMantleGarmentOutfit::AlignTranslation), weighted from Body and Head (TransferWeights; the head cut at Body's head joint), as a
-	 * new skeletal mesh Folder/SK_<Name>_AsIs on Body's reference skeleton and skeleton. False with why (OutResult.Created lists what
+	 * The skinned mesh: Posed's geometry (its LOD 0 source, each slot its material) where it stands (the conform fitted Body to it
+	 * there), weighted from Body and Head (TransferWeights; the head cut at Body's head joint), its lowest point then put on the floor
+	 * with the skeleton (the root's children moved by as much), as a new skeletal mesh Folder/SK_<Name>_AsIs on that reference
+	 * skeleton and Body's skeleton. False with why (OutResult.Created lists what
 	 * was made).
 	 */
 	static bool MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Body, USkeletalMesh* Head, const FString& Folder, const FString& Name,
