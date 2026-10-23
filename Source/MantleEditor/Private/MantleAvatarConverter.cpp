@@ -528,6 +528,50 @@ bool FMantleAvatarConverter::MakeContextForPath(const FString& Path, const FMant
 	return false;
 }
 
+void FMantleAvatarConverter::AddKeptPieces(const FMantleAssemblyScan& Scan, TArray<FMantleConvertPart>& OutParts)
+{
+	// A one-piece outfit that names several slots uploads once per slot: say which in its name.
+	TMap<const USkeletalMesh*, int32> SlotsPerMesh;
+	for (const FMantleAssemblyMesh& Garment : Scan.Garments)
+	{
+		SlotsPerMesh.FindOrAdd(Garment.Mesh.Get())++;
+	}
+	for (const FMantleAssemblyMesh& Garment : Scan.Garments)
+	{
+		USkeletalMesh* Mesh = Garment.Mesh.Get();
+		if (!Mesh)
+		{
+			continue;
+		}
+		FMantleConvertPart& Part = OutParts.AddDefaulted_GetRef();
+		Part.Slot = Garment.Slot;
+		Part.Mesh = Mesh;
+		Part.Original = Mesh;
+		Part.SkeletonId = TEXT("metahuman");
+		Part.Name = FMantleAvatarAssemblyFixer::DisplayName(Mesh->GetName());
+		if (SlotsPerMesh.FindRef(Mesh) > 1)
+		{
+			Part.Name += TEXT(" ") + Garment.Slot;
+		}
+		// A cloth-simulated piece waits for the creator (the Assembly fixer offers it, off).
+		Part.ClothAsset = Garment.ClothAsset;
+		Part.bIncluded = Garment.ClothAsset.IsEmpty();
+	}
+	for (const FMantleAssemblyMesh& Hair : Scan.Hair)
+	{
+		USkeletalMesh* Mesh = Hair.Mesh.Get();
+		if (!Mesh)
+		{
+			continue;
+		}
+		FMantleConvertPart& Part = OutParts.AddDefaulted_GetRef();
+		Part.Slot = Hair.Slot;
+		Part.Mesh = Mesh;
+		Part.Original = Mesh;
+		Part.Name = FMantleAvatarAssemblyFixer::DisplayName(Mesh->GetName());
+	}
+}
+
 bool FMantleAvatarConverter::MakeAssemblyContext(const FMantleAssemblyScan& Scan, UObject* Source, const FMantleConvertOptions& Options,
 	FMantleConvertContext& OutContext, FString& OutError)
 {
@@ -550,7 +594,7 @@ bool FMantleAvatarConverter::MakeAssemblyContext(const FMantleAssemblyScan& Scan
 
 	// An assembled MetaHuman (meshes, no MetaHuman Creator character) on the Convert route: MHSource makes a character from
 	// its face and body and builds it, as it builds a character source. One avatar part with no mesh until the build hands it on;
-	// its clothing and hair are not carried through the rebuild.
+	// chunk 6: its clothing and hair stay as they are (Kept), listed to publish after Convert.
 	if (OutContext.Route == EMantleAvatarRoute::Convert)
 	{
 		USkeletalMesh* Face = Scan.Face.Get();
@@ -570,21 +614,20 @@ bool FMantleAvatarConverter::MakeAssemblyContext(const FMantleAssemblyScan& Scan
 			FMantleConvertPart& ToBuild = OutContext.Parts.AddDefaulted_GetRef();
 			ToBuild.Slot = AvatarSlot;
 			ToBuild.Name = Scan.Name;
-			TArray<FString> Others;
-			for (const TArray<FMantleAssemblyMesh>* List : { &Scan.Garments, &Scan.Hair })
+			AddKeptPieces(Scan, OutContext.Kept);
+			TArray<FString> KeptNames;
+			for (const FMantleConvertPart& Kept : OutContext.Kept)
 			{
-				for (const FMantleAssemblyMesh& Entry : *List)
-				{
-					if (const USkeletalMesh* Mesh = Entry.Mesh.Get())
-					{
-						Others.AddUnique(Mesh->GetName());
-					}
-				}
+				KeptNames.Add(Kept.Name);
 			}
-			Others.Append(Scan.LeftOut);
-			if (Others.Num() > 0)
+			if (KeptNames.Num() > 0)
 			{
-				OutContext.Notes.Add(FString::Printf(TEXT("%s is rebuilt from its face and body; not carried through: %s"), *Scan.Name, *FString::Join(Others, TEXT(", "))));
+				OutContext.Notes.Add(FString::Printf(TEXT("%s is rebuilt from its face and body; its clothing and hair stay as they are, listed to publish after Convert: %s"),
+					*Scan.Name, *FString::Join(KeptNames, TEXT(", "))));
+			}
+			if (Scan.LeftOut.Num() > 0)
+			{
+				OutContext.Notes.Add(FString::Printf(TEXT("%s is rebuilt from its face and body; not carried through: %s"), *Scan.Name, *FString::Join(Scan.LeftOut, TEXT(", "))));
 			}
 			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT assembly=%s body=%s face=%s built as a MetaHuman Creator character, output=%s"), *Scan.Folder,
 				*Body->GetPathName(), *Face->GetPathName(), *OutContext.OutputFolder);
@@ -598,47 +641,7 @@ bool FMantleAvatarConverter::MakeAssemblyContext(const FMantleAssemblyScan& Scan
 	Avatar.Original = Body;
 	Avatar.SkeletonId = TEXT("metahuman");
 	Avatar.Name = Scan.Name;
-
-	// A one-piece outfit that names several slots uploads once per slot: say which in its name.
-	TMap<const USkeletalMesh*, int32> SlotsPerMesh;
-	for (const FMantleAssemblyMesh& Garment : Scan.Garments)
-	{
-		SlotsPerMesh.FindOrAdd(Garment.Mesh.Get())++;
-	}
-	for (const FMantleAssemblyMesh& Garment : Scan.Garments)
-	{
-		USkeletalMesh* Mesh = Garment.Mesh.Get();
-		if (!Mesh)
-		{
-			continue;
-		}
-		FMantleConvertPart& Part = OutContext.Parts.AddDefaulted_GetRef();
-		Part.Slot = Garment.Slot;
-		Part.Mesh = Mesh;
-		Part.Original = Mesh;
-		Part.SkeletonId = TEXT("metahuman");
-		Part.Name = FMantleAvatarAssemblyFixer::DisplayName(Mesh->GetName());
-		if (SlotsPerMesh.FindRef(Mesh) > 1)
-		{
-			Part.Name += TEXT(" ") + Garment.Slot;
-		}
-		// A cloth-simulated piece waits for the creator (the Assembly fixer offers it, off).
-		Part.ClothAsset = Garment.ClothAsset;
-		Part.bIncluded = Garment.ClothAsset.IsEmpty();
-	}
-	for (const FMantleAssemblyMesh& Hair : Scan.Hair)
-	{
-		USkeletalMesh* Mesh = Hair.Mesh.Get();
-		if (!Mesh)
-		{
-			continue;
-		}
-		FMantleConvertPart& Part = OutContext.Parts.AddDefaulted_GetRef();
-		Part.Slot = Hair.Slot;
-		Part.Mesh = Mesh;
-		Part.Original = Mesh;
-		Part.Name = FMantleAvatarAssemblyFixer::DisplayName(Mesh->GetName());
-	}
+	AddKeptPieces(Scan, OutContext.Parts);
 	for (const FString& Line : Scan.LeftOut)
 	{
 		OutContext.Notes.Add(FString::Printf(TEXT("Left out: %s"), *Line));
@@ -1110,29 +1113,35 @@ TSharedRef<FJsonObject> FMantleAvatarConverter::ToJson(const FMantleConvertConte
 	Object->SetStringField(TEXT("outputFolder"), Context.OutputFolder);
 	Object->SetStringField(TEXT("route"), LexToString(Context.Route));
 
-	TArray<TSharedPtr<FJsonValue>> Parts;
-	for (int32 Index = 0; Index < Context.Parts.Num(); ++Index)
+	auto PartsJson = [&Contract](TConstArrayView<FMantleConvertPart> List)
 	{
-		const FMantleConvertPart& Part = Context.Parts[Index];
-		EMantleCosmeticClass Class = EMantleCosmeticClass::Garment;
-		const bool bKnown = ClassOfSlot(Part.Slot, Contract, Class);
-		TSharedRef<FJsonObject> PartObject = MakeShared<FJsonObject>();
-		PartObject->SetNumberField(TEXT("index"), Index);
-		PartObject->SetStringField(TEXT("slot"), Part.Slot);
-		PartObject->SetStringField(TEXT("class"), bKnown ? LexToString(Class) : TEXT(""));
-		PartObject->SetStringField(TEXT("name"), Part.Name);
-		PartObject->SetStringField(TEXT("mesh"), ConverterAssetPath(Part.Mesh.Get()));
-		PartObject->SetStringField(TEXT("original"), ConverterAssetPath(Part.Original.Get()));
-		PartObject->SetStringField(TEXT("face"), ConverterAssetPath(Part.Face.Get()));
-		PartObject->SetNumberField(TEXT("section"), Part.Section);
-		PartObject->SetStringField(TEXT("skeleton"), Part.SkeletonId);
-		PartObject->SetStringField(TEXT("authoringBody"), ConverterAssetPath(Part.AuthoringBody.Get()));
-		PartObject->SetStringField(TEXT("authoringFace"), ConverterAssetPath(Part.AuthoringFace.Get()));
-		PartObject->SetBoolField(TEXT("included"), Part.bIncluded);
-		PartObject->SetStringField(TEXT("clothAsset"), Part.ClothAsset);
-		Parts.Add(MakeShared<FJsonValueObject>(PartObject));
-	}
-	Object->SetArrayField(TEXT("parts"), Parts);
+		TArray<TSharedPtr<FJsonValue>> Parts;
+		for (int32 Index = 0; Index < List.Num(); ++Index)
+		{
+			const FMantleConvertPart& Part = List[Index];
+			EMantleCosmeticClass Class = EMantleCosmeticClass::Garment;
+			const bool bKnown = ClassOfSlot(Part.Slot, Contract, Class);
+			TSharedRef<FJsonObject> PartObject = MakeShared<FJsonObject>();
+			PartObject->SetNumberField(TEXT("index"), Index);
+			PartObject->SetStringField(TEXT("slot"), Part.Slot);
+			PartObject->SetStringField(TEXT("class"), bKnown ? LexToString(Class) : TEXT(""));
+			PartObject->SetStringField(TEXT("name"), Part.Name);
+			PartObject->SetStringField(TEXT("mesh"), ConverterAssetPath(Part.Mesh.Get()));
+			PartObject->SetStringField(TEXT("original"), ConverterAssetPath(Part.Original.Get()));
+			PartObject->SetStringField(TEXT("face"), ConverterAssetPath(Part.Face.Get()));
+			PartObject->SetNumberField(TEXT("section"), Part.Section);
+			PartObject->SetStringField(TEXT("skeleton"), Part.SkeletonId);
+			PartObject->SetStringField(TEXT("authoringBody"), ConverterAssetPath(Part.AuthoringBody.Get()));
+			PartObject->SetStringField(TEXT("authoringFace"), ConverterAssetPath(Part.AuthoringFace.Get()));
+			PartObject->SetBoolField(TEXT("included"), Part.bIncluded);
+			PartObject->SetStringField(TEXT("clothAsset"), Part.ClothAsset);
+			Parts.Add(MakeShared<FJsonValueObject>(PartObject));
+		}
+		return Parts;
+	};
+	Object->SetArrayField(TEXT("parts"), PartsJson(Context.Parts));
+	// Chunk 6: a MetaHuman Blueprint's clothing and hair, kept as they are on Convert (to publish after it, as parts are).
+	Object->SetArrayField(TEXT("kept"), PartsJson(Context.Kept));
 
 	TArray<TSharedPtr<FJsonValue>> FixArray;
 	const TArray<FString> Keys = FixKeys(Fixes);

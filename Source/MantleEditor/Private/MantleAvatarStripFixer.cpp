@@ -868,7 +868,7 @@ void FMantleAvatarStripFixer::Analyze(const FMantleConvertContext& Context, TArr
 			else
 			{
 				Fix.Problem = FString::Printf(TEXT("'%s' (%s triangles) isn't bare skin"), *Slot.SlotName.ToString(), *StripNumber(Slot.Triangles));
-				Fix.Action = TEXT("Removes it from the copy that becomes the MetaHuman (Epic gives it its own eyes, teeth and skin). Untick it only if it is bare skin. Clothing taken off here can still be an item: the clothing Convert finds (separate pieces beside the body, or the clothing in its own sections) is listed under Use, in the clothing rows.");
+				Fix.Action = TEXT("Removes it from the copy that becomes the MetaHuman (Epic gives it its own eyes, teeth and skin). Untick it only if it is bare skin. Clothing taken off here can still be an item: the clothing Convert finds (separate pieces beside the body, or the clothing in its own sections) is listed after Convert, under What to publish.");
 			}
 		}
 		if (Plan.bOneSlot)
