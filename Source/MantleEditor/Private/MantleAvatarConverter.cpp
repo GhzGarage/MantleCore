@@ -82,7 +82,7 @@ namespace MantleAvatarConverterPrivate
 	{
 		const FString ObjectPath = ConverterObjectPath(Path.TrimStartAndEnd());
 		const FString PackageName = FPackageName::ObjectPathToPackageName(ObjectPath);
-		if (PackageName.IsEmpty() || !FPackageName::IsValidLongPackageName(PackageName))
+		if (PackageName.IsEmpty() || !FPackageName::IsValidLongPackageName(PackageName, /*bIncludeReadOnlyRoots*/ true))
 		{
 			return nullptr;
 		}

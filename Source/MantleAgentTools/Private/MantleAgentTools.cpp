@@ -752,7 +752,7 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 	}
 	const FString PackageName = FPackageName::ObjectPathToPackageName(ObjectPath);
 	UObject* Asset = nullptr;
-	if (!PackageName.IsEmpty() && FPackageName::IsValidLongPackageName(PackageName))
+	if (!PackageName.IsEmpty() && FPackageName::IsValidLongPackageName(PackageName, /*bIncludeReadOnlyRoots*/ true))
 	{
 		// An asset already in the editor counts, saved or not, as the panel's picker lists it.
 		Asset = FindObject<UObject>(nullptr, *ObjectPath);
