@@ -3787,8 +3787,12 @@ FReply SMantleCosmeticPanel::OnAnalyzeConvert()
 	ConvertReview.Reset();
 	USkeletalMesh* Picked = Cast<USkeletalMesh>(Selection);
 	const bool bAvatar = Selection != Draft.Source.Get() || Draft.Slot.IsEmpty() || Draft.Slot == TEXT("avatar");
-	if (Picked && bAvatar && FMantleConvertSection::EffectiveRoute(ConvertRoute) == EMantleAvatarRoute::Convert && Picked->GetRefSkeleton().GetRawBoneNum() > 1
-		&& FMantleAvatarAssemblyFixer::AssemblyFolderOf(Picked).IsEmpty())
+	// Not a MetaHuman Creator assembly (its folder scans as one, as MakeContext checks).
+	const FString AssemblyFolder = Picked ? FMantleAvatarAssemblyFixer::AssemblyFolderOf(Picked) : FString();
+	FMantleAssemblyScan AssemblyScan;
+	FString ScanError;
+	const bool bAssembly = !AssemblyFolder.IsEmpty() && FMantleAvatarAssemblyFixer::Scan(AssemblyFolder, AssemblyScan, ScanError);
+	if (Picked && bAvatar && FMantleConvertSection::EffectiveRoute(ConvertRoute) == EMantleAvatarRoute::Convert && Picked->GetRefSkeleton().GetRawBoneNum() > 1 && !bAssembly)
 	{
 		FScopedSlowTask Progress(1.0f, LOCTEXT("ConvertScanning", "Looking at what's in the pack..."));
 		Progress.MakeDialogDelayed(0.5f);

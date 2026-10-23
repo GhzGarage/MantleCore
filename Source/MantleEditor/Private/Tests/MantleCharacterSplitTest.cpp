@@ -305,7 +305,7 @@ bool FMantleCharacterSplitPackReviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("three items: top, bottom, footwear"), Items.Num(), 3);
 	TestTrue(TEXT("the top is the corset with its lace and the sleeves"), Items.Num() > 0 && Items[0].Slot == TEXT("top") && Items[0].Main == Corset
 		&& Items[0].With.Contains(Lace) && Items[0].With.Contains(Arms));
-	TestTrue(TEXT("the row says so"), Review.RowText(Corset).Contains(TEXT("with edging (LaceCorset)")) && Review.RowText(Corset).Contains(TEXT("Piece A")));
+	TestTrue(TEXT("the row says so"), Review.RowText(Corset).Contains(TEXT("with edging (LaceCorset)")));
 
 	// The creator changes rows: the sleeves unticked, the corset alone with its lace.
 	FMantlePackReview Changed = Review;

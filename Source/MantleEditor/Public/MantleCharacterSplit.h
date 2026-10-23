@@ -298,9 +298,13 @@ public:
 	/** Two pieces of one slot are alternatives (two tops), not parts of one item, when both hold this share of one region. */
 	static constexpr float OverlapShare = 0.25f;
 
-	/** A piece is on the picked mesh when OnPickedShare of its points are within OnPickedCm of its surface. */
-	static constexpr float OnPickedCm = 0.5f;
-	static constexpr float OnPickedShare = 0.5f;
+	/**
+	 * A piece is on the picked mesh when OnPickedShare of its points are within OnPickedCm of its surface: the dressed mesh is its
+	 * pieces merged, so they lie on it exactly. Measured on Vampire and Girl: every piece of the outfit 100% within 0.5 cm, the
+	 * other outfits' 50 to 91% (they hug the skin under it), so the rule is tight.
+	 */
+	static constexpr float OnPickedCm = 0.1f;
+	static constexpr float OnPickedShare = 0.95f;
 
 	/**
 	 * Pure (tested): the pack review of Meshes, Picked the one the creator picked. Rules, in this order:
