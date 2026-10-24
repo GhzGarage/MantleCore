@@ -187,6 +187,13 @@ public:
 	 * garment per slot its clothing names, and its hair, each cloth-simulated piece left out (bIncluded false) until
 	 * the creator includes it. Source is what the creator picked (may be null for a folder).
 	 */
+	/**
+	 * An assembly's clothing (one part per slot its meshes name, skeleton metahuman, a cloth-simulated piece not included)
+	 * and hair, as parts added to OutParts: the As-is route's parts, and on Convert the pieces kept as they are
+	 * (FMantleConvertContext::Kept, chunk 6). Pure on the scan's meshes (tested).
+	 */
+	static void AddKeptPieces(const FMantleAssemblyScan& Scan, TArray<FMantleConvertPart>& OutParts);
+
 	static bool MakeAssemblyContext(const FMantleAssemblyScan& Scan, UObject* Source, const FMantleConvertOptions& Options,
 		FMantleConvertContext& OutContext, FString& OutError);
 

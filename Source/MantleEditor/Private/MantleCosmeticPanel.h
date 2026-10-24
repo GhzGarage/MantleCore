@@ -138,6 +138,56 @@ struct FMantleConvertSection
 };
 
 /**
+ * Chunk 6, "What to publish": one row of the one list after Convert, with a tick and a name the creator can change. Only
+ * ticked rows are published ("Publish the ticked items" opens them one after another; an unticked row is never opened).
+ */
+struct FMantlePublishRow
+{
+	enum class EKind : uint8
+	{
+		/** A converted part (FMantleConvertContext::Parts): the body, or on As-is a Blueprint's clothing and hair. */
+		Part,
+		/** A MetaHuman Blueprint's clothing or hair kept as it is on Convert (FMantleConvertContext::Kept). */
+		Kept,
+		/** Hair ticked in the pack's rows (FMantlePackReview), uploaded under Hair as it is. */
+		PackHair,
+		/** A piece of clothing (FMantleConvertContext::Garments) that becomes a MetaHuman Outfit on the MetaHuman Convert made. */
+		Garment,
+	};
+	EKind Kind = EKind::Part;
+	/** Index into Parts, Kept or Garments; for PackHair, the pack review's piece. */
+	int32 Index = INDEX_NONE;
+	FString Slot;
+	/** The item's name as it uploads; the creator can change it. */
+	FString Name;
+	bool bTicked = true;
+	/** Why it can't be published from here, in plain words; empty when it can. A row with a why is greyed and never ticked. */
+	FString Why;
+	/** Uploaded from this list in this editor session. */
+	bool bUploaded = false;
+};
+
+/** Chunk 6: the "What to publish" list, apart from Slate. */
+struct FMantlePublishList
+{
+	/**
+	 * The rows after Convert: each converted part (the body first; a part left out unticked), the Blueprint's pieces kept as
+	 * they are, the hair ticked in the pack's rows (HairSlots: the contract's hair slots), then the clothing (one row per
+	 * item, its trims in it; a piece that can't be an Outfit greyed with why). Pure (tested).
+	 */
+	static TArray<FMantlePublishRow> Make(const FMantleConvertContext& Context, const FMantlePackReview* Review, TConstArrayView<FString> HairSlots);
+
+	/** The next row after After (INDEX_NONE: from the top) that is ticked, not greyed and not uploaded yet; INDEX_NONE when none. Pure (tested). */
+	static int32 Next(TConstArrayView<FMantlePublishRow> Rows, int32 After);
+
+	/** The clothing rows after the Outfits were made: a piece whose Outfit failed (a high heel) is greyed with why and unticked. Pure (tested). */
+	static void Sync(const FMantleConvertContext& Context, TArray<FMantlePublishRow>& Rows);
+
+	/** The row's heading word: "Body", "Top", "Bottom", "Footwear", "Hair", "Eyebrows" (the slot, capitalised; the avatar slot is "Body"). Pure. */
+	static FString SlotWord(const FString& Slot);
+};
+
+/**
  * Tools > Mantle > Cosmetics... (A2.4 #283): publish hair, clothing, accessories, avatars and
  * emotes from the editor with one button. The creator picks what it is, the asset,
  * and a name; the plugin finds the body it was authored on, checks everything against Mantle's
@@ -353,6 +403,31 @@ private:
 
 	/** #610: the draft for converted part PartIndex: its class, slot, mesh, face, section, authoring body and name, then its check's issues. */
 	void LoadConvertedPart(int32 PartIndex);
+
+	/** The draft for Part (a converted part, a kept piece, the pack's hair) under Name; PartIndex: the part whose check's issues to show, or INDEX_NONE. */
+	void LoadPart(const FMantleConvertPart& Part, const FString& Name, int32 PartIndex);
+
+	/**
+	 * Chunk 6, "What to publish": the one list after Convert (FMantlePublishList::Make), each row with its tick, its name, a
+	 * thumbnail from the catalog thumbnail capture (FMantleCosmeticThumbnail; none without a renderer) and Open. Made once
+	 * per Convert; ticks and names stay while the rows are redrawn.
+	 */
+	void MakePublishRows();
+	void AddPublishRows();
+
+	/** Opens row Row as the panel's draft (Open, or the walk), under its name. */
+	void OpenPublishRow(int32 Row);
+
+	/** The row's thumbnail (FMantleCosmeticThumbnail::Capture), or null when it can't be drawn here. */
+	TSharedPtr<FSlateDynamicImageBrush> RenderPublishThumb(const FMantlePublishRow& Row) const;
+
+	TArray<FMantlePublishRow> PublishRows;
+	TArray<TSharedPtr<FSlateDynamicImageBrush>> PublishThumbs;
+	/** The row opened last, and the asset it put in the draft (an upload of that asset marks the row uploaded). */
+	int32 PublishOpen = INDEX_NONE;
+	TWeakObjectPtr<UObject> PublishOpenSource;
+	/** "Publish the ticked items" is walking the list: after each upload of the open row, the next ticked row opens. */
+	bool bPublishWalk = false;
 
 	/**
 	 * A third-party avatar's separate clothing piece (FMantleConvertContext::Garments) as the panel's draft: a MetaHuman

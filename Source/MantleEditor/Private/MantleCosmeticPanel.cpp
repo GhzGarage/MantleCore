@@ -2314,6 +2314,28 @@ EActiveTimerReturnType SMantleCosmeticPanel::TickUpload(double InCurrentTime, fl
 	{
 		UE_LOG(LogMantle, Log, TEXT("MANTLE_COSMETIC_UPLOAD %s item=%s status=%s"),
 			Session->Succeeded() ? TEXT("DONE") : TEXT("STOPPED"), *Session->GetItemId(), *Session->GetItemStatus());
+		// Chunk 6: the publish list's open row is uploaded (while the draft is still what it opened); walking, the next ticked row opens.
+		if (PublishRows.IsValidIndex(PublishOpen) && PublishOpenSource.IsValid() && Draft.Source == PublishOpenSource)
+		{
+			if (Session->Succeeded())
+			{
+				PublishRows[PublishOpen].bUploaded = true;
+				const int32 Next = bPublishWalk ? FMantlePublishList::Next(PublishRows, PublishOpen) : INDEX_NONE;
+				if (Next != INDEX_NONE)
+				{
+					OpenPublishRow(Next);
+				}
+				else
+				{
+					bPublishWalk = false;
+					RefreshConvertRows();
+				}
+			}
+			else
+			{
+				bPublishWalk = false;
+			}
+		}
 		return EActiveTimerReturnType::Stop;
 	}
 	return EActiveTimerReturnType::Continue;
@@ -3859,6 +3881,105 @@ EMantleAvatarRoute FMantleConvertSection::DoorRoute(const EMantleAvatarRoute Pic
 	return Route == EMantleAvatarRoute::AsIs && !AsIsGreyedWhy(Sight).IsEmpty() ? EMantleAvatarRoute::Convert : Route;
 }
 
+TArray<FMantlePublishRow> FMantlePublishList::Make(const FMantleConvertContext& Context, const FMantlePackReview* Review, TConstArrayView<FString> HairSlots)
+{
+	TArray<FMantlePublishRow> Rows;
+	auto AddPart = [&Rows](const FMantlePublishRow::EKind Kind, const int32 Index, const FMantleConvertPart& Part)
+	{
+		FMantlePublishRow& Row = Rows.AddDefaulted_GetRef();
+		Row.Kind = Kind;
+		Row.Index = Index;
+		Row.Slot = Part.Slot;
+		Row.Name = Part.Name;
+		Row.bTicked = Part.bIncluded;
+		if (!Part.Mesh.IsValid())
+		{
+			Row.Why = TEXT("Convert didn't make it");
+			Row.bTicked = false;
+		}
+	};
+	for (int32 Index = 0; Index < Context.Parts.Num(); ++Index)
+	{
+		AddPart(FMantlePublishRow::EKind::Part, Index, Context.Parts[Index]);
+	}
+	for (int32 Index = 0; Index < Context.Kept.Num(); ++Index)
+	{
+		AddPart(FMantlePublishRow::EKind::Kept, Index, Context.Kept[Index]);
+	}
+	// The pack's hair as its rows left it: a ticked hair row of its own (one folded into another piece goes with that one).
+	for (int32 Piece = 0; Review && Piece < Review->Pieces.Num(); ++Piece)
+	{
+		const FMantlePackPiece& Each = Review->Pieces[Piece];
+		if (!Each.bTicked || Each.PartOf != INDEX_NONE || !HairSlots.Contains(Each.Slot))
+		{
+			continue;
+		}
+		FMantlePublishRow& Row = Rows.AddDefaulted_GetRef();
+		Row.Kind = FMantlePublishRow::EKind::PackHair;
+		Row.Index = Piece;
+		Row.Slot = Each.Slot;
+		Row.Name = Each.Label;
+		if (!Review->Meshes.IsValidIndex(Each.MeshIndex) || !Review->Meshes[Each.MeshIndex].IsValid())
+		{
+			Row.Why = TEXT("its mesh didn't load");
+			Row.bTicked = false;
+		}
+	}
+	for (int32 Index = 0; Index < Context.Garments.Num(); ++Index)
+	{
+		const FMantleConvertGarment& Garment = Context.Garments[Index];
+		FMantlePublishRow& Row = Rows.AddDefaulted_GetRef();
+		Row.Kind = FMantlePublishRow::EKind::Garment;
+		Row.Index = Index;
+		Row.Slot = Garment.Slot;
+		Row.Name = Garment.Name;
+		Row.bTicked = true;
+	}
+	Sync(Context, Rows);
+	return Rows;
+}
+
+void FMantlePublishList::Sync(const FMantleConvertContext& Context, TArray<FMantlePublishRow>& Rows)
+{
+	for (FMantlePublishRow& Row : Rows)
+	{
+		const FMantleConvertGarment* Garment = Row.Kind == FMantlePublishRow::EKind::Garment && Context.Garments.IsValidIndex(Row.Index) ? &Context.Garments[Row.Index] : nullptr;
+		if (!Garment || !Row.Why.IsEmpty())
+		{
+			continue;
+		}
+		// A piece that can't be an Outfit, or whose Outfit couldn't be made (high heels are found then), is greyed and unticked.
+		Row.Why = !Garment->Why.IsEmpty() ? Garment->Why : Garment->Error.IsEmpty() ? FString() : FString::Printf(TEXT("Couldn't make the Outfit: %s"), *Garment->Error);
+		Row.bTicked &= Row.Why.IsEmpty();
+	}
+}
+
+int32 FMantlePublishList::Next(TConstArrayView<FMantlePublishRow> Rows, const int32 After)
+{
+	for (int32 Index = FMath::Max(After + 1, 0); Index < Rows.Num(); ++Index)
+	{
+		if (Rows[Index].bTicked && Rows[Index].Why.IsEmpty() && !Rows[Index].bUploaded)
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
+}
+
+FString FMantlePublishList::SlotWord(const FString& Slot)
+{
+	if (Slot.Equals(TEXT("avatar"), ESearchCase::CaseSensitive))
+	{
+		return TEXT("Body");
+	}
+	FString Word = Slot.Replace(TEXT("_"), TEXT(" "));
+	if (!Word.IsEmpty())
+	{
+		Word[0] = FChar::ToUpper(Word[0]);
+	}
+	return Word;
+}
+
 UObject* SMantleCosmeticPanel::GetConvertSelection() const
 {
 	return ConvertSource.IsValid() ? ConvertSource.Get() : Draft.Source.Get();
@@ -3887,6 +4008,9 @@ void SMantleCosmeticPanel::ResetConvert()
 	ConvertResult.Reset();
 	ConvertStatus.Reset();
 	bConvertFailed = false;
+	PublishRows.Reset();
+	PublishThumbs.Reset();
+	bPublishWalk = false;
 	RefreshConvertRows();
 }
 
@@ -4062,6 +4186,9 @@ void SMantleCosmeticPanel::AnalyzeConvertBody()
 	}
 	ConvertResult.Reset();
 	ConvertFixes.Reset();
+	PublishRows.Reset();
+	PublishThumbs.Reset();
+	bPublishWalk = false;
 	ConvertContext = MakeShared<FMantleConvertContext>();
 	FString Error;
 	{
@@ -4143,8 +4270,9 @@ FReply SMantleCosmeticPanel::OnRunConvert()
 		Ready += Check.bCanUpload ? 1 : 0;
 	}
 	bConvertFailed = ConvertResult->Failed.Num() > 0;
-	ConvertStatus = FString::Printf(TEXT("Converted into %s: %d fix(es) applied, %d failed. %d of %d part(s) are ready to upload; choose Use on one to preview and upload it."),
+	ConvertStatus = FString::Printf(TEXT("Converted into %s: %d fix(es) applied, %d failed. %d of %d part(s) are ready to upload. Below is what to publish: untick what you don't want, rename anything, then publish the ticked items."),
 		*ConvertContext->OutputFolder, ConvertResult->Applied.Num(), ConvertResult->Failed.Num(), Ready, ConvertResult->Checks.Num());
+	MakePublishRows();
 	RefreshConvertRows();
 	return FReply::Handled();
 }
@@ -4196,7 +4324,7 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 		}
 		if (Clothing.Num() > 0 && !ConvertReview.IsValid())
 		{
-			AddLine(FString::Printf(TEXT("Clothing: %s. After Convert, each piece gets a Use button that makes it a MetaHuman Outfit on this character's MetaHuman."),
+			AddLine(FString::Printf(TEXT("Clothing: %s. After Convert, each piece is listed to publish, as a MetaHuman Outfit on this character's MetaHuman."),
 				*FString::Join(Clothing, TEXT("; "))), FSlateColor::UseSubduedForeground());
 		}
 		AddBodyRows();
@@ -4294,116 +4422,25 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 	{
 		AddLine(Note, SeverityColour(EMantleCosmeticSeverity::Info));
 	}
-	for (const FMantleConvertPartCheck& Check : ConvertResult->Checks)
-	{
-		const int32 PartIndex = Check.PartIndex;
-		int32 Errors = 0;
-		for (const FMantleCosmeticIssue& Issue : Check.Issues)
-		{
-			Errors += Issue.Severity == EMantleCosmeticSeverity::Error ? 1 : 0;
-		}
-		const FString Heading = Check.bCanUpload
-			? FString::Printf(TEXT("%s: ready to upload."), *PartLabel(PartIndex))
-			: FString::Printf(TEXT("%s: %d problem(s) still stop the upload."), *PartLabel(PartIndex), Errors);
-		ConvertBox->AddSlot().AutoHeight().Padding(0, 6, 0, 2)
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-			[
-				SNew(STextBlock)
-				.AutoWrapText(true)
-				.Font(FAppStyle::GetFontStyle("NormalFontBold"))
-				.ColorAndOpacity(SeverityColour(Check.bCanUpload ? EMantleCosmeticSeverity::Info : EMantleCosmeticSeverity::Error))
-				.Text(FText::FromString(Heading))
-			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(8, 0, 0, 0)
-			[
-				SNew(SButton)
-				.IsEnabled_Lambda([this] { return !IsRunning(); })
-				.Text(LOCTEXT("ConvertUse", "Use"))
-				.ToolTipText(LOCTEXT("ConvertUseTooltip", "Fill the panel with this part (what it is, the slot, the converted mesh, its face, section and body) to preview and upload it."))
-				.OnClicked_Lambda([this, PartIndex]
-				{
-					LoadConvertedPart(PartIndex);
-					return FReply::Handled();
-				})
-			]
-		];
-		for (const FMantleCosmeticIssue& Issue : Check.Issues)
-		{
-			if (Issue.Severity == EMantleCosmeticSeverity::Error)
-			{
-				AddLine(Issue.ToString(), SeverityColour(Issue.Severity));
-			}
-		}
-	}
-	// A third-party avatar's separate clothing: each piece a MetaHuman Outfit on the MetaHuman Convert made of its body.
-	if (ConvertContext->Garments.Num() > 0)
-	{
-		const FString WhyNone = FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0);
-		const FString WhyNoneSection = FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0, /*bSectionPieces*/ true);
-		bool bAnySeparate = false;
-		for (const FMantleConvertGarment& Garment : ConvertContext->Garments)
-		{
-			bAnySeparate |= Garment.Sections.Num() == 0;
-		}
-		ConvertBox->AddSlot().AutoHeight().Padding(0, 10, 0, 2)
-		[
-			SNew(STextBlock)
-			.AutoWrapText(true)
-			.Font(FAppStyle::GetFontStyle("NormalFontBold"))
-			.Text(LOCTEXT("ConvertClothingHeading", "Clothing, as MetaHuman Outfits on this character's MetaHuman"))
-		];
-		if (!(bAnySeparate ? WhyNone : WhyNoneSection).IsEmpty())
-		{
-			AddLine(bAnySeparate ? WhyNone : WhyNoneSection, SeverityColour(EMantleCosmeticSeverity::Warning));
-		}
-		for (int32 GarmentIndex = 0; GarmentIndex < ConvertContext->Garments.Num(); ++GarmentIndex)
-		{
-			const FMantleConvertGarment& Garment = ConvertContext->Garments[GarmentIndex];
-			// A piece cut from the character's own mesh has no mesh of its own until the Outfits are made.
-			const bool bPiece = Garment.Sections.Num() > 0;
-			const bool bCan = (bPiece ? WhyNoneSection : WhyNone).IsEmpty() && Garment.Why.IsEmpty() && Garment.Error.IsEmpty() && (Garment.Mesh.IsValid() || (bPiece && Garment.SourceMesh.IsValid()));
-			FString SlotLabel = Garment.Slot;
-			if (!SlotLabel.IsEmpty())
-			{
-				SlotLabel[0] = FChar::ToUpper(SlotLabel[0]);
-			}
-			const FString Heading = SlotLabel.IsEmpty() ? Garment.Name
-				: FString::Printf(TEXT("%s: %s%s"), *SlotLabel, *Garment.Name, Garment.Outfit.IsEmpty() ? TEXT("") : TEXT(" (Outfit made)"));
-			ConvertBox->AddSlot().AutoHeight().Padding(0, 4, 0, 2)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.AutoWrapText(true)
-					.ColorAndOpacity(bCan ? FSlateColor::UseForeground() : FSlateColor::UseSubduedForeground())
-					.Text(FText::FromString(Heading))
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(8, 0, 0, 0)
-				[
-					SNew(SButton)
-					.IsEnabled_Lambda([this, bCan] { return bCan && !IsRunning(); })
-					.Text(LOCTEXT("ConvertGarmentUse", "Use"))
-					.ToolTipText(LOCTEXT("ConvertGarmentUseTooltip", "Make this piece a MetaHuman Outfit on the MetaHuman Convert made of this character's body, then fill the panel with it to preview and upload in sizes. The first Use makes every piece and takes a minute."))
-					.OnClicked_Lambda([this, GarmentIndex]
-					{
-						UseConvertGarment(GarmentIndex);
-						return FReply::Handled();
-					})
-				]
-			];
-			if (!Garment.Why.IsEmpty() || !Garment.Error.IsEmpty())
-			{
-				AddLine(Garment.Why.IsEmpty() ? FString::Printf(TEXT("Couldn't make the Outfit: %s"), *Garment.Error) : Garment.Why,
-					SeverityColour(Garment.Why.IsEmpty() ? EMantleCosmeticSeverity::Error : EMantleCosmeticSeverity::Info));
-			}
-		}
-	}
+	// Chunk 6: one "What to publish" list (the body, each piece of clothing, the hair), each row ticked, named and drawn.
+	AddPublishRows();
 	ConvertBox->AddSlot().AutoHeight().Padding(0, 8, 0, 0)
 	[
 		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+		[
+			SNew(SButton)
+			.ButtonStyle(&FAppStyle::Get(), "PrimaryButton")
+			.IsEnabled_Lambda([this] { return !IsRunning() && FMantlePublishList::Next(PublishRows, INDEX_NONE) != INDEX_NONE; })
+			.Text(LOCTEXT("PublishTicked", "Publish the ticked items"))
+			.ToolTipText(LOCTEXT("PublishTickedTooltip", "Opens the first ticked item in the panel. Check and upload it as usual; when its upload is done, the next ticked item opens. Unticked items are never uploaded."))
+			.OnClicked_Lambda([this]
+			{
+				bPublishWalk = true;
+				OpenPublishRow(FMantlePublishList::Next(PublishRows, INDEX_NONE));
+				return FReply::Handled();
+			})
+		]
 		+ SHorizontalBox::Slot().AutoWidth()
 		[
 			SNew(SButton)
@@ -4833,7 +4870,7 @@ void SMantleCosmeticPanel::AddPackReviewRows()
 	}
 	if (bNotMade)
 	{
-		Subdued(TEXT("Convert makes the body and the clothing (top, bottom, footwear). Accessories and hair aren't made by it yet: upload them under Accessory and Hair."), 0.0f);
+		Subdued(TEXT("Convert makes the body and the clothing (top, bottom, footwear); ticked hair is listed to publish after Convert, as it is. Accessories aren't made by it yet: upload them under Accessory."), 0.0f);
 	}
 }
 
@@ -4844,8 +4881,19 @@ void SMantleCosmeticPanel::LoadConvertedPart(const int32 PartIndex)
 	{
 		return;
 	}
+	LoadPart(ConvertContext->Parts[PartIndex], ConvertContext->Parts[PartIndex].Name, PartIndex);
+}
+
+void SMantleCosmeticPanel::LoadPart(const FMantleConvertPart& ConvertedPart, const FString& Name, const int32 PartIndex)
+{
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+	if (!Contract)
+	{
+		return;
+	}
 	// A copy: SetClass and SetSource below never touch the converter's state, but the part must outlive them unchanged.
-	const FMantleConvertPart Part = ConvertContext->Parts[PartIndex];
+	FMantleConvertPart Part = ConvertedPart;
+	Part.Name = Name;
 	EMantleCosmeticClass Class = EMantleCosmeticClass::Garment;
 	if (!FMantleAvatarConverter::ClassOfSlot(Part.Slot, *Contract, Class) || !Part.Mesh.IsValid())
 	{
@@ -4905,13 +4953,18 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 		// The character's own clothing sections are cut into meshes first (they have none until now).
 		FMantleGarmentOutfit::MakeSectionMeshes(*ConvertContext);
 		// Every piece that can be an Outfit and isn't yet, at once: they share one copy of the MetaHuman as their authored body.
+		// Chunk 6: a piece unticked in the publish list isn't made (ticking it later makes it then).
 		TArray<int32> Indices;
 		TArray<USkeletalMesh*> Meshes;
 		TArray<TArray<USkeletalMesh*>> Trims;
 		for (int32 Index = 0; Index < ConvertContext->Garments.Num(); ++Index)
 		{
 			const FMantleConvertGarment& Garment = ConvertContext->Garments[Index];
-			if (Garment.Why.IsEmpty() && Garment.Outfit.IsEmpty() && Garment.Error.IsEmpty() && Garment.Mesh.IsValid())
+			const bool bUnticked = PublishRows.ContainsByPredicate([Index](const FMantlePublishRow& Row)
+			{
+				return Row.Kind == FMantlePublishRow::EKind::Garment && Row.Index == Index && !Row.bTicked;
+			});
+			if (Garment.Why.IsEmpty() && Garment.Outfit.IsEmpty() && Garment.Error.IsEmpty() && Garment.Mesh.IsValid() && (!bUnticked || Index == GarmentIndex))
 			{
 				Indices.Add(Index);
 				Meshes.Add(Garment.Mesh.Get());
@@ -4951,6 +5004,7 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 				*Garment.Outfit, *Garment.Error);
 		}
 		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT garment outfits on %s: body gap %.2f cm, %s"), *Result.Character, Result.BodyGapCm, bMade ? TEXT("made") : *Refusal);
+		FMantlePublishList::Sync(*ConvertContext, PublishRows);
 	}
 	const FMantleConvertGarment Garment = ConvertContext->Garments[GarmentIndex];
 	UChaosOutfitAsset* Outfit = Garment.Outfit.IsEmpty() ? nullptr : LoadObject<UChaosOutfitAsset>(nullptr, *Garment.Outfit);
@@ -4980,6 +5034,328 @@ void SMantleCosmeticPanel::UseConvertGarment(const int32 GarmentIndex)
 	Package.Reset();
 	RefreshConvertRows();
 	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT use garment=%d %s slot=%s outfit=%s"), GarmentIndex, *Garment.Name, *Garment.Slot, *Garment.Outfit);
+}
+
+void SMantleCosmeticPanel::MakePublishRows()
+{
+	PublishRows.Reset();
+	PublishThumbs.Reset();
+	PublishOpen = INDEX_NONE;
+	PublishOpenSource.Reset();
+	bPublishWalk = false;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get();
+	if (!ConvertContext.IsValid() || !Contract)
+	{
+		return;
+	}
+	PublishRows = FMantlePublishList::Make(*ConvertContext, ConvertReview.Get(), Contract->HairSlots);
+	FScopedSlowTask Progress(static_cast<float>(PublishRows.Num()), LOCTEXT("PublishThumbs", "Drawing a thumbnail for each item..."));
+	Progress.MakeDialogDelayed(0.5f);
+	for (const FMantlePublishRow& Row : PublishRows)
+	{
+		Progress.EnterProgressFrame(1.0f);
+		PublishThumbs.Add(RenderPublishThumb(Row));
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT publish row %s: %s slot=%s %s%s thumbnail=%s"), *FMantlePublishList::SlotWord(Row.Slot), *Row.Name, *Row.Slot,
+			Row.bTicked ? TEXT("ticked") : TEXT("unticked"), Row.Why.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" (greyed: %s)"), *Row.Why),
+			PublishThumbs.Last().IsValid() ? TEXT("drawn") : TEXT("none"));
+	}
+}
+
+TSharedPtr<FSlateDynamicImageBrush> SMantleCosmeticPanel::RenderPublishThumb(const FMantlePublishRow& Row) const
+{
+	if (!ConvertContext.IsValid() || !FMantleCosmeticThumbnail::CanCapture())
+	{
+		return nullptr;
+	}
+	const FMantleConvertContext& Context = *ConvertContext;
+	// The pack's body the clothing and hair were made on (the converted part's source), else the converted body.
+	USkeletalMesh* PackBody = Context.Parts.IsValidIndex(0) ? (Context.Parts[0].Original.IsValid() ? Context.Parts[0].Original.Get() : Context.Parts[0].Mesh.Get()) : nullptr;
+	FMantleThumbnailSubject Subject;
+	switch (Row.Kind)
+	{
+	case FMantlePublishRow::EKind::Part:
+	case FMantlePublishRow::EKind::Kept:
+	{
+		const FMantleConvertPart* Part = Row.Kind == FMantlePublishRow::EKind::Part ? (Context.Parts.IsValidIndex(Row.Index) ? &Context.Parts[Row.Index] : nullptr)
+			: (Context.Kept.IsValidIndex(Row.Index) ? &Context.Kept[Row.Index] : nullptr);
+		if (!Part || !Part->Mesh.IsValid())
+		{
+			return nullptr;
+		}
+		if (Row.Slot.Equals(TEXT("avatar"), ESearchCase::CaseSensitive))
+		{
+			Subject = FMantleCosmeticThumbnail::AvatarSubject(Part->Mesh.Get(), Part->Face.Get());
+		}
+		else if (Row.Kind == FMantlePublishRow::EKind::Kept)
+		{
+			// On the Blueprint's own body and face, which it was made on.
+			Subject = FMantleCosmeticThumbnail::GarmentSubject(Part->Mesh.Get(), Context.AssemblyBodyToFit.Get(), Context.AssemblyFaceToFit.Get());
+		}
+		else
+		{
+			const FMantleConvertPart* Avatar = Context.Parts.IsValidIndex(0) ? &Context.Parts[0] : nullptr;
+			Subject = FMantleCosmeticThumbnail::GarmentSubject(Part->Mesh.Get(), Avatar ? Avatar->Mesh.Get() : nullptr, Avatar ? Avatar->Face.Get() : nullptr);
+		}
+		break;
+	}
+	case FMantlePublishRow::EKind::PackHair:
+	{
+		const int32 Mesh = ConvertReview.IsValid() && ConvertReview->Pieces.IsValidIndex(Row.Index) ? ConvertReview->Pieces[Row.Index].MeshIndex : INDEX_NONE;
+		USkeletalMesh* Hair = ConvertReview.IsValid() && ConvertReview->Meshes.IsValidIndex(Mesh) ? ConvertReview->Meshes[Mesh].Get() : nullptr;
+		if (!Hair)
+		{
+			return nullptr;
+		}
+		Subject = FMantleCosmeticThumbnail::GarmentSubject(Hair, PackBody, nullptr);
+		break;
+	}
+	case FMantlePublishRow::EKind::Garment:
+	{
+		const FMantleConvertGarment* Garment = Context.Garments.IsValidIndex(Row.Index) ? &Context.Garments[Row.Index] : nullptr;
+		if (!Garment)
+		{
+			return nullptr;
+		}
+		if (Garment->Mesh.IsValid())
+		{
+			// On the body it came with, its trims drawn with it (the item uploads as one).
+			Subject = FMantleCosmeticThumbnail::GarmentSubject(Garment->Mesh.Get(), PackBody, nullptr);
+			for (const TWeakObjectPtr<USkeletalMesh>& Trim : Garment->Trims)
+			{
+				if (Trim.IsValid())
+				{
+					Subject.SkeletalMeshes.Add(Trim.Get());
+				}
+			}
+		}
+		else if (Garment->SourceMesh.IsValid())
+		{
+			// A piece of the character's own mesh, before it is cut: only its sections.
+			Subject = FMantleCosmeticThumbnail::GarmentSubject(Garment->SourceMesh.Get(), nullptr, nullptr, &Garment->Sections);
+		}
+		break;
+	}
+	}
+	if (Subject.IsEmpty())
+	{
+		return nullptr;
+	}
+	constexpr int32 Size = 128;
+	TArray<FColor> Pixels;
+	FString Error;
+	if (!FMantleCosmeticThumbnail::Capture(Subject, Size, Pixels, Error))
+	{
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT publish row %s: no thumbnail (%s)"), *Row.Name, *Error);
+		return nullptr;
+	}
+	// FColor is BGRA in memory, the order the dynamic brush takes. A new name each time, so Slate never shows an old picture.
+	TArray<uint8> Bytes;
+	Bytes.Append(reinterpret_cast<const uint8*>(Pixels.GetData()), Pixels.Num() * sizeof(FColor));
+	static int32 Serial = 0;
+	return FSlateDynamicImageBrush::CreateWithImageData(*FString::Printf(TEXT("MantlePublishRow_%d"), ++Serial), FVector2f(Size, Size), Bytes);
+}
+
+void SMantleCosmeticPanel::AddPublishRows()
+{
+	using namespace MantleCosmeticPanelPrivate;
+	if (PublishRows.IsEmpty() || !ConvertContext.IsValid())
+	{
+		return;
+	}
+	ConvertBox->AddSlot().AutoHeight().Padding(0, 10, 0, 2)
+	[
+		SNew(STextBlock).Font(FAppStyle::GetFontStyle("NormalFontBold")).Text(LOCTEXT("PublishHeading", "What to publish"))
+	];
+	// The clothing's Outfits are made on the MetaHuman Convert made: when they can't be, the clothing rows say why.
+	const FString WhyNone = FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0);
+	const FString WhyNoneSection = FMantleGarmentOutfit::WhyNoOutfits(*ConvertContext, 0, /*bSectionPieces*/ true);
+	for (int32 RowIndex = 0; RowIndex < PublishRows.Num(); ++RowIndex)
+	{
+		const FMantlePublishRow& Row = PublishRows[RowIndex];
+		// What stands under the name: greyed with why, uploaded, the part's check, the Outfit made or why it wasn't.
+		FString Status;
+		FSlateColor StatusColour = FSlateColor::UseSubduedForeground();
+		const FMantleConvertGarment* Garment = Row.Kind == FMantlePublishRow::EKind::Garment && ConvertContext->Garments.IsValidIndex(Row.Index)
+			? &ConvertContext->Garments[Row.Index] : nullptr;
+		FString Why = Row.Why;
+		if (Garment && Why.IsEmpty())
+		{
+			Why = Garment->Sections.Num() > 0 ? WhyNoneSection : WhyNone;
+		}
+		if (!Why.IsEmpty())
+		{
+			Status = Why;
+		}
+		else if (Row.bUploaded)
+		{
+			Status = TEXT("Uploaded.");
+			StatusColour = SeverityColour(EMantleCosmeticSeverity::Info);
+		}
+		else if (Row.Kind == FMantlePublishRow::EKind::Part && ConvertResult.IsSet())
+		{
+			const FMantleConvertPartCheck* Check = ConvertResult->Checks.FindByPredicate([&Row](const FMantleConvertPartCheck& Each) { return Each.PartIndex == Row.Index; });
+			TArray<FString> Errors;
+			for (int32 Issue = 0; Check && Issue < Check->Issues.Num(); ++Issue)
+			{
+				if (Check->Issues[Issue].Severity == EMantleCosmeticSeverity::Error)
+				{
+					Errors.Add(Check->Issues[Issue].ToString());
+				}
+			}
+			Status = !Check ? FString() : Errors.IsEmpty() ? FString(TEXT("Ready to upload."))
+				: FString::Printf(TEXT("%d problem(s) still stop the upload: %s"), Errors.Num(), *FString::Join(Errors, TEXT(" ")));
+			StatusColour = SeverityColour(Errors.IsEmpty() ? EMantleCosmeticSeverity::Info : EMantleCosmeticSeverity::Error);
+		}
+		else if (Garment)
+		{
+			Status = !Garment->Error.IsEmpty() ? FString::Printf(TEXT("Couldn't make the Outfit: %s"), *Garment->Error)
+				: !Garment->Outfit.IsEmpty() ? FString(TEXT("A MetaHuman Outfit on this character's MetaHuman, made."))
+				: FString(TEXT("Becomes a MetaHuman Outfit on this character's MetaHuman when you open it."));
+			StatusColour = Garment->Error.IsEmpty() ? FSlateColor::UseSubduedForeground() : SeverityColour(EMantleCosmeticSeverity::Error);
+		}
+		else if (Row.Kind == FMantlePublishRow::EKind::Kept)
+		{
+			Status = TEXT("As it is in the Blueprint.");
+		}
+		else if (Row.Kind == FMantlePublishRow::EKind::PackHair)
+		{
+			Status = TEXT("As it is in the pack; the Hair checks fit it to the head.");
+		}
+		const bool bCan = Why.IsEmpty();
+		const TSharedPtr<FSlateDynamicImageBrush> Thumb = PublishThumbs.IsValidIndex(RowIndex) ? PublishThumbs[RowIndex] : nullptr;
+		ConvertBox->AddSlot().AutoHeight().Padding(0, 4)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+			[
+				SNew(SCheckBox)
+				.IsEnabled(bCan)
+				.ToolTipText(LOCTEXT("PublishTickTip", "Ticked items are published; an unticked one is never uploaded."))
+				.IsChecked_Lambda([this, RowIndex]
+				{
+					return PublishRows.IsValidIndex(RowIndex) && PublishRows[RowIndex].bTicked ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+				})
+				.OnCheckStateChanged_Lambda([this, RowIndex](const ECheckBoxState State)
+				{
+					if (PublishRows.IsValidIndex(RowIndex))
+					{
+						PublishRows[RowIndex].bTicked = State == ECheckBoxState::Checked;
+					}
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+			[
+				SNew(SBox).WidthOverride(64.0f).HeightOverride(64.0f)
+				[
+					// No thumbnail without a renderer (a headless editor): the space stays, so the rows line up.
+					SNew(SImage).Image(Thumb.IsValid() ? Thumb.Get() : FAppStyle::GetNoBrush())
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+					[
+						SNew(STextBlock)
+						.Font(FAppStyle::GetFontStyle("NormalFontBold"))
+						.ColorAndOpacity(bCan ? FSlateColor::UseForeground() : FSlateColor::UseSubduedForeground())
+						.Text(FText::FromString(FMantlePublishList::SlotWord(Row.Slot) + TEXT(":")))
+					]
+					+ SHorizontalBox::Slot().FillWidth(1.0f)
+					[
+						SNew(SEditableTextBox)
+						.IsEnabled(bCan)
+						.ToolTipText(LOCTEXT("PublishNameTip", "The item's name in the catalog."))
+						.Text_Lambda([this, RowIndex] { return FText::FromString(PublishRows.IsValidIndex(RowIndex) ? PublishRows[RowIndex].Name : FString()); })
+						.OnTextCommitted_Lambda([this, RowIndex](const FText& Text, ETextCommit::Type)
+						{
+							if (PublishRows.IsValidIndex(RowIndex) && !Text.ToString().TrimStartAndEnd().IsEmpty())
+							{
+								PublishRows[RowIndex].Name = Text.ToString().TrimStartAndEnd();
+							}
+						})
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+				[
+					SNew(STextBlock)
+					.AutoWrapText(true)
+					.Visibility(Status.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+					.ColorAndOpacity(StatusColour)
+					.Text(FText::FromString(Status))
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 0, 0)
+			[
+				SNew(SButton)
+				.IsEnabled_Lambda([this, bCan] { return bCan && !IsRunning(); })
+				.Text(LOCTEXT("PublishOpen", "Open"))
+				.ToolTipText(LOCTEXT("PublishOpenTip", "Fill the panel with this item to preview, check and upload it. Clothing becomes a MetaHuman Outfit on this character's MetaHuman first; the first one makes every ticked piece and takes a minute."))
+				.OnClicked_Lambda([this, RowIndex]
+				{
+					bPublishWalk = false;
+					OpenPublishRow(RowIndex);
+					return FReply::Handled();
+				})
+			]
+		];
+	}
+}
+
+void SMantleCosmeticPanel::OpenPublishRow(const int32 RowIndex)
+{
+	if (!PublishRows.IsValidIndex(RowIndex) || !ConvertContext.IsValid())
+	{
+		bPublishWalk = false;
+		return;
+	}
+	const FMantlePublishRow Row = PublishRows[RowIndex];
+	PublishOpen = RowIndex;
+	switch (Row.Kind)
+	{
+	case FMantlePublishRow::EKind::Part:
+		if (ConvertContext->Parts.IsValidIndex(Row.Index))
+		{
+			LoadPart(ConvertContext->Parts[Row.Index], Row.Name, Row.Index);
+		}
+		break;
+	case FMantlePublishRow::EKind::Kept:
+		if (ConvertContext->Kept.IsValidIndex(Row.Index))
+		{
+			LoadPart(ConvertContext->Kept[Row.Index], Row.Name, INDEX_NONE);
+		}
+		break;
+	case FMantlePublishRow::EKind::PackHair:
+	{
+		const int32 Mesh = ConvertReview.IsValid() && ConvertReview->Pieces.IsValidIndex(Row.Index) ? ConvertReview->Pieces[Row.Index].MeshIndex : INDEX_NONE;
+		FMantleConvertPart Hair;
+		Hair.Slot = Row.Slot;
+		Hair.Mesh = ConvertReview.IsValid() && ConvertReview->Meshes.IsValidIndex(Mesh) ? ConvertReview->Meshes[Mesh].Get() : nullptr;
+		Hair.Original = Hair.Mesh;
+		// Made on the pack's body (the converted part's source).
+		if (ConvertContext->Parts.IsValidIndex(0))
+		{
+			Hair.AuthoringBody = ConvertContext->Parts[0].Original;
+		}
+		LoadPart(Hair, Row.Name, INDEX_NONE);
+		break;
+	}
+	case FMantlePublishRow::EKind::Garment:
+		if (ConvertContext->Garments.IsValidIndex(Row.Index))
+		{
+			ConvertContext->Garments[Row.Index].Name = Row.Name;
+			UseConvertGarment(Row.Index);
+		}
+		break;
+	}
+	PublishOpenSource = Draft.Source;
+	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT publish open row %d %s: %s source=%s%s"), RowIndex, *FMantlePublishList::SlotWord(Row.Slot), *Row.Name,
+		Draft.Source.IsValid() ? *Draft.Source->GetPathName() : TEXT("none"), bPublishWalk ? TEXT(" (publishing the ticked items)") : TEXT(""));
+	// The row's own Open button may have called this: the rows are rebuilt after its callback.
+	RefreshConvertRowsLater(false);
 }
 
 // Named, not anonymous: MantleEditor builds as a unity build.
@@ -5279,6 +5655,14 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 
 	Panel->OnRunConvert();
 	UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT converted: %s"), *Panel->ConvertStatus);
+	// Chunk 6: the "What to publish" list, and the order "Publish the ticked items" would open its rows in.
+	TArray<FString> Order;
+	for (int32 Row = FMantlePublishList::Next(Panel->PublishRows, INDEX_NONE); Row != INDEX_NONE; Row = FMantlePublishList::Next(Panel->PublishRows, Row))
+	{
+		Order.Add(FMantlePublishList::SlotWord(Panel->PublishRows[Row].Slot) + TEXT(": ") + Panel->PublishRows[Row].Name);
+	}
+	UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT publish list: %d row(s), %d drawn; publishes in order: %s"), Panel->PublishRows.Num(),
+		Panel->PublishThumbs.FilterByPredicate([](const TSharedPtr<FSlateDynamicImageBrush>& Thumb) { return Thumb.IsValid(); }).Num(), *FString::Join(Order, TEXT("; ")));
 	Save(Panel->ConvertSectionBox.ToSharedRef(), Stem + TEXT("_converted.png"), 820.0f, 4000.0f);
 
 	const int32 First = Panel->ConvertContext->Garments.IndexOfByPredicate([](const FMantleConvertGarment& Garment) { return Garment.Why.IsEmpty(); });

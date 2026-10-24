@@ -294,6 +294,13 @@ struct MANTLEEDITOR_API FMantleConvertContext
 	TArray<FMantleConvertGarment> Garments;
 
 	/**
+	 * Chunk 6: a MetaHuman Blueprint's clothing and hair on the Convert route. The rebuild makes the MetaHuman from its face
+	 * and body alone; these are already on Epic's MetaHuman skeleton, so they stay as they are: no fixer touches them, and
+	 * the panel lists them to publish after Convert (a cloth-simulated piece unticked, its simulation dropped).
+	 */
+	TArray<FMantleConvertPart> Kept;
+
+	/**
 	 * #625: whether Parts[PartIndex] is a MetaHuman Convert built and handed on (FMantleMetaHumanBuild::HandOff). Its body
 	 * and face are Epic's build, tied to its DNA (face rig, blend shapes): never reduced, re-LODed or atlased.
 	 */
