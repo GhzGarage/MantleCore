@@ -30,7 +30,7 @@ class UObject;
  *   AsIsHeight  (as-is, #774) the body scaled about its feet to the default height (FMantleAvatarHeight::TargetCm), as Convert does
  *   Strip       (convert) the body cut down to bare skin: clothing, hair, eyes and the pieces inside the head removed, on a
  *               copy, once the creator confirms the kept parts are bare skin (pipeline step 01)
- *   MHUnrigged  (convert) #776: a model with no skeleton (a static mesh, or a skeletal mesh with one bone) takes Strip's and
+ *   MHUnrigged  (convert) #776: a model with no skeleton (a static mesh, or a skeletal mesh with no usable weights) takes Strip's and
  *               MHPose's place: its arms bent into an A-pose when it is in a T-pose, scaled to the default height, frozen into
  *               the conform's input mesh (Strip and MHPose skip it)
  *   MHPose      (convert) the skin-only body posed into MetaHuman's A-pose with Epic's IK Retargeter, frozen into a
@@ -108,7 +108,7 @@ struct MANTLEEDITOR_API FMantleConvertPart
 
 	/**
 	 * #776: a model with no skeleton, which Convert fits to a MetaHuman body (FMantleUnriggedBody; the MHUnrigged step in place of
-	 * Strip and MHPose). Its geometry is StaticSource (a static mesh) or, for a skeletal mesh with one bone, Original. Mesh stays
+	 * Strip and MHPose). Its geometry is StaticSource (a static mesh) or, for a skeletal mesh with no usable weights, Original. Mesh stays
 	 * what it is (null for a static mesh) until the build hands the part on.
 	 */
 	bool bUnrigged = false;

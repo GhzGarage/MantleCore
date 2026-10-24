@@ -423,11 +423,19 @@ bool FMantleAvatarConverter::MakeContext(UObject* Selection, const FMantleConver
 	Part.Mesh = Mesh;
 	Part.Original = Mesh;
 	Part.Name = FMantleAvatarAssemblyFixer::DisplayName(Mesh->GetName());
-	// A skeletal mesh with one bone has no skeleton to speak of: it is fitted to a MetaHuman body as a static mesh is.
-	if (!InAssembly && Class == EMantleCosmeticClass::Avatar && OutContext.Route == EMantleAvatarRoute::Convert && Mesh->GetRefSkeleton().GetRawBoneNum() == 1)
+	// A skeletal mesh whose weights don't carry it (one bone, every vertex on one bone, or too few bones weighted for any
+	// supported skeleton) has no skeleton to speak of: it is fitted to a MetaHuman body as a static mesh is.
+	if (!InAssembly && Class == EMantleCosmeticClass::Avatar && OutContext.Route == EMantleAvatarRoute::Convert)
 	{
-		Part.bUnrigged = true;
-		OutContext.Notes.Add(FMantleUnriggedBody::PlainMessage());
+		const bool bOneBone = Mesh->GetRefSkeleton().GetRawBoneNum() == 1;
+		const FMantleSkinWeightRead Weights = FMantleUnriggedBody::ReadSkinWeights(*Mesh);
+		if (bOneBone || FMantleUnriggedBody::HasNoUsableWeights(Weights))
+		{
+			Part.bUnrigged = true;
+			OutContext.Notes.Add(bOneBone ? FMantleUnriggedBody::PlainMessage() : FMantleUnriggedBody::NoUsableWeightsMessage());
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT context %s unrigged: %d bones, %s (at least %d weighted bones and two dominant ones carry a body)"),
+				*Mesh->GetName(), Mesh->GetRefSkeleton().GetRawBoneNum(), *Weights.ToString(), FMantleUnriggedBody::MinWeightedBones());
+		}
 	}
 	if (InAssembly && Class != EMantleCosmeticClass::Avatar)
 	{

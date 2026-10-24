@@ -5,7 +5,9 @@
 #include "MantleAvatarConvertFixer.h"
 
 class UDynamicMesh;
+class USkeletalMesh;
 class UStaticMesh;
+struct FSkelMeshSection;
 
 /**
  * #776: where the arms of a T-posed model without a skeleton bend, estimated from its vertices (FMantleUnriggedBody::
@@ -68,6 +70,25 @@ struct MANTLEEDITOR_API FMantleUnriggedWeld
 	double LooseShare() const { return VerticesAfter > 0 ? static_cast<double>(LooseVertices) / VerticesAfter : 0.0; }
 };
 
+/**
+ * What FMantleUnriggedBody::ReadSkinWeights read from a skeletal mesh's LOD 0 skin weights: whether its skeleton carries the
+ * surface, or the mesh is a model with no usable weights (fitted to a MetaHuman body as a static mesh is).
+ */
+struct MANTLEEDITOR_API FMantleSkinWeightRead
+{
+	/** The vertices read (every section's soft vertices). */
+	int32 Vertices = 0;
+
+	/** Bones with a non-zero weight on any vertex. */
+	int32 WeightedBones = 0;
+
+	/** Bones that are some vertex's dominant influence (its largest weight; the first on a tie). */
+	int32 DominantBones = 0;
+
+	/** "1200 vertices, 3 bones weighted, 1 dominant". */
+	FString ToString() const;
+};
+
 /** What FMantleUnriggedBody::MakePosedMesh made. */
 struct MANTLEEDITOR_API FMantleUnriggedBodyResult
 {
@@ -91,7 +112,7 @@ struct MANTLEEDITOR_API FMantleUnriggedBodyResult
 };
 
 /**
- * The "unrigged to Convert" route: a plain static mesh (or a skeletal mesh with one bone) has no skeleton for the
+ * The "unrigged to Convert" route: a plain static mesh (or a skeletal mesh with no usable weights) has no skeleton for the
  * A-pose step to pose, so its geometry is bent into the conform's pose here instead (arms bent down), scaled to the default height, and handed to the conform as the posed mesh. Strip and the A-pose step skip it.
  */
 class MANTLEEDITOR_API FMantleUnriggedBody
@@ -163,6 +184,27 @@ public:
 
 	/** "This model has no skeleton, so we'll fit it to a MetaHuman body." */
 	static FString PlainMessage();
+
+	/** "Skeleton found, but no usable weights: we'll fit it to a MetaHuman body." */
+	static FString NoUsableWeightsMessage();
+
+	/**
+	 * Fewer weighted bones than this and the skeleton can't carry a body: the bones the converter never inserts and every
+	 * supported skeleton requires (FMantleAvatarRigMap::MustMapBones: pelvis, head, each side's arm, hand and leg bones).
+	 */
+	static int32 MinWeightedBones();
+
+	/** Sections' skin weights (LOD 0's, NumBones the reference skeleton's raw bone count). Pure (tested). */
+	static FMantleSkinWeightRead ReadSkinWeights(TConstArrayView<FSkelMeshSection> Sections, int32 NumBones);
+
+	/** Mesh's LOD 0 skin weights (its imported model); empty when it has none. */
+	static FMantleSkinWeightRead ReadSkinWeights(const USkeletalMesh& Mesh);
+
+	/**
+	 * Weights, not bone count: Read is of a mesh with no usable weights when every vertex's dominant influence is one bone,
+	 * or fewer than MinWeights bones are weighted. Nothing read (no vertices) is not: there is nothing to decide on. Pure (tested).
+	 */
+	static bool HasNoUsableWeights(const FMantleSkinWeightRead& Read, int32 MinWeights = MinWeightedBones());
 
 	/**
 	 * The posed mesh for Part: its geometry (the static mesh, else the skeletal mesh's LOD 0 source), its coincident vertices
