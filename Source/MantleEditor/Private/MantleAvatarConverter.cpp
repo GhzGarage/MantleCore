@@ -113,6 +113,10 @@ namespace MantleAvatarConverterPrivate
 		{
 			return NSLOCTEXT("MantleAvatarConverter", "StepAsIsHeight", "Setting the avatar to the default height...");
 		}
+		if (FixerId == MantleAvatarFixerIds::Props)
+		{
+			return NSLOCTEXT("MantleAvatarConverter", "StepProps", "Removing held props and cloth simulation...");
+		}
 		if (FixerId == MantleAvatarFixerIds::Repose)
 		{
 			return NSLOCTEXT("MantleAvatarConverter", "StepRepose", "Posing the body in its skeleton's A-pose...");

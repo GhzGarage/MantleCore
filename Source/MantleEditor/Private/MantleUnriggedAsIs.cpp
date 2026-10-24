@@ -1,7 +1,6 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleUnriggedAsIs.h"
 #include "MantleAvatarHeight.h"
-#include "MantleGarmentOutfit.h"
 #include "MantleMetaHumanConform.h"
 #include "MantleMetaHumanPose.h"
 #include "MantleRuntime.h"
@@ -161,6 +160,465 @@ FString FMantleAutoRigWeights::ToString() const
 {
 	return FString::Printf(TEXT("%d points: %d above the neck on head, %d from the skin (mean %.2f cm, largest %.2f cm, %d over %.0f cm)"),
 		HeadPoints + SkinPoints, HeadPoints, SkinPoints, MeanDistanceCm, MaxDistanceCm, FarPoints, FMantleUnriggedAsIs::FarCm);
+}
+
+FString FMantleFingerFix::ToString() const
+{
+	FString Dropped;
+	for (const TPair<FName, int32>& Finger : DroppedFrom)
+	{
+		Dropped += FString::Printf(TEXT("%s%s %d"), Dropped.IsEmpty() ? TEXT("; dropped from ") : TEXT(", "), *Finger.Key.ToString(), Finger.Value);
+	}
+	FString Distances;
+	for (const TPair<FName, FVector2D>& Finger : DistanceTo)
+	{
+		Distances += FString::Printf(TEXT("%s%s %.2f cm over %d (chain %.1f cm)"), Distances.IsEmpty() ? TEXT("; skin to its finger's bones: ") : TEXT(", "),
+			*Finger.Key.ToString(), Finger.Value.Y > 0.0 ? Finger.Value.X / Finger.Value.Y : 0.0, static_cast<int32>(Finger.Value.Y), ChainLength.FindRef(Finger.Key));
+	}
+	FString Rigid;
+	for (const FName& Hand : RigidHands)
+	{
+		Rigid += FString::Printf(TEXT("%s%s"), Rigid.IsEmpty() ? TEXT("; fingers following the hand rigidly (too far from their bones): ") : TEXT(", "), *Hand.ToString());
+	}
+	return FString::Printf(TEXT("%d finger points: %d on two or more fingers, %d kept to their nearest finger%s%s%s"), FingerPoints, MixedPoints, Changed, *Dropped,
+		*Distances, *Rigid);
+}
+
+FMantleFingerFix FMantleUnriggedAsIs::KeepOneFinger(const TConstArrayView<FVector3f> Points, const TConstArrayView<FName> Names,
+	const TConstArrayView<int32> Parents, const TConstArrayView<FVector3f> Joints, FMantleAutoRigWeights& InOut)
+{
+	FMantleFingerFix Out;
+	const int32 NumBones = Names.Num();
+	if (Parents.Num() != NumBones || Joints.Num() != NumBones || InOut.NumInfluences <= 0)
+	{
+		return Out;
+	}
+	// Each bone's finger: the root of its chain (a child of a hand bone, named for a finger), and that hand.
+	const TCHAR* const FingerWords[] = { TEXT("thumb"), TEXT("index"), TEXT("middle"), TEXT("ring"), TEXT("pinky") };
+	auto IsFingerRoot = [&](const int32 Bone)
+	{
+		const int32 Parent = Parents[Bone];
+		if (Parent < 0 || Parent >= NumBones || !Names[Parent].ToString().StartsWith(TEXT("hand_")))
+		{
+			return false;
+		}
+		const FString Name = Names[Bone].ToString();
+		for (const TCHAR* Word : FingerWords)
+		{
+			if (Name.StartsWith(Word))
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+	TArray<int32> FingerOf;
+	FingerOf.Init(INDEX_NONE, NumBones);
+	TArray<int32> HandOf;
+	HandOf.Init(INDEX_NONE, NumBones);
+	// The main bones: <finger>_metacarpal, _01, _02, _03 and the side; not the helper bones Epic's rig logic drives.
+	auto IsMainBone = [&](const int32 Bone)
+	{
+		const FString Name = Names[Bone].ToString();
+		for (const TCHAR* Word : FingerWords)
+		{
+			if (Name.StartsWith(Word))
+			{
+				const FString Rest = Name.RightChop(FCString::Strlen(Word));
+				for (const TCHAR* Part : { TEXT("_metacarpal_"), TEXT("_01_"), TEXT("_02_"), TEXT("_03_") })
+				{
+					if (Rest.StartsWith(Part) && Rest.Len() == FCString::Strlen(Part) + 1)
+					{
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	};
+	TArray<bool> HasChild;
+	HasChild.Init(false, NumBones);
+	for (int32 Bone = 0; Bone < NumBones; ++Bone)
+	{
+		if (Parents[Bone] >= 0 && Parents[Bone] < NumBones && IsMainBone(Bone))
+		{
+			HasChild[Parents[Bone]] = true;
+		}
+		for (int32 Walk = Bone; Walk >= 0 && Walk < NumBones; Walk = Parents[Walk])
+		{
+			if (IsFingerRoot(Walk))
+			{
+				FingerOf[Bone] = Walk;
+				HandOf[Bone] = Parents[Walk];
+				break;
+			}
+		}
+	}
+	// The fingers' bones as segments: parent joint to joint, a fingertip carried on half its bone's length past its last joint.
+	struct FFingerSegment
+	{
+		FVector3f A;
+		FVector3f B;
+		int32 Bone;
+	};
+	TArray<FFingerSegment> Segments;
+	for (int32 Bone = 0; Bone < NumBones; ++Bone)
+	{
+		const int32 Parent = Parents[Bone];
+		if (FingerOf[Bone] == INDEX_NONE || Parent < 0 || !IsMainBone(Bone))
+		{
+			continue;
+		}
+		Segments.Add({ Joints[Parent], Joints[Bone], Bone });
+		if (!HasChild[Bone])
+		{
+			Segments.Add({ Joints[Bone], Joints[Bone] + 0.5f * (Joints[Bone] - Joints[Parent]), Bone });
+		}
+	}
+	if (Segments.IsEmpty())
+	{
+		return Out;
+	}
+	for (const FFingerSegment& Segment : Segments)
+	{
+		// The chain: hand to the last joint (the fingertip carried on past it is not bone).
+		if (Segment.A != Joints[Segment.Bone])
+		{
+			Out.ChainLength.FindOrAdd(Names[FingerOf[Segment.Bone]]) += FVector3f::Dist(Segment.A, Segment.B);
+		}
+	}
+	const int32 Slots = InOut.NumInfluences;
+	TMap<int32, FVector2D> ByHand;
+	for (int32 Point = 0; Point < Points.Num(); ++Point)
+	{
+		// The fingers (and the hand) its weights reach.
+		TSet<int32> Fingers;
+		int32 Hand = INDEX_NONE;
+		for (int32 Slot = 0; Slot < Slots; ++Slot)
+		{
+			const int32 Index = Point * Slots + Slot;
+			const int32 Bone = InOut.Bones.IsValidIndex(Index) ? InOut.Bones[Index] : INDEX_NONE;
+			if (InOut.Weights.IsValidIndex(Index) && InOut.Weights[Index] > 0.0f && FingerOf.IsValidIndex(Bone) && FingerOf[Bone] != INDEX_NONE)
+			{
+				Fingers.Add(FingerOf[Bone]);
+				Hand = HandOf[Bone];
+			}
+		}
+		if (Fingers.IsEmpty())
+		{
+			continue;
+		}
+		++Out.FingerPoints;
+		Out.MixedPoints += Fingers.Num() > 1 ? 1 : 0;
+		// The nearest finger bone of that hand.
+		int32 Nearest = INDEX_NONE;
+		float NearestSquared = TNumericLimits<float>::Max();
+		for (const FFingerSegment& Segment : Segments)
+		{
+			if (HandOf[Segment.Bone] != Hand)
+			{
+				continue;
+			}
+			const FVector3f Closest = FMath::ClosestPointOnSegment(Points[Point], Segment.A, Segment.B);
+			const float Squared = FVector3f::DistSquared(Points[Point], Closest);
+			if (Squared < NearestSquared)
+			{
+				NearestSquared = Squared;
+				Nearest = Segment.Bone;
+			}
+		}
+		if (Nearest == INDEX_NONE)
+		{
+			continue;
+		}
+		FVector2D& Distance = Out.DistanceTo.FindOrAdd(Names[FingerOf[Nearest]]);
+		Distance.X += FMath::Sqrt(NearestSquared);
+		Distance.Y += 1.0;
+		FVector2D& HandDistance = ByHand.FindOrAdd(Hand);
+		HandDistance.X += FMath::Sqrt(NearestSquared);
+		HandDistance.Y += 1.0;
+		// Its weights on the other fingers dropped, the rest renormalised.
+		const int32 Keep = FingerOf[Nearest];
+		bool bDropped = false;
+		TSet<int32> DroppedHere;
+		float Sum = 0.0f;
+		for (int32 Slot = 0; Slot < Slots; ++Slot)
+		{
+			const int32 Index = Point * Slots + Slot;
+			const int32 Bone = InOut.Bones[Index];
+			if (InOut.Weights[Index] > 0.0f && FingerOf.IsValidIndex(Bone) && FingerOf[Bone] != INDEX_NONE && FingerOf[Bone] != Keep)
+			{
+				InOut.Weights[Index] = 0.0f;
+				if (!bDropped || !DroppedHere.Contains(FingerOf[Bone]))
+				{
+					DroppedHere.Add(FingerOf[Bone]);
+					++Out.DroppedFrom.FindOrAdd(Names[FingerOf[Bone]]);
+				}
+				bDropped = true;
+			}
+			Sum += InOut.Weights[Index];
+		}
+		if (!bDropped)
+		{
+			continue;
+		}
+		++Out.Changed;
+		if (Sum > 0.0f)
+		{
+			for (int32 Slot = 0; Slot < Slots; ++Slot)
+			{
+				InOut.Weights[Point * Slots + Slot] /= Sum;
+			}
+		}
+		else
+		{
+			InOut.Bones[Point * Slots] = Nearest;
+			InOut.Weights[Point * Slots] = 1.0f;
+		}
+	}
+
+	// A hand whose finger skin lies far from its finger bones: its fingers follow the hand rigidly.
+	TSet<int32> Rigid;
+	for (const TPair<int32, FVector2D>& Hand : ByHand)
+	{
+		if (Hand.Value.Y > 0.0 && Hand.Value.X / Hand.Value.Y > FingerReachCm)
+		{
+			Rigid.Add(Hand.Key);
+			Out.RigidHands.Add(Names[Hand.Key]);
+		}
+	}
+	if (Rigid.IsEmpty())
+	{
+		return Out;
+	}
+	for (int32 Point = 0; Point < Points.Num(); ++Point)
+	{
+		int32 Hand = INDEX_NONE;
+		float Moved = 0.0f;
+		for (int32 Slot = 0; Slot < Slots; ++Slot)
+		{
+			const int32 Index = Point * Slots + Slot;
+			const int32 Bone = InOut.Bones[Index];
+			if (InOut.Weights[Index] > 0.0f && FingerOf.IsValidIndex(Bone) && FingerOf[Bone] != INDEX_NONE && Rigid.Contains(HandOf[Bone]))
+			{
+				Hand = HandOf[Bone];
+				Moved += InOut.Weights[Index];
+				InOut.Weights[Index] = 0.0f;
+			}
+		}
+		if (Hand == INDEX_NONE)
+		{
+			continue;
+		}
+		// Onto the hand's slot, else the first empty one (the moved weight left at least one).
+		int32 Target = INDEX_NONE;
+		for (int32 Slot = 0; Slot < Slots && Target == INDEX_NONE; ++Slot)
+		{
+			Target = InOut.Bones[Point * Slots + Slot] == Hand && InOut.Weights[Point * Slots + Slot] > 0.0f ? Slot : INDEX_NONE;
+		}
+		for (int32 Slot = 0; Slot < Slots && Target == INDEX_NONE; ++Slot)
+		{
+			Target = InOut.Weights[Point * Slots + Slot] <= 0.0f ? Slot : INDEX_NONE;
+		}
+		InOut.Bones[Point * Slots + Target] = Hand;
+		InOut.Weights[Point * Slots + Target] += Moved;
+	}
+	return Out;
+}
+
+void FMantleUnriggedAsIs::MoveByWeights(const TArrayView<FVector3f> Points, const int32 NumInfluences, const TConstArrayView<int32> Bones,
+	const TConstArrayView<float> Weights, const TConstArrayView<FTransform> From, const TConstArrayView<FTransform> To, const bool bInverse)
+{
+	if (NumInfluences <= 0 || From.Num() != To.Num())
+	{
+		return;
+	}
+	// Each bone's move as a matrix: out of its From transform, into its To one.
+	TArray<FMatrix> Moves;
+	Moves.Reserve(From.Num());
+	for (int32 Bone = 0; Bone < From.Num(); ++Bone)
+	{
+		Moves.Add((From[Bone].Inverse() * To[Bone]).ToMatrixWithScale());
+	}
+	for (int32 Point = 0; Point < Points.Num(); ++Point)
+	{
+		FMatrix Blend(ForceInitToZero);
+		float Total = 0.0f;
+		for (int32 Slot = 0; Slot < NumInfluences; ++Slot)
+		{
+			const int32 Index = Point * NumInfluences + Slot;
+			const int32 Bone = Bones.IsValidIndex(Index) ? Bones[Index] : INDEX_NONE;
+			const float Weight = Weights.IsValidIndex(Index) ? Weights[Index] : 0.0f;
+			if (Weight > 0.0f && Moves.IsValidIndex(Bone))
+			{
+				Blend += Moves[Bone] * Weight;
+				Total += Weight;
+			}
+		}
+		if (!(Total > 0.0f))
+		{
+			continue;
+		}
+		Blend *= 1.0f / Total;
+		if (bInverse)
+		{
+			if (FMath::IsNearlyZero(Blend.Determinant()))
+			{
+				continue;
+			}
+			Blend = Blend.Inverse();
+		}
+		Points[Point] = FVector3f(FVector(Blend.TransformPosition(FVector(Points[Point]))));
+	}
+}
+
+FTransform FMantleUnriggedAsIs::FitRigid(const TConstArrayView<FVector3f> Source, const TConstArrayView<FVector3f> Target, const FTransform& Start,
+	const int32 Rounds, double& OutStartCm, double& OutFitCm)
+{
+	OutStartCm = 0.0;
+	OutFitCm = 0.0;
+	if (Source.IsEmpty() || Target.IsEmpty())
+	{
+		return Start;
+	}
+	// Each source point moved by Current and its nearest target; the closest FitKeepShare of those pairs, and their mean distance.
+	struct FPair
+	{
+		FVector A;
+		FVector B;
+		double Distance;
+	};
+	TArray<FPair> Pairs;
+	auto Match = [&](const FTransform& Current)
+	{
+		Pairs.Reset();
+		for (const FVector3f& Point : Source)
+		{
+			const FVector A = Current.TransformPosition(FVector(Point));
+			double Best = TNumericLimits<double>::Max();
+			FVector Nearest = A;
+			for (const FVector3f& Candidate : Target)
+			{
+				const double Squared = FVector::DistSquared(A, FVector(Candidate));
+				if (Squared < Best)
+				{
+					Best = Squared;
+					Nearest = FVector(Candidate);
+				}
+			}
+			Pairs.Add({ A, Nearest, FMath::Sqrt(Best) });
+		}
+		Pairs.Sort([](const FPair& X, const FPair& Y) { return X.Distance < Y.Distance; });
+		Pairs.SetNum(FMath::Max(3, FMath::CeilToInt32(Pairs.Num() * FitKeepShare)), EAllowShrinking::No);
+		double Sum = 0.0;
+		for (const FPair& Pair : Pairs)
+		{
+			Sum += Pair.Distance;
+		}
+		return Pairs.IsEmpty() ? 0.0 : Sum / Pairs.Num();
+	};
+	// Every round runs (a round can bring the kept pairs apart before a better match), the closest kept.
+	FTransform Current = Start;
+	FTransform Best = Start;
+	OutStartCm = Match(Current);
+	OutFitCm = OutStartCm;
+	for (int32 Round = 0; Round < Rounds && Pairs.Num() >= 3; ++Round)
+	{
+		// Horn's closed form: the rotation is the top eigenvector of a 4x4 symmetric matrix of the centred pairs' cross sums.
+		FVector CentreA = FVector::ZeroVector;
+		FVector CentreB = FVector::ZeroVector;
+		for (const FPair& Pair : Pairs)
+		{
+			CentreA += Pair.A;
+			CentreB += Pair.B;
+		}
+		CentreA /= Pairs.Num();
+		CentreB /= Pairs.Num();
+		double S[3][3] = {};
+		for (const FPair& Pair : Pairs)
+		{
+			const FVector A = Pair.A - CentreA;
+			const FVector B = Pair.B - CentreB;
+			for (int32 Row = 0; Row < 3; ++Row)
+			{
+				for (int32 Column = 0; Column < 3; ++Column)
+				{
+					S[Row][Column] += A[Row] * B[Column];
+				}
+			}
+		}
+		double N[4][4] = {
+			{ S[0][0] + S[1][1] + S[2][2], S[1][2] - S[2][1], S[2][0] - S[0][2], S[0][1] - S[1][0] },
+			{ S[1][2] - S[2][1], S[0][0] - S[1][1] - S[2][2], S[0][1] + S[1][0], S[2][0] + S[0][2] },
+			{ S[2][0] - S[0][2], S[0][1] + S[1][0], -S[0][0] + S[1][1] - S[2][2], S[1][2] + S[2][1] },
+			{ S[0][1] - S[1][0], S[2][0] + S[0][2], S[1][2] + S[2][1], -S[0][0] - S[1][1] + S[2][2] } };
+		// Shifted to make every eigenvalue positive, then squared over and over: its columns turn toward the top eigenvector.
+		double Shift = 0.0;
+		for (int32 Row = 0; Row < 4; ++Row)
+		{
+			for (int32 Column = 0; Column < 4; ++Column)
+			{
+				Shift += FMath::Abs(N[Row][Column]);
+			}
+		}
+		for (int32 Row = 0; Row < 4; ++Row)
+		{
+			N[Row][Row] += Shift;
+		}
+		for (int32 Square = 0; Square < 24; ++Square)
+		{
+			double Product[4][4] = {};
+			double Largest = 0.0;
+			for (int32 Row = 0; Row < 4; ++Row)
+			{
+				for (int32 Column = 0; Column < 4; ++Column)
+				{
+					for (int32 K = 0; K < 4; ++K)
+					{
+						Product[Row][Column] += N[Row][K] * N[K][Column];
+					}
+					Largest = FMath::Max(Largest, FMath::Abs(Product[Row][Column]));
+				}
+			}
+			if (!(Largest > 0.0))
+			{
+				break;
+			}
+			for (int32 Row = 0; Row < 4; ++Row)
+			{
+				for (int32 Column = 0; Column < 4; ++Column)
+				{
+					N[Row][Column] = Product[Row][Column] / Largest;
+				}
+			}
+		}
+		int32 Top = 0;
+		double BestNorm = -1.0;
+		for (int32 Column = 0; Column < 4; ++Column)
+		{
+			const double Norm = FMath::Square(N[0][Column]) + FMath::Square(N[1][Column]) + FMath::Square(N[2][Column]) + FMath::Square(N[3][Column]);
+			if (Norm > BestNorm)
+			{
+				BestNorm = Norm;
+				Top = Column;
+			}
+		}
+		FQuat Turn(N[1][Top], N[2][Top], N[3][Top], N[0][Top]);
+		if (!(BestNorm > 0.0))
+		{
+			break;
+		}
+		Turn.Normalize();
+		// About the pairs' centre: off the source's centre, turned, onto the target's.
+		Current = Current * (FTransform(-CentreA) * FTransform(Turn) * FTransform(CentreB));
+		const double Mean = Match(Current);
+		if (Mean < OutFitCm)
+		{
+			OutFitCm = Mean;
+			Best = Current;
+		}
+	}
+	return Best;
 }
 
 bool FMantleUnriggedAsIs::HasNoRig(const UObject* Selection)
@@ -449,53 +907,282 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 		}
 	});
 
-	// On the body: the conform fits the body to the model where it stands, so the gap is small as it is; when it isn't, the model
-	// is first put on the body's feet and middle, then the gap closed (the clothing's own distance from the skin stays).
+	// The conform fits the body to the model where it stands, so the model is weighted where it is: closing the gap to the body's
+	// skin pulled it toward its hair and clothing (RoninGirl rose 6 cm, the weightless Girl sank 5 cm), and its bounds are no
+	// guide either (RoninGirl's backpack moves their middle 11 cm back).
 	{
-		double Gap = 0.0;
-		FVector3f Offset = FMantleGarmentOutfit::AlignTranslation(Points, Skin.Positions, Gap);
-		if (Gap > AlignedGapCm)
+		FBox3f ModelBox(ForceInit);
+		FBox3f BodyBox(ForceInit);
+		for (const FVector3f& Point : Points)
 		{
-			FBox3f ModelBox(ForceInit);
-			FBox3f BodyBox(ForceInit);
-			for (const FVector3f& Point : Points)
-			{
-				ModelBox += Point;
-			}
-			for (const FVector3f& Position : Skin.Positions)
-			{
-				BodyBox += Position;
-			}
-			const FVector3f Start(BodyBox.GetCenter().X - ModelBox.GetCenter().X, BodyBox.GetCenter().Y - ModelBox.GetCenter().Y, BodyBox.Min.Z - ModelBox.Min.Z);
-			TArray<FVector3f> Moved = Points;
-			for (FVector3f& Point : Moved)
-			{
-				Point += Start;
-			}
-			double MovedGap = 0.0;
-			const FVector3f Refined = FMantleGarmentOutfit::AlignTranslation(Moved, Skin.Positions, MovedGap);
-			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG align: as it stands %s (gap %.2f cm); from the body's feet and middle %s (gap %.2f cm)"),
-				*Offset.ToString(), Gap, *(Start + Refined).ToString(), MovedGap);
-			if (MovedGap < Gap)
-			{
-				Offset = Start + Refined;
-				Gap = MovedGap;
-			}
+			ModelBox += Point;
 		}
-		OutResult.Offset = Offset;
-		OutResult.AlignGapCm = Gap;
-		for (FVector3f& Point : Points)
+		for (const FVector3f& Position : Skin.Positions)
 		{
-			Point += Offset;
+			BodyBox += Position;
 		}
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG bounds: model %s, body %s"), *ModelBox.ToString(), *BodyBox.ToString());
 	}
 
+	// The hands onto the model's: the conform's body holds its hands where MetaHuman's A-pose puts them, 11 to 12 cm in front of
+	// the model's on the three test models (its finger joints sit inside its own fingers, not the model's), so the model's fingers
+	// took finger weights from bones 7 to 15 cm away and curled into claws. Each body hand, its fingers and the skin on them are laid
+	// onto the model's hand (FitRigid, from the points that first took the hand's weights), the skeleton's hand joint with them.
+	FReferenceSkeleton Rest = Reference;
+	TArray<FTransform> RefPose;
+	FAnimationRuntime::FillUpComponentSpaceTransforms(Reference, Reference.GetRawRefBonePose(), RefPose);
+	TArray<FTransform> Pose = RefPose;
 	if (!TransferWeights(Points, Skin, HeadBoneIndex, OutResult.HeadCutZ, OutResult.Weights, OutError))
 	{
 		return false;
 	}
-	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG %s: offset %s (gap %.2f cm), head cut at %.2f cm; %s"), *Posed.GetName(), *OutResult.Offset.ToString(),
-		OutResult.AlignGapCm, OutResult.HeadCutZ, *OutResult.Weights.ToString());
+	for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
+	{
+		const int32 Hand = Reference.FindRawBoneIndex(FName(*FString::Printf(TEXT("hand_%s"), Side)));
+		const int32 Arm = Hand == INDEX_NONE ? INDEX_NONE : Reference.GetRawParentIndex(Hand);
+		if (Arm == INDEX_NONE)
+		{
+			continue;
+		}
+		TArray<bool> InHand;
+		InHand.Init(false, Reference.GetRawBoneNum());
+		for (int32 Bone = 0; Bone < Reference.GetRawBoneNum(); ++Bone)
+		{
+			for (int32 Walk = Bone; Walk != INDEX_NONE && !InHand[Bone]; Walk = Reference.GetRawParentIndex(Walk))
+			{
+				InHand[Bone] = Walk == Hand;
+			}
+		}
+		// The body's hand: its skin mostly on the hand and fingers. The model's: the points that took mostly the hand's weights.
+		auto HandShare = [&InHand](const TArray<int32>& Bones, const TArray<float>& Weights, const int32 Slots, const int32 Vertex)
+		{
+			float Share = 0.0f;
+			for (int32 Slot = 0; Slot < Slots; ++Slot)
+			{
+				const int32 Index = Vertex * Slots + Slot;
+				Share += InHand.IsValidIndex(Bones[Index]) && InHand[Bones[Index]] ? Weights[Index] : 0.0f;
+			}
+			return Share;
+		};
+		TArray<FVector3f> BodyHand;
+		FVector3f BodyCentre = FVector3f::ZeroVector;
+		for (int32 Vertex = 0; Vertex < Skin.Positions.Num(); ++Vertex)
+		{
+			if (HandShare(Skin.Bones, Skin.Weights, Skin.NumInfluences, Vertex) >= 0.5f)
+			{
+				BodyHand.Add(Skin.Positions[Vertex]);
+				BodyCentre += Skin.Positions[Vertex];
+			}
+		}
+		FVector3f ModelCentre = FVector3f::ZeroVector;
+		int32 ModelCount = 0;
+		for (int32 Point = 0; Point < Points.Num(); ++Point)
+		{
+			if (HandShare(OutResult.Weights.Bones, OutResult.Weights.Weights, OutResult.Weights.NumInfluences, Point) >= 0.5f)
+			{
+				ModelCentre += Points[Point];
+				++ModelCount;
+			}
+		}
+		if (BodyHand.IsEmpty() || ModelCount == 0)
+		{
+			continue;
+		}
+		BodyCentre /= BodyHand.Num();
+		ModelCentre /= ModelCount;
+		// The fit's targets: the model's points near its hand; its sources: at most HandFitSamples of the body hand's skin.
+		TArray<FVector3f> Near;
+		for (const FVector3f& Point : Points)
+		{
+			if (FVector3f::Dist(Point, ModelCentre) <= HandFitRadiusCm)
+			{
+				Near.Add(Point);
+			}
+		}
+		TArray<FVector3f> Sources;
+		const int32 Stride = FMath::Max(1, BodyHand.Num() / HandFitSamples);
+		for (int32 Index = 0; Index < BodyHand.Num(); Index += Stride)
+		{
+			Sources.Add(BodyHand[Index]);
+		}
+		// Where it stands, then laid on from the two hands' centres.
+		double StayCm = 0.0;
+		double Unused = 0.0;
+		double FromCm = 0.0;
+		double FitCm = 0.0;
+		FitRigid(Sources, Near, FTransform::Identity, 0, StayCm, Unused);
+		const FTransform Fit = FitRigid(Sources, Near, FTransform(FVector(ModelCentre - BodyCentre)), HandFitRounds, FromCm, FitCm);
+		const double MovedCm = FVector::Dist(Fit.TransformPosition(RefPose[Hand].GetLocation()), RefPose[Hand].GetLocation());
+		const double TurnDegrees = FMath::RadiansToDegrees(Fit.GetRotation().GetAngle());
+		const bool bTake = FitCm < StayCm && MovedCm <= HandFitMaxCm && TurnDegrees <= HandFitMaxDegrees;
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG hand_%s onto the model's: %s (its skin %.2f cm from the model's where it stood, %.2f cm laid on; the hand joint moved %.1f cm, turned %.1f degrees; %d skin points onto %d model points)"),
+			Side, bTake ? TEXT("laid on") : TEXT("left where it stood"), StayCm, FitCm, MovedCm, TurnDegrees, Sources.Num(), Near.Num());
+		if (!bTake)
+		{
+			continue;
+		}
+		for (int32 Bone = 0; Bone < Reference.GetRawBoneNum(); ++Bone)
+		{
+			if (InHand[Bone])
+			{
+				Pose[Bone] = RefPose[Bone] * Fit;
+			}
+		}
+		FReferenceSkeletonModifier Modifier(Rest, nullptr);
+		Modifier.UpdateRefPoseTransform(Hand, Pose[Hand].GetRelativeTransform(RefPose[Arm]));
+	}
+	MoveByWeights(Skin.Positions, Skin.NumInfluences, Skin.Bones, Skin.Weights, RefPose, Pose, /*bInverse*/ false);
+	if (!TransferWeights(Points, Skin, HeadBoneIndex, OutResult.HeadCutZ, OutResult.Weights, OutError))
+	{
+		return false;
+	}
+	// Each hand's finger joints against the body's own finger skin and the model's, for the record (whether the hands line up).
+	{
+		auto JointAt = [&Pose](const int32 Bone) { return FVector3f(Pose[Bone].GetLocation()); };
+		auto DominantOf = [](const TArray<int32>& Bones, const TArray<float>& Weights, const int32 Slots, const int32 Vertex)
+		{
+			int32 Best = INDEX_NONE;
+			float BestWeight = 0.0f;
+			for (int32 Slot = 0; Slot < Slots; ++Slot)
+			{
+				const int32 Index = Vertex * Slots + Slot;
+				if (Weights.IsValidIndex(Index) && Weights[Index] > BestWeight)
+				{
+					Best = Bones[Index];
+					BestWeight = Weights[Index];
+				}
+			}
+			return Best;
+		};
+		auto V = [](const FVector3f& P) { return FString::Printf(TEXT("(%.1f %.1f %.1f)"), P.X, P.Y, P.Z); };
+		for (const TCHAR* Side : { TEXT("l"), TEXT("r") })
+		{
+			const int32 Hand = Reference.FindRawBoneIndex(FName(*FString::Printf(TEXT("hand_%s"), Side)));
+			if (Hand == INDEX_NONE)
+			{
+				continue;
+			}
+			TArray<bool> InHand;
+			InHand.Init(false, Reference.GetRawBoneNum());
+			for (int32 Bone = 0; Bone < Reference.GetRawBoneNum(); ++Bone)
+			{
+				for (int32 Walk = Bone; Walk != INDEX_NONE && !InHand[Bone]; Walk = Reference.GetRawParentIndex(Walk))
+				{
+					InHand[Bone] = Walk == Hand;
+				}
+			}
+			FString Line = FString::Printf(TEXT("hand_%s joint %s"), Side, *V(JointAt(Hand)));
+			for (const TCHAR* Finger : { TEXT("thumb_02"), TEXT("index_01"), TEXT("index_02"), TEXT("middle_02"), TEXT("pinky_02") })
+			{
+				const int32 Bone = Reference.FindRawBoneIndex(FName(*FString::Printf(TEXT("%s_%s"), Finger, Side)));
+				if (Bone == INDEX_NONE)
+				{
+					continue;
+				}
+				const FVector3f Joint = JointAt(Bone);
+				FVector3f BodySum = FVector3f::ZeroVector;
+				FVector3f ModelSum = FVector3f::ZeroVector;
+				int32 BodyCount = 0;
+				int32 ModelCount = 0;
+				float BodyNearest = TNumericLimits<float>::Max();
+				float ModelNearest = TNumericLimits<float>::Max();
+				for (int32 Vertex = 0; Vertex < Skin.Positions.Num(); ++Vertex)
+				{
+					BodyNearest = FMath::Min(BodyNearest, FVector3f::Dist(Joint, Skin.Positions[Vertex]));
+					if (DominantOf(Skin.Bones, Skin.Weights, Skin.NumInfluences, Vertex) == Bone)
+					{
+						BodySum += Skin.Positions[Vertex];
+						++BodyCount;
+					}
+				}
+				for (int32 Point = 0; Point < Points.Num(); ++Point)
+				{
+					ModelNearest = FMath::Min(ModelNearest, FVector3f::Dist(Joint, Points[Point]));
+					if (OutResult.Weights.Dominant(Point) == Bone)
+					{
+						ModelSum += Points[Point];
+						++ModelCount;
+					}
+				}
+				const FVector3f BodyCentre = BodyCount > 0 ? BodySum / BodyCount : FVector3f::ZeroVector;
+				const FVector3f ModelCentre = ModelCount > 0 ? ModelSum / ModelCount : FVector3f::ZeroVector;
+				Line += FString::Printf(TEXT("; %s joint %s: body skin on it %d centred %s (%.1f cm from the joint), nearest body skin %.1f cm; model points on it %d centred %s (%.1f cm), nearest model point %.1f cm"),
+					Finger, *V(Joint), BodyCount, *V(BodyCentre), BodyCount > 0 ? FVector3f::Dist(Joint, BodyCentre) : -1.0f, BodyNearest, ModelCount, *V(ModelCentre),
+					ModelCount > 0 ? FVector3f::Dist(Joint, ModelCentre) : -1.0f, ModelNearest);
+			}
+			FVector3f BodySum = FVector3f::ZeroVector;
+			FVector3f ModelSum = FVector3f::ZeroVector;
+			int32 BodyCount = 0;
+			int32 ModelCount = 0;
+			for (int32 Vertex = 0; Vertex < Skin.Positions.Num(); ++Vertex)
+			{
+				const int32 Bone = DominantOf(Skin.Bones, Skin.Weights, Skin.NumInfluences, Vertex);
+				if (InHand.IsValidIndex(Bone) && InHand[Bone])
+				{
+					BodySum += Skin.Positions[Vertex];
+					++BodyCount;
+				}
+			}
+			for (int32 Point = 0; Point < Points.Num(); ++Point)
+			{
+				const int32 Bone = OutResult.Weights.Dominant(Point);
+				if (InHand.IsValidIndex(Bone) && InHand[Bone])
+				{
+					ModelSum += Points[Point];
+					++ModelCount;
+				}
+			}
+			Line += FString::Printf(TEXT("; hand and fingers: body skin %d centred %s, model points %d centred %s"), BodyCount,
+				*V(BodyCount > 0 ? BodySum / BodyCount : FVector3f::ZeroVector), ModelCount, *V(ModelCount > 0 ? ModelSum / ModelCount : FVector3f::ZeroVector));
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG handfit %s"), *Line);
+		}
+	}
+	// A finger's skin follows one finger: closest points between fingers blend neighbours, which stretch when the fingers curl.
+	{
+		TArray<FName> BoneNames;
+		TArray<int32> BoneParents;
+		TArray<FVector3f> BoneJoints;
+		for (int32 Bone = 0; Bone < Reference.GetRawBoneNum(); ++Bone)
+		{
+			BoneNames.Add(Reference.GetRawRefBoneInfo()[Bone].Name);
+			BoneParents.Add(Reference.GetRawParentIndex(Bone));
+			BoneJoints.Add(FVector3f(Pose[Bone].GetLocation()));
+		}
+		OutResult.Fingers = KeepOneFinger(Points, BoneNames, BoneParents, BoneJoints, OutResult.Weights);
+		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG fingers: %s"), *OutResult.Fingers.ToString());
+	}
+
+	// On the floor: the game stands an avatar's root on the floor and plays it as tall as its top (the export's standing height), so
+	// the model's lowest point goes to Z 0, its skeleton with it (the bones under the root move as the skin does, the binding stays).
+	{
+		float FloorZ = TNumericLimits<float>::Max();
+		for (const FVector3f& Point : Points)
+		{
+			FloorZ = FMath::Min(FloorZ, Point.Z);
+		}
+		OutResult.FloorShiftCm = FMath::Abs(FloorZ) > FloorToleranceCm ? -FloorZ : 0.0;
+		if (OutResult.FloorShiftCm != 0.0)
+		{
+			for (FVector3f& Point : Points)
+			{
+				Point.Z += static_cast<float>(OutResult.FloorShiftCm);
+			}
+			const FTransform Root = FAnimationRuntime::GetComponentSpaceTransformRefPose(Reference, 0);
+			const FVector Shift = Root.InverseTransformVectorNoScale(FVector(0.0, 0.0, OutResult.FloorShiftCm));
+			FReferenceSkeletonModifier Modifier(Rest, nullptr);
+			for (int32 Bone = 1; Bone < Reference.GetRawBoneNum(); ++Bone)
+			{
+				if (Reference.GetRawParentIndex(Bone) == 0)
+				{
+					FTransform Local = Rest.GetRawRefBonePose()[Bone];
+					Local.AddToTranslation(Shift);
+					Modifier.UpdateRefPoseTransform(Bone, Local);
+				}
+			}
+		}
+	}
+	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_ASISRIG %s: head cut at %.2f cm; %s; feet put on the floor (moved %.2f cm up, the skeleton with them)"), *Posed.GetName(),
+		OutResult.HeadCutZ, *OutResult.Weights.ToString(), OutResult.FloorShiftCm);
 
 	// The slots: the posed model's own materials, by unique slot name (the build matches sections to slots by name).
 	const TArray<FStaticMaterial>& StaticMaterials = Posed.GetStaticMaterials();
@@ -530,12 +1217,12 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 			FSkeletalMeshAttributes::FBoneNameAttributesRef BoneNames = Attributes.GetBoneNames();
 			FSkeletalMeshAttributes::FBoneParentIndexAttributesRef BoneParents = Attributes.GetBoneParentIndices();
 			FSkeletalMeshAttributes::FBonePoseAttributesRef BonePoses = Attributes.GetBonePoses();
-			for (int32 Bone = 0; Bone < Reference.GetRawBoneNum(); ++Bone)
+			for (int32 Bone = 0; Bone < Rest.GetRawBoneNum(); ++Bone)
 			{
 				const FBoneID Id = Attributes.CreateBone();
-				BoneNames.Set(Id, Reference.GetRawRefBoneInfo()[Bone].Name);
-				BoneParents.Set(Id, Reference.GetRawParentIndex(Bone));
-				BonePoses.Set(Id, Reference.GetRawRefBonePose()[Bone]);
+				BoneNames.Set(Id, Rest.GetRawRefBoneInfo()[Bone].Name);
+				BoneParents.Set(Id, Rest.GetRawParentIndex(Bone));
+				BonePoses.Set(Id, Rest.GetRawRefBonePose()[Bone]);
 			}
 		}
 		const TVertexAttributesRef<FVector3f> Positions = Attributes.GetVertexPositions();
@@ -627,7 +1314,7 @@ bool FMantleUnriggedAsIs::MakeSkinnedMesh(UStaticMesh& Posed, USkeletalMesh& Bod
 	}
 	OutResult.Created.Add(Mesh);
 	Mesh->PreEditChange(nullptr);
-	Mesh->SetRefSkeleton(Reference);
+	Mesh->SetRefSkeleton(Rest);
 	Mesh->GetRefBasesInvMatrix().Reset();
 	Mesh->CalculateInvRefMatrices();
 	Mesh->SetMaterials(Materials);
