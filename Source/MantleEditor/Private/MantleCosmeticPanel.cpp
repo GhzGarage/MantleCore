@@ -38,6 +38,8 @@
 #include "MantleRuntimeTextureBuilder.h"
 #include "MantleRuntime.h"
 #include "MantleSettings.h"
+#include "MantleTestLocally.h"
+#include "SMantlePreviewPanel.h"
 #include "MetaHumanCharacter.h"
 
 #include "Animation/AnimSequence.h"
@@ -1018,6 +1020,16 @@ void SMantleCosmeticPanel::Construct(const FArguments& InArgs)
 						.ToolTipText(LOCTEXT("CheckTooltip", "Run every check and export without uploading anything."))
 						.OnClicked(this, &SMantleCosmeticPanel::OnCheck)
 					]
+					// Chunk 9: walk around as the avatar in the Mantle app before uploading it.
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+					[
+						SNew(SButton)
+						.Visibility_Lambda([this] { return Draft.Class == EMantleCosmeticClass::Avatar ? EVisibility::Visible : EVisibility::Collapsed; })
+						.IsEnabled_Lambda([this] { return !IsRunning() && ContractError.IsEmpty() && !FMantleTestLocally::Get().IsBusy(); })
+						.Text(LOCTEXT("TestLocally", "Test locally"))
+						.ToolTipText(LOCTEXT("TestLocallyTooltip", "Check, then open the Mantle app offline with you playing as this avatar. Nothing is uploaded: the files are prepared on this computer."))
+						.OnClicked(this, &SMantleCosmeticPanel::OnTestLocally)
+					]
 					+ SHorizontalBox::Slot().AutoWidth()
 					[
 						SNew(SButton)
@@ -1037,6 +1049,20 @@ void SMantleCosmeticPanel::Construct(const FArguments& InArgs)
 					SNew(STextBlock)
 					.AutoWrapText(true)
 					.Text(this, &SMantleCosmeticPanel::GetStatusText)
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+				[
+					SNew(STextBlock)
+					.AutoWrapText(true)
+					.Visibility_Lambda([this]
+					{
+						return Draft.Class == EMantleCosmeticClass::Avatar && !TestLocallyResult.IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed;
+					})
+					.ColorAndOpacity_Lambda([this]
+					{
+						return bTestLocallyError ? FSlateColor(MantleCosmeticPanelPrivate::SeverityColour(EMantleCosmeticSeverity::Error)) : FSlateColor::UseForeground();
+					})
+					.Text_Lambda([this] { return TestLocallyResult; })
 				]
 				// #581: an avatar's size in play, once a check has measured it (the cook's standing height).
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
@@ -2270,6 +2296,40 @@ FReply SMantleCosmeticPanel::OnCheck()
 {
 	BuildPackage();
 	if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
+	return FReply::Handled();
+}
+
+FReply SMantleCosmeticPanel::OnTestLocally()
+{
+	TestLocallyResult = FText::GetEmpty();
+	bTestLocallyError = false;
+	const bool bChecked = BuildPackage();
+	if (ThumbnailSection.IsValid()) ThumbnailSection->Refresh();
+	if (!bChecked || !Package.IsSet())
+	{
+		TestLocallyResult = LOCTEXT("TestLocallyFixFirst", "Fix the problems below first, then choose Test locally again.");
+		bTestLocallyError = true;
+		return FReply::Handled();
+	}
+	// The Mantle Preview panel follows the run (finding the app, preparing, starting, ready) as for a level.
+	SMantlePreviewPanel::OpenTab();
+	FString Error;
+	FString Notice;
+	const TSharedRef<const FMantleCosmeticPackage> Avatar = MakeShared<FMantleCosmeticPackage>(Package.GetValue());
+	if (FMantleTestLocally::Get().RunWithDraftAvatar(Avatar, Error, Notice))
+	{
+		FString Said = TEXT("The Mantle app is opening with you as this avatar. Nothing was uploaded.");
+		if (!Notice.IsEmpty())
+		{
+			Said += TEXT(" ") + Notice;
+		}
+		TestLocallyResult = FText::FromString(Said);
+	}
+	else
+	{
+		TestLocallyResult = FText::FromString(Error.IsEmpty() ? FString(TEXT("The test was cancelled.")) : Error);
+		bTestLocallyError = !Error.IsEmpty();
+	}
 	return FReply::Handled();
 }
 

@@ -6,6 +6,7 @@
 #include "MantleTargetFeatures.h"
 
 class UWorld;
+struct FMantleCosmeticPackage;
 struct FMantleLocalScriptPackage;
 
 /**
@@ -53,6 +54,13 @@ struct FMantlePreviewExportOptions
 {
 	/** #729: weapons to bundle and equip. Needs a client that reads the weaponDocument feature (Features); otherwise the export refuses. */
 	TArray<FMantleWeaponToTry> Weapons;
+
+	/**
+	 * A checked avatar the creator has not uploaded (the Cosmetics panel's Test locally): the preview player wears it instead of the
+	 * chosen catalog avatar. Its files are cooked here with the cook tool and bundled as a local draft
+	 * (MantlePreviewAvatarExport::WriteLocalDraft); nothing is fetched from the catalog.
+	 */
+	TSharedPtr<const FMantleCosmeticPackage> DraftAvatar;
 
 	/** The local cook tool (mantle-cook.exe). Empty: the MANTLE_COOK_TOOL environment variable. */
 	FString CookTool;

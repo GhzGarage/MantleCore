@@ -147,6 +147,8 @@ struct MANTLERUNTIME_API FMantleCosmeticItem
 	EMantleCosmeticKind Kind = EMantleCosmeticKind::Unknown;
 	/** Bumps whenever the item's assets change; the cache keys fits and built avatars by it. */
 	int32 Version = 0;
+	/** Seeded from a localDraft bundle entry (offline preview only): its id is registered with MantleCosmetic::RegisterLocalDraftId and never leaves the process. */
+	bool bLocalDraft = false;
 	/** Avatars: their appearance skeleton ("metahuman", "ue5mannequin", "ue4mannequin", "uefnmannequin") and whether they take clothing. */
 	FString Skeleton;
 	bool bGarmentCompatible = false;
@@ -268,6 +270,18 @@ namespace MantleCosmetic
 
 	/** itm_u + 32 lowercase hex digits (the schema's item id pattern). */
 	MANTLERUNTIME_API bool IsItemId(const FString& Value);
+
+	/**
+	 * Local-draft item ids (an avatar a creator is testing from an offline preview, never published). The offline
+	 * preview registers each id it seeds from a localDraft bundle entry; nothing else does. A registered id is not a
+	 * catalog id: no request to the backend and no replicated appearance may carry one. Thread-safe.
+	 */
+	MANTLERUNTIME_API void RegisterLocalDraftId(const FString& ItemId);
+	MANTLERUNTIME_API bool IsLocalDraftId(const FString& ItemId);
+	/** Whether Text (a request path or body, a serialized descriptor) names any registered local-draft id. */
+	MANTLERUNTIME_API bool ContainsLocalDraftId(const FString& Text);
+	/** Test seam: forgets every registered id. */
+	MANTLERUNTIME_API void ClearLocalDraftIdsForTesting();
 
 	/** The POST /avatar/items/batch body, {"ids":[...]}, condensed JSON. */
 	MANTLERUNTIME_API FString BuildItemBatchBody(const TArray<FString>& ItemIds);

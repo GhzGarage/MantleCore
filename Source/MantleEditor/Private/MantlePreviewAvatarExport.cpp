@@ -11,7 +11,9 @@
 #include "HttpModule.h"
 #include "MantleApiClient.h"
 #include "MantleAssetStore.h"
+#include "MantleAvatarContract.h"
 #include "MantleCosmeticItem.h"
+#include "MantleCosmeticPackage.h"
 #include "MantleNativeEye.h"
 #include "MantleRuntime.h"
 #include "MantleSettings.h"
@@ -302,6 +304,23 @@ namespace MantlePreviewAvatarExportPrivate
 		return true;
 	}
 
+	/** Avatar/descriptor.json: the neutral body-only descriptor wearing ItemId at HeightPct. */
+	bool WriteDescriptor(const FString& AvatarDir, const FString& ItemId, const int32 HeightPct, FString& OutError)
+	{
+		TSharedPtr<FJsonObject> Descriptor;
+		const TSharedRef<TJsonReader<>> DescriptorReader = TJsonReaderFactory<>::Create(FString(NeutralDescriptor));
+		const TSharedPtr<FJsonObject>* Body = nullptr;
+		if (!FJsonSerializer::Deserialize(DescriptorReader, Descriptor) || !Descriptor.IsValid()
+			|| !Descriptor->TryGetObjectField(TEXT("body"), Body) || !Body)
+		{
+			OutError = TEXT("the neutral avatar descriptor template is unreadable");
+			return false;
+		}
+		(*Body)->SetStringField(TEXT("avatarItemId"), ItemId);
+		(*Body)->SetNumberField(TEXT("heightPct"), HeightPct);
+		return WriteJsonFile(Descriptor.ToSharedRef(), FPaths::Combine(AvatarDir, TEXT("descriptor.json")), OutError);
+	}
+
 	FAutoConsoleCommand PreviewAvatarCommand(
 		TEXT("Mantle.Preview.Avatar"),
 		TEXT("Sets the catalog avatar item (itm_u...) the offline preview's player wears, or 'none'. With no argument, prints the current choice."),
@@ -508,17 +527,7 @@ bool MantlePreviewAvatarExport::Write(const FString& BundleDir, FString& OutDesc
 		return Fail(Why);
 	}
 
-	TSharedPtr<FJsonObject> Descriptor;
-	const TSharedRef<TJsonReader<>> DescriptorReader = TJsonReaderFactory<>::Create(FString(NeutralDescriptor));
-	const TSharedPtr<FJsonObject>* Body = nullptr;
-	if (!FJsonSerializer::Deserialize(DescriptorReader, Descriptor) || !Descriptor.IsValid()
-		|| !Descriptor->TryGetObjectField(TEXT("body"), Body) || !Body)
-	{
-		return Fail(TEXT("the neutral avatar descriptor template is unreadable"));
-	}
-	(*Body)->SetStringField(TEXT("avatarItemId"), ItemId);
-	(*Body)->SetNumberField(TEXT("heightPct"), HeightPct);
-	if (!WriteJsonFile(Descriptor.ToSharedRef(), FPaths::Combine(AvatarDir, TEXT("descriptor.json")), Why))
+	if (!WriteDescriptor(AvatarDir, ItemId, HeightPct, Why))
 	{
 		return Fail(Why);
 	}
@@ -526,5 +535,294 @@ bool MantlePreviewAvatarExport::Write(const FString& BundleDir, FString& OutDesc
 	OutDescriptorRelPath = TEXT("Avatar/descriptor.json");
 	OutBuiltinRelPath = TEXT("Avatar/Builtin");
 	UE_LOG(LogMantle, Log, TEXT("Preview avatar %s v%d bundled: %d file reference(s), %d distinct file(s)."), *ItemId, Found->Version, Refs.Num(), Requested.Num());
+	return true;
+}
+
+FString MantlePreviewAvatarExport::LocalDraftItemId(const FMantleContentHash& BodyMeshHash)
+{
+	return TEXT("itm_u") + BodyMeshHash.ToHex().Left(32);
+}
+
+TSharedPtr<FJsonObject> MantlePreviewAvatarExport::MakeLocalDraftItem(const FMantleCosmeticPackage& Package, const TArray<FCookedDraftAsset>& Cooked, FString& OutError)
+{
+	OutError.Reset();
+	if (Package.Class != EMantleCosmeticClass::Avatar)
+	{
+		OutError = FString::Printf(TEXT("it is a %s item, not an avatar"), LexToString(Package.Class));
+		return nullptr;
+	}
+
+	// The package names its files by key; MakeItemJson is given each key as its own id, so its asset id fields carry keys.
+	TMap<FString, const FCookedDraftAsset*> ByKey;
+	TMap<FString, FString> IdsByKey;
+	for (const FCookedDraftAsset& Asset : Cooked)
+	{
+		if (Asset.Bytes.IsEmpty())
+		{
+			OutError = FString::Printf(TEXT("%s was cooked to nothing"), *Asset.Key);
+			return nullptr;
+		}
+		ByKey.Add(Asset.Key, &Asset);
+		IdsByKey.Add(Asset.Key, Asset.Key);
+	}
+	// The thumbnail is named by the item but never bundled.
+	if (!Package.ThumbnailKey.IsEmpty())
+	{
+		IdsByKey.Add(Package.ThumbnailKey, Package.ThumbnailKey);
+	}
+	// A draft is never listed, so a public item's rights declaration does not apply to it.
+	TOptional<FMantleCosmeticPackage> AsPrivate;
+	if (Package.Visibility != TEXT("private"))
+	{
+		AsPrivate.Emplace(Package);
+		AsPrivate->Visibility = TEXT("private");
+	}
+	FString CreateJson;
+	if (!(AsPrivate.IsSet() ? AsPrivate.GetValue() : Package).MakeItemJson(IdsByKey, CreateJson, OutError))
+	{
+		return nullptr;
+	}
+	TSharedPtr<FJsonObject> Item;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(CreateJson);
+	if (!FJsonSerializer::Deserialize(Reader, Item) || !Item.IsValid())
+	{
+		OutError = TEXT("the item could not be read back");
+		return nullptr;
+	}
+	// What only the create request carries.
+	for (const TCHAR* Field : { TEXT("visibility"), TEXT("rightsDeclarationVersion"), TEXT("provenance"), TEXT("thumbnailAssetId") })
+	{
+		Item->RemoveField(Field);
+	}
+
+	// Each asset id field becomes the reference the catalog serves in its place (backend avatar.AssetRef, without the url).
+	const auto ToRef = [&ByKey, &OutError](const TSharedPtr<FJsonObject>& Owner, const FString& Key, const FString& RefField) -> bool
+	{
+		if (Key.IsEmpty())
+		{
+			return true;
+		}
+		const FCookedDraftAsset* const* Asset = ByKey.Find(Key);
+		if (!Asset)
+		{
+			OutError = FString::Printf(TEXT("%s was not cooked"), *Key);
+			return false;
+		}
+		const TSharedRef<FJsonObject> Ref = MakeShared<FJsonObject>();
+		Ref->SetStringField(TEXT("cookedHash"), FMantleContentHash::OfBytes((*Asset)->Bytes).ToString());
+		Ref->SetNumberField(TEXT("cookedBytes"), static_cast<double>((*Asset)->Bytes.Num()));
+		Owner->SetObjectField(RefField, Ref);
+		return true;
+	};
+	const auto MoveRef = [&ToRef](const TSharedPtr<FJsonObject>& Owner, const TCHAR* IdField, const TCHAR* RefField) -> bool
+	{
+		FString Key;
+		Owner->TryGetStringField(IdField, Key);
+		Owner->RemoveField(IdField);
+		return ToRef(Owner, Key, RefField);
+	};
+	if (!MoveRef(Item, TEXT("meshAssetId"), TEXT("mesh")) || !MoveRef(Item, TEXT("faceMeshAssetId"), TEXT("faceMesh")))
+	{
+		return nullptr;
+	}
+	for (const TCHAR* List : { TEXT("materials"), TEXT("faceMaterials") })
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Sections = nullptr;
+		if (!Item->TryGetArrayField(List, Sections) || !Sections)
+		{
+			continue;
+		}
+		for (const TSharedPtr<FJsonValue>& Value : *Sections)
+		{
+			const TSharedPtr<FJsonObject> Section = Value.IsValid() && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
+			if (!Section.IsValid())
+			{
+				continue;
+			}
+			if (!MoveRef(Section, TEXT("albedoAssetId"), TEXT("albedo")) || !MoveRef(Section, TEXT("normalAssetId"), TEXT("normal"))
+				|| !MoveRef(Section, TEXT("ormAssetId"), TEXT("orm")))
+			{
+				return nullptr;
+			}
+			const TSharedPtr<FJsonObject>* NativeEye = nullptr;
+			const TSharedPtr<FJsonObject>* TextureIds = nullptr;
+			if (Section->TryGetObjectField(TEXT("nativeEye"), NativeEye) && NativeEye
+				&& (*NativeEye)->TryGetObjectField(TEXT("textureAssetIds"), TextureIds) && TextureIds)
+			{
+				const TSharedPtr<FJsonObject> Textures = MakeShared<FJsonObject>();
+				for (const TPair<FString, TSharedPtr<FJsonValue>>& Texture : (*TextureIds)->Values)
+				{
+					if (!ToRef(Textures, Texture.Value.IsValid() ? Texture.Value->AsString() : FString(), Texture.Key))
+					{
+						return nullptr;
+					}
+				}
+				const TSharedPtr<FJsonObject> Eye = *NativeEye;
+				Eye->RemoveField(TEXT("textureAssetIds"));
+				Eye->SetObjectField(TEXT("textures"), Textures);
+			}
+		}
+	}
+
+	// What the server copies from the cooked headers when it creates the item (backend avatar/items.go).
+	const FCookedDraftAsset* const* Body = ByKey.Find(Package.MeshKey);
+	const TSharedPtr<FJsonObject> BodyInfo = Body ? (*Body)->Info : nullptr;
+	FString Skeleton;
+	bool bGarmentCompatible = false;
+	if (!BodyInfo.IsValid() || !BodyInfo->TryGetStringField(TEXT("skeleton"), Skeleton))
+	{
+		OutError = TEXT("the cook did not say which skeleton the body has");
+		return nullptr;
+	}
+	BodyInfo->TryGetBoolField(TEXT("garmentCompatible"), bGarmentCompatible);
+	Item->SetStringField(TEXT("kind"), TEXT("avatar"));
+	Item->SetNumberField(TEXT("version"), 0);
+	Item->SetStringField(TEXT("skeleton"), Skeleton);
+	Item->SetBoolField(TEXT("garmentCompatible"), bGarmentCompatible);
+
+	const FCookedDraftAsset* const* Face = Package.FaceMeshKey.IsEmpty() ? nullptr : ByKey.Find(Package.FaceMeshKey);
+	const TSharedPtr<FJsonObject> FaceInfo = Face ? (*Face)->Info : nullptr;
+	const TSharedPtr<FJsonObject>* BodyMetrics = nullptr;
+	if (BodyInfo->TryGetObjectField(TEXT("metrics"), BodyMetrics) && BodyMetrics)
+	{
+		// avatarMetrics: as tall as the higher of the body and its face, with the face's eye height when the body has none.
+		const TSharedRef<FJsonObject> Metrics = MakeShared<FJsonObject>();
+		Metrics->Values = (*BodyMetrics)->Values;
+		const TArray<TSharedPtr<FJsonValue>>* FaceMax = nullptr;
+		if (FaceInfo.IsValid() && FaceInfo->TryGetArrayField(TEXT("max"), FaceMax) && FaceMax && FaceMax->Num() == 3)
+		{
+			double Standing = 0.0;
+			Metrics->TryGetNumberField(TEXT("standingHeightCm"), Standing);
+			const double FaceTop = FMath::RoundToDouble((*FaceMax)[2]->AsNumber() * 10.0) / 10.0;
+			Metrics->SetNumberField(TEXT("standingHeightCm"), FMath::Max(Standing, FaceTop));
+		}
+		double FaceEyes = 0.0;
+		if (!Metrics->HasField(TEXT("eyeHeightCm")) && FaceInfo.IsValid() && FaceInfo->TryGetNumberField(TEXT("eyeHeightCm"), FaceEyes))
+		{
+			Metrics->SetNumberField(TEXT("eyeHeightCm"), FaceEyes);
+		}
+		Item->SetObjectField(TEXT("bodyMetrics"), Metrics);
+	}
+
+	// The face's jaw when the creator named none: the contract's default, spelled as the face spells it.
+	const TArray<TSharedPtr<FJsonValue>>* FaceBones = nullptr;
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get();
+	if (!Item->HasField(TEXT("jawBone")) && Contract && FaceInfo.IsValid() && FaceInfo->TryGetArrayField(TEXT("bones"), FaceBones) && FaceBones)
+	{
+		const FString Default = Contract->FaceJawBoneDefault.ToString();
+		for (const TSharedPtr<FJsonValue>& Bone : *FaceBones)
+		{
+			if (Bone.IsValid() && Bone->Type == EJson::String && Bone->AsString().Equals(Default, ESearchCase::IgnoreCase))
+			{
+				Item->SetStringField(TEXT("jawBone"), Bone->AsString());
+				break;
+			}
+		}
+	}
+
+	// The catalog's generated column (migration 0084).
+	Item->SetBoolField(TEXT("customizationEligible"), Package.AvatarPublicationMode == TEXT("converted") && Skeleton == TEXT("metahuman")
+		&& bGarmentCompatible && !Package.FaceMeshKey.IsEmpty());
+	return Item;
+}
+
+bool MantlePreviewAvatarExport::WriteLocalDraft(const FString& BundleDir, const FMantleCosmeticPackage& Package, const TArray<FCookedDraftAsset>& Cooked,
+	FString& OutDescriptorRelPath, FString& OutBuiltinRelPath, FString& OutError)
+{
+	using namespace MantlePreviewAvatarExportPrivate;
+	OutDescriptorRelPath.Reset();
+	OutBuiltinRelPath.Reset();
+	OutError.Reset();
+
+	const FString Name = Package.Name.TrimStartAndEnd().IsEmpty() ? FString(TEXT("Your avatar")) : Package.Name.TrimStartAndEnd();
+	if (BundleDir.IsEmpty() || !IFileManager::Get().DirectoryExists(*BundleDir))
+	{
+		OutError = FString::Printf(TEXT("%s could not be bundled for the test: the bundle folder '%s' does not exist."), *Name, *BundleDir);
+		return false;
+	}
+	const FString AvatarDir = FPaths::Combine(BundleDir, TEXT("Avatar"));
+	// A partly written avatar is never left for the preview to find.
+	const auto Fail = [&OutError, &AvatarDir, &Name](const FString& Why) -> bool
+	{
+		OutError = FString::Printf(TEXT("%s could not be bundled for the test: %s"), *Name, *Why);
+		IFileManager::Get().DeleteDirectory(*AvatarDir, /*RequireExists*/ false, /*Tree*/ true);
+		return false;
+	};
+	IFileManager::Get().DeleteDirectory(*AvatarDir, /*RequireExists*/ false, /*Tree*/ true);
+
+	FString Why;
+	const TSharedPtr<FJsonObject> Item = MakeLocalDraftItem(Package, Cooked, Why);
+	if (!Item.IsValid())
+	{
+		return Fail(Why);
+	}
+	const FCookedDraftAsset* BodyMesh = Cooked.FindByPredicate([&Package](const FCookedDraftAsset& Asset) { return Asset.Key == Package.MeshKey; });
+	if (!BodyMesh)
+	{
+		return Fail(TEXT("its body mesh was not cooked"));
+	}
+	const FString ItemId = LocalDraftItemId(FMantleContentHash::OfBytes(BodyMesh->Bytes));
+	Item->SetStringField(TEXT("id"), ItemId);
+
+	// The manifest lists exactly the references item.json names: the client matches them one to one.
+	TArray<FExportRef> Refs;
+	if (!CollectRefs(Item, Refs, Why))
+	{
+		return Fail(Why);
+	}
+	TMap<FMantleContentHash, const FCookedDraftAsset*> ByHash;
+	for (const FCookedDraftAsset& Asset : Cooked)
+	{
+		ByHash.Add(FMantleContentHash::OfBytes(Asset.Bytes), &Asset);
+	}
+	const FString ItemDir = FPaths::Combine(AvatarDir, TEXT("Builtin"), ItemId);
+	if (!IFileManager::Get().MakeDirectory(*FPaths::Combine(ItemDir, TEXT("assets")), /*Tree*/ true))
+	{
+		return Fail(FString::Printf(TEXT("%s cannot be created"), *ItemDir));
+	}
+	TArray<TSharedPtr<FJsonValue>> ManifestAssets;
+	TSet<FMantleContentHash> Written;
+	for (const FExportRef& Ref : Refs)
+	{
+		const FCookedDraftAsset* const* Asset = ByHash.Find(Ref.Hash);
+		if (!Asset)
+		{
+			return Fail(FString::Printf(TEXT("%s names a file that was not cooked"), *Ref.Field));
+		}
+		bool bAlready = false;
+		Written.Add(Ref.Hash, &bAlready);
+		if (!bAlready && !FFileHelper::SaveArrayToFile((*Asset)->Bytes, *FPaths::Combine(ItemDir, TEXT("assets"), Ref.Hash.ToHex())))
+		{
+			return Fail(FString::Printf(TEXT("%s could not be written"), *Ref.Field));
+		}
+		const TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+		Entry->SetStringField(TEXT("field"), Ref.Field);
+		Entry->SetStringField(TEXT("cookedHash"), Ref.Hash.ToString());
+		Entry->SetNumberField(TEXT("cookedBytes"), static_cast<double>((*Asset)->Bytes.Num()));
+		Entry->SetStringField(TEXT("file"), TEXT("assets/") + Ref.Hash.ToHex());
+		ManifestAssets.Add(MakeShared<FJsonValueObject>(Entry));
+	}
+	if (ManifestAssets.IsEmpty())
+	{
+		return Fail(TEXT("it names no cooked files"));
+	}
+	// localDraft and version 0: never published, and never a made-up version. The client takes this only in the offline preview.
+	const TSharedRef<FJsonObject> Manifest = MakeShared<FJsonObject>();
+	Manifest->SetNumberField(TEXT("schema"), 1);
+	Manifest->SetStringField(TEXT("key"), ItemId);
+	Manifest->SetStringField(TEXT("itemId"), ItemId);
+	Manifest->SetNumberField(TEXT("version"), 0);
+	Manifest->SetBoolField(TEXT("localDraft"), true);
+	Manifest->SetArrayField(TEXT("assets"), ManifestAssets);
+	if (!WriteJsonFile(Item.ToSharedRef(), FPaths::Combine(ItemDir, TEXT("item.json")), Why)
+		|| !WriteJsonFile(Manifest, FPaths::Combine(ItemDir, TEXT("manifest.json")), Why)
+		|| !WriteDescriptor(AvatarDir, ItemId, 100, Why))
+	{
+		return Fail(Why);
+	}
+
+	OutDescriptorRelPath = TEXT("Avatar/descriptor.json");
+	OutBuiltinRelPath = TEXT("Avatar/Builtin");
+	UE_LOG(LogMantle, Display, TEXT("MANTLE_PREVIEW_AVATAR local-draft %s: %d file reference(s), %d distinct file(s)."), *ItemId, Refs.Num(), Written.Num());
 	return true;
 }

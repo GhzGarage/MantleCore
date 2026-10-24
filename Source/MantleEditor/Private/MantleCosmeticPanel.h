@@ -300,6 +300,8 @@ private:
 
 	FReply OnCheck();
 	FReply OnUpload();
+	/** Avatars (chunk 9): checks, then walks the creator around as this avatar in the Mantle app, offline, with nothing uploaded. */
+	FReply OnTestLocally();
 	FReply OnCancel();
 	EActiveTimerReturnType TickUpload(double InCurrentTime, float InDeltaTime);
 
@@ -479,6 +481,10 @@ private:
 	TOptional<FMantleCosmeticPackage> Package;
 	TSharedPtr<FMantleCosmeticUploadSession> Session;
 	FString ContractError;
+
+	/** What the last Test locally said (launched, or why not), shown under the buttons; empty before the first. */
+	FText TestLocallyResult;
+	bool bTestLocallyError = false;
 
 	TArray<TSharedPtr<EMantleCosmeticClass>> ClassOptions;
 	TArray<TSharedPtr<FString>> SlotOptions;

@@ -1,5 +1,9 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleTestLocally.h"
+#include "MantleAvatarContract.h"
+#include "MantleCosmeticExport.h"
+#include "MantleCosmeticPackage.h"
+#include "MantleEditorActions.h"
 
 #include "MantlePlaceSecrets.h"
 #include "MantlePreviewExport.h"
@@ -251,6 +255,64 @@ namespace MantleTestLocallyPrivate
 			}
 		}));
 
+	// Chunk 9: the Cosmetics panel's Test locally for an avatar without the panel, for a harness: the panel's default draft for
+	// the source, checked as Check does, then the same RunWithDraftAvatar the button calls.
+	FAutoConsoleCommand GMantleDevTestAvatarLocallyCommand(
+		TEXT("Mantle.Dev.TestAvatarLocally"),
+		TEXT("Mantle.Dev.TestAvatarLocally <SourceAsset> [as_is] -- checks the asset as an avatar (converted unless as_is) and runs Test locally with it ")
+		TEXT("as the preview player, cooked locally as a draft. Nothing uploads. Logs MANTLE_TEST_LOCALLY_LAUNCHED or MANTLE_TEST_LOCALLY_FAILED."),
+		FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+		{
+			if (Args.IsEmpty())
+			{
+				UE_LOG(LogMantle, Error, TEXT("MANTLE_TEST_LOCALLY_FAILED usage: Mantle.Dev.TestAvatarLocally <SourceAsset> [as_is]"));
+				return;
+			}
+			if (IAssetRegistry* Registry = IAssetRegistry::Get())
+			{
+				Registry->WaitForCompletion();
+			}
+			FString Path = Args[0];
+			if (!FPackageName::GetShortName(Path).Contains(TEXT(".")))
+			{
+				Path += TEXT(".") + FPackageName::GetShortName(Path);
+			}
+			UObject* Source = LoadObject<UObject>(nullptr, *Path);
+			FString ContractError;
+			const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+			if (!Source || !Contract)
+			{
+				UE_LOG(LogMantle, Error, TEXT("MANTLE_TEST_LOCALLY_FAILED %s"), !Source ? *FString::Printf(TEXT("%s did not load"), *Path) : *OneLine(ContractError));
+				return;
+			}
+			FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Avatar, Source, TEXT("avatar"), FString(), *Contract, EMantleFitSex::Auto);
+			Draft.AvatarPublicationMode = Args.Num() > 1 && Args[1].Equals(TEXT("as_is"), ESearchCase::IgnoreCase) ? TEXT("as_is") : TEXT("converted");
+			// The thumbnail is never bundled.
+			Draft.bRenderThumbnail = false;
+			const TSharedRef<FMantleCosmeticPackage> Package = MakeShared<FMantleCosmeticPackage>(FMantleCosmeticExport::Build(Draft, *Contract));
+			if (Package->HasErrors())
+			{
+				for (const FMantleCosmeticIssue& Issue : Package->Issues)
+				{
+					UE_LOG(LogMantle, Warning, TEXT("MANTLE_TEST_LOCALLY check %s"), *Issue.ToString());
+				}
+				UE_LOG(LogMantle, Error, TEXT("MANTLE_TEST_LOCALLY_FAILED the check found problems"));
+				return;
+			}
+			FMantleTestLocally& TestLocally = FMantleTestLocally::Get();
+			FString Error;
+			FString Notice;
+			if (TestLocally.RunWithDraftAvatar(Package, Error, Notice))
+			{
+				UE_LOG(LogMantle, Display, TEXT("MANTLE_TEST_LOCALLY_LAUNCHED %s client=%s %s%s%s"), *TestLocally.GetManifestFile(),
+					*TestLocally.GetClient().Source, *TestLocally.GetClient().ClientVersion, Notice.IsEmpty() ? TEXT("") : TEXT(" notice="), *OneLine(Notice));
+			}
+			else
+			{
+				UE_LOG(LogMantle, Error, TEXT("MANTLE_TEST_LOCALLY_FAILED %s"), Error.IsEmpty() ? TEXT("cancelled") : *OneLine(Error));
+			}
+		}));
+
 	FAutoConsoleCommand GMantlePreviewStopCommand(
 		TEXT("Mantle.Preview.Stop"),
 		TEXT("Mantle.Preview.Stop -- ends the preview process this editor started with Test Locally, and only that one. Logs MANTLE_TEST_LOCALLY_STOPPED."),
@@ -435,24 +497,11 @@ bool FMantleTestLocally::RunWithWeapon(const FMantleWeaponToTry& Weapon, FString
 		return Failed(FMantlePreviewExport::WeaponsNeedNewerClientMessage(), OutError);
 	}
 
-	UWorld* World = MantleTestLocallyPrivate::EditorWorldFor(nullptr);
-	const bool bSaved = !LevelNameOf(World).IsEmpty();
-	const bool bUnsavedChanges = World && World->GetOutermost()->IsDirty();
-	const FString RangePackage = WeaponTestRangePackage();
-	const EWeaponTestLevel Choice = ChooseWeaponTestLevel(bSaved, bUnsavedChanges, FPackageName::DoesPackageExist(RangePackage));
-	if (Choice == EWeaponTestLevel::AskToSave)
+	FString LevelError;
+	UWorld* World = PrepareTestLevel(TEXT("Opened a small test range to try your weapon in."), LevelError, OutNotice);
+	if (!World)
 	{
-		return Failed(WeaponTestRangeAskToSaveMessage(), OutError);
-	}
-	if (Choice != EWeaponTestLevel::UseOpenLevel)
-	{
-		FString RangeError;
-		World = MantleTestLocallyPrivate::OpenWeaponTestRange(Choice == EWeaponTestLevel::CreateTestRange, RangeError);
-		if (!World)
-		{
-			return Failed(RangeError, OutError);
-		}
-		OutNotice = TEXT("Opened a small test range to try your weapon in.");
+		return Failed(LevelError, OutError);
 	}
 
 	// Only the weapon just made: the creator's other builder weapons stay out of the test.
@@ -466,7 +515,74 @@ bool FMantleTestLocally::RunWithWeapon(const FMantleWeaponToTry& Weapon, FString
 	return bOk;
 }
 
-bool FMantleTestLocally::RunInternal(UWorld* World, const TArray<FMantleWeaponToTry>& Weapons, FString& OutError)
+UWorld* FMantleTestLocally::PrepareTestLevel(const FString& RangeNotice, FString& OutError, FString& OutNotice)
+{
+	UWorld* World = MantleTestLocallyPrivate::EditorWorldFor(nullptr);
+	const bool bSaved = !LevelNameOf(World).IsEmpty();
+	const bool bUnsavedChanges = World && World->GetOutermost()->IsDirty();
+	const FString RangePackage = WeaponTestRangePackage();
+	const EWeaponTestLevel Choice = ChooseWeaponTestLevel(bSaved, bUnsavedChanges, FPackageName::DoesPackageExist(RangePackage));
+	if (Choice == EWeaponTestLevel::AskToSave)
+	{
+		OutError = WeaponTestRangeAskToSaveMessage();
+		return nullptr;
+	}
+	if (Choice != EWeaponTestLevel::UseOpenLevel)
+	{
+		World = MantleTestLocallyPrivate::OpenWeaponTestRange(Choice == EWeaponTestLevel::CreateTestRange, OutError);
+		if (!World)
+		{
+			return nullptr;
+		}
+		OutNotice = RangeNotice;
+	}
+	return World;
+}
+
+bool FMantleTestLocally::RunWithDraftAvatar(const TSharedRef<const FMantleCosmeticPackage>& Avatar, FString& OutError, FString& OutNotice)
+{
+	OutError.Reset();
+	OutNotice.Reset();
+	if (bBusy)
+	{
+		OutError = TEXT("Test Locally is still working on the last request; wait for it to finish.");
+		return false;
+	}
+	TGuardValue<bool> BusyGuard(bBusy, true);
+	ResetRun();
+
+	// The client first, so a creator whose Mantle app is missing or too old is told so before any level is opened or made.
+	State = EMantleTestLocallyState::FindingClient;
+	++Revision;
+	FMantlePreviewClientInfo ClientInfo;
+	FString ClientError;
+	if (!EnsureClient(ClientInfo, ClientError))
+	{
+		return Failed(ClientError, OutError);
+	}
+	const FString TooOld = MantleTestLocallyPrivate::ClientTooOld(ClientInfo);
+	if (!TooOld.IsEmpty())
+	{
+		return Failed(TooOld, OutError);
+	}
+
+	FString LevelError;
+	UWorld* World = PrepareTestLevel(TEXT("Opened a small test range to walk around in as your avatar."), LevelError, OutNotice);
+	if (!World)
+	{
+		return Failed(LevelError, OutError);
+	}
+	LogStep(TEXT("draft-avatar"), Avatar->Name);
+	const bool bOk = RunInternal(World, TArray<FMantleWeaponToTry>(), OutError, Avatar);
+	if (bOk && !OutNotice.IsEmpty())
+	{
+		SetNotice(OutNotice, /*bError*/ false);
+	}
+	return bOk;
+}
+
+bool FMantleTestLocally::RunInternal(UWorld* World, const TArray<FMantleWeaponToTry>& Weapons, FString& OutError,
+	const TSharedPtr<const FMantleCosmeticPackage>& DraftAvatar)
 {
 	ResetRun();
 
@@ -510,6 +626,7 @@ bool FMantleTestLocally::RunInternal(UWorld* World, const TArray<FMantleWeaponTo
 	// Export for this client's features (an older client's answer names none), so what it cannot read is left out, not refused.
 	Options.Features = FMantleTargetFeatures::FromNames(ClientInfo.Features);
 	Options.Weapons = Weapons;
+	Options.DraftAvatar = DraftAvatar;
 	FMantlePreviewExportResult Export;
 	FMantlePreviewExport::Run(World, Options, Export);
 	if (Export.bCancelled)

@@ -2,6 +2,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MantleAssetStore.h"
+
+class FJsonObject;
+struct FMantleCosmeticPackage;
 
 /**
  * The avatar half of an offline preview bundle (#563 stage 2). The creator's chosen preview avatar is a catalog avatar
@@ -24,4 +28,36 @@ namespace MantlePreviewAvatarExport
 	 */
 	bool Write(const FString& BundleDir, FString& OutDescriptorRelPath, FString& OutBuiltinRelPath, FString& OutError,
 		bool bUseOwnAvatarWhenUnset = false);
+
+	/** One file of a checked avatar package after the local cook (mantle-cook): its package key, cooked bytes and the cook's info. */
+	struct FCookedDraftAsset
+	{
+		FString Key;
+		TArray<uint8> Bytes;
+		/** mantle-cook's result.info (cook.SkinnedInfo for a mesh); may be null. */
+		TSharedPtr<FJsonObject> Info;
+	};
+
+	/**
+	 * The id a local draft goes by: "itm_u" and the first 32 hex digits of its cooked body mesh's hash. It has the form of an item id
+	 * so the client's checks read it, but it names no catalog item; the manifest's localDraft flag is what keeps it out of real traffic.
+	 */
+	FString LocalDraftItemId(const FMantleContentHash& BodyMeshHash);
+
+	/**
+	 * The item a checked, not uploaded avatar would be once published, as POST /avatar/items/batch serves it (without URLs): the
+	 * package's own item (FMantleCosmeticPackage::MakeItemJson) with each asset id turned into {cookedHash, cookedBytes}, and what the
+	 * server copies from the cooked headers (skeleton, garmentCompatible, bodyMetrics, the face's jaw bone). Version 0: it is not published.
+	 * The thumbnail is left out (a bundle has no use for it). Null with OutError when the package is not an avatar or a file is missing.
+	 */
+	TSharedPtr<FJsonObject> MakeLocalDraftItem(const FMantleCosmeticPackage& Package, const TArray<FCookedDraftAsset>& Cooked, FString& OutError);
+
+	/**
+	 * Chunk 9: writes a checked avatar the creator has not uploaded as the preview player, with no network at all. The same layout as
+	 * Write (BundleDir/Avatar/descriptor.json and Avatar/Builtin/<id>/{manifest.json, item.json, assets/<hex>}), with the manifest flagged
+	 * "localDraft": true and version 0 (agreed with the client, which accepts that only in the offline preview). Cooked holds every
+	 * package file except the thumbnail. A failure leaves no Avatar folder behind.
+	 */
+	bool WriteLocalDraft(const FString& BundleDir, const FMantleCosmeticPackage& Package, const TArray<FCookedDraftAsset>& Cooked,
+		FString& OutDescriptorRelPath, FString& OutBuiltinRelPath, FString& OutError);
 }

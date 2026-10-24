@@ -578,6 +578,43 @@ bool MantleCosmetic::IsItemId(const FString& Value)
 	return true;
 }
 
+namespace MantleCosmeticLocalDraft
+{
+	FCriticalSection Lock;
+	TSet<FString> Ids;
+}
+
+void MantleCosmetic::RegisterLocalDraftId(const FString& ItemId)
+{
+	FScopeLock Scope(&MantleCosmeticLocalDraft::Lock);
+	MantleCosmeticLocalDraft::Ids.Add(ItemId);
+}
+
+bool MantleCosmetic::IsLocalDraftId(const FString& ItemId)
+{
+	FScopeLock Scope(&MantleCosmeticLocalDraft::Lock);
+	return MantleCosmeticLocalDraft::Ids.Contains(ItemId);
+}
+
+bool MantleCosmetic::ContainsLocalDraftId(const FString& Text)
+{
+	FScopeLock Scope(&MantleCosmeticLocalDraft::Lock);
+	for (const FString& Id : MantleCosmeticLocalDraft::Ids)
+	{
+		if (Text.Contains(Id, ESearchCase::CaseSensitive))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void MantleCosmetic::ClearLocalDraftIdsForTesting()
+{
+	FScopeLock Scope(&MantleCosmeticLocalDraft::Lock);
+	MantleCosmeticLocalDraft::Ids.Reset();
+}
+
 FString MantleCosmetic::BuildItemBatchBody(const TArray<FString>& ItemIds)
 {
 	TArray<TSharedPtr<FJsonValue>> Values;
