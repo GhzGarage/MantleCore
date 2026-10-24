@@ -151,6 +151,12 @@ bool FMantleOutfitSections::IsProp(const FMantleOutfitSection& Section)
 	return HasAny(Words(Section.SlotName), MakeArrayView(PropWords)) || HasAny(Words(Section.MaterialName), MakeArrayView(PropWords));
 }
 
+bool FMantleOutfitSections::IsPropName(const FString& Name)
+{
+	using namespace MantleOutfitSectionsPrivate;
+	return HasAny(Words(Name), MakeArrayView(PropWords));
+}
+
 const TCHAR* FMantleOutfitSections::PieceName(EMantleOutfitPiece Piece)
 {
 	switch (Piece)
