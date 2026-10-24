@@ -1614,9 +1614,54 @@ FString FMantleGarmentOutfit::GarmentSlot(const FString& MeshName, TConstArrayVi
 	return FMantleOutfitSections::PieceSlot(SectionPieces[0]);
 }
 
+// Named, not anonymous: MantleEditor builds as a unity build.
+namespace MantleGarmentOutfitPrivate
+{
+	/** Why Mesh can't be posed the way Body is (it shares too few of its bones); empty when it can. */
+	FString GarmentNotRiggedTo(const USkeletalMesh& Body, const USkeletalMesh& Mesh)
+	{
+		const FReferenceSkeleton& BodyBones = Body.GetRefSkeleton();
+		const FReferenceSkeleton& Bones = Mesh.GetRefSkeleton();
+		int32 Shared = 0;
+		for (int32 Bone = 0; Bone < Bones.GetRawBoneNum(); ++Bone)
+		{
+			Shared += BodyBones.FindRawBoneIndex(Bones.GetBoneName(Bone)) != INDEX_NONE ? 1 : 0;
+		}
+		return Shared * 2 < Bones.GetRawBoneNum() ? FString::Printf(TEXT("Isn't rigged to %s's skeleton, so it can't be posed the way the body is."), *Body.GetName()) : FString();
+	}
+
+	/** The reason every piece gets when Body wears clothing (Worn), naming BareBody to convert instead; then tops, bottoms, footwear. */
+	void GarmentsSettle(const USkeletalMesh& Body, const FString& Worn, const FString& BareBody, TArray<FMantleConvertGarment>& OutGarments)
+	{
+		// The clothing was made for a bare body, not one that wears clothing (Convert would make the MetaHuman of what Strip leaves).
+		if (!Worn.IsEmpty())
+		{
+			const FString Why = FString::Printf(TEXT("%s wears clothing (%s), so it isn't the bare body this was made for. Convert %s instead."),
+				*FMantleAvatarAssemblyFixer::DisplayName(Body.GetName()), *Worn, BareBody.IsEmpty() ? TEXT("the character's bare body") : *BareBody);
+			for (FMantleConvertGarment& Garment : OutGarments)
+			{
+				if (Garment.Why.IsEmpty())
+				{
+					Garment.Why = Why;
+				}
+			}
+		}
+		// Tops, bottoms, footwear, then merged clothing; within each, the pieces that can be Outfits first.
+		auto Rank = [](const FMantleConvertGarment& Garment)
+		{
+			return Garment.Slot == TEXT("top") ? 0 : Garment.Slot == TEXT("bottom") ? 1 : Garment.Slot == TEXT("footwear") ? 2 : 3;
+		};
+		OutGarments.StableSort([&Rank](const FMantleConvertGarment& A, const FMantleConvertGarment& B)
+		{
+			return Rank(A) != Rank(B) ? Rank(A) < Rank(B) : (A.Why.IsEmpty() && !B.Why.IsEmpty());
+		});
+	}
+}
+
 void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, TArray<FString>& OutNotOffered,
 	TArray<FString>* OutPaired)
 {
+	using namespace MantleGarmentOutfitPrivate;
 	OutGarments.Reset();
 	OutNotOffered.Reset();
 	const FString Folder = FPackageName::GetLongPackagePath(Body.GetPackage()->GetName());
@@ -1628,7 +1673,6 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 	TArray<FAssetData> Assets;
 	Registry.GetAssets(Filter, Assets);
 	Assets.Sort([](const FAssetData& A, const FAssetData& B) { return A.PackageName.LexicalLess(B.PackageName); });
-	const FReferenceSkeleton& BodyBones = Body.GetRefSkeleton();
 	const FString Worn = WornClothing(Body);
 	FString BareWhy;
 	const USkeletalMesh* Bare = Worn.IsEmpty() ? nullptr : FindBareBody(Body, BareWhy);
@@ -1680,15 +1724,9 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 			}
 			continue;
 		}
-		const FReferenceSkeleton& Bones = Mesh->GetRefSkeleton();
-		int32 Shared = 0;
-		for (int32 Bone = 0; Bone < Bones.GetRawBoneNum(); ++Bone)
+		if (Why.IsEmpty())
 		{
-			Shared += BodyBones.FindRawBoneIndex(Bones.GetBoneName(Bone)) != INDEX_NONE ? 1 : 0;
-		}
-		if (Why.IsEmpty() && Shared * 2 < Bones.GetRawBoneNum())
-		{
-			Why = FString::Printf(TEXT("Isn't rigged to %s's skeleton, so it can't be posed the way the body is."), *Body.GetName());
+			Why = GarmentNotRiggedTo(Body, *Mesh);
 		}
 		FMantleConvertGarment& Garment = OutGarments.AddDefaulted_GetRef();
 		Garment.Mesh = Mesh;
@@ -1769,28 +1807,52 @@ void FMantleGarmentOutfit::FindGarments(USkeletalMesh& Body, TArray<FMantleConve
 			OutGarments.RemoveAt(Index);
 		}
 	}
-	// The clothing was made for a bare body, not one that wears clothing (Convert would make the MetaHuman of what Strip leaves).
-	if (!Worn.IsEmpty())
+	GarmentsSettle(Body, Worn, BareBody, OutGarments);
+}
+
+void FMantleGarmentOutfit::GarmentsFromReview(USkeletalMesh& Body, const FMantlePackReview& Review, TArray<FMantleConvertGarment>& OutGarments)
+{
+	using namespace MantleGarmentOutfitPrivate;
+	OutGarments.Reset();
+	auto MeshOf = [&Review](const int32 Piece) -> USkeletalMesh*
 	{
-		const FString Why = FString::Printf(TEXT("%s wears clothing (%s), so it isn't the bare body this was made for. Convert %s instead."),
-			*FMantleAvatarAssemblyFixer::DisplayName(Body.GetName()), *Worn, BareBody.IsEmpty() ? TEXT("the character's bare body") : *BareBody);
-		for (FMantleConvertGarment& Garment : OutGarments)
+		const int32 Mesh = Review.Pieces.IsValidIndex(Piece) ? Review.Pieces[Piece].MeshIndex : INDEX_NONE;
+		return Review.Meshes.IsValidIndex(Mesh) ? Review.Meshes[Mesh].Get() : nullptr;
+	};
+	for (const FMantlePackReview::FItem& Item : Review.Items())
+	{
+		USkeletalMesh* Mesh = MeshOf(Item.Main);
+		if (!Mesh)
 		{
-			if (Garment.Why.IsEmpty())
+			continue;
+		}
+		FMantleConvertGarment& Garment = OutGarments.AddDefaulted_GetRef();
+		Garment.Mesh = Mesh;
+		Garment.Slot = Item.Slot;
+		TArray<FString> With;
+		for (const int32 Piece : Item.With)
+		{
+			if (USkeletalMesh* Trim = MeshOf(Piece))
 			{
-				Garment.Why = Why;
+				Garment.Trims.Add(Trim);
+				With.Add(Review.Pieces[Piece].Label);
 			}
 		}
+		Garment.Name = With.IsEmpty() ? Review.Pieces[Item.Main].Label : FString::Printf(TEXT("%s with %s"), *Review.Pieces[Item.Main].Label, *FString::Join(With, TEXT(" and ")));
+		Garment.Why = GarmentNotRiggedTo(Body, *Mesh);
+		UE_LOG(LogMantleGarmentOutfit, Display, TEXT("MANTLE_GARMENT_OUTFIT from the rows: %s slot=%s mesh=%s with=%s why=%s"), *Garment.Name, *Garment.Slot, *Mesh->GetPathName(),
+			*FString::Join(With, TEXT(", ")), *Garment.Why);
 	}
-	// Tops, bottoms, footwear, then merged clothing; within each, the pieces that can be Outfits first.
-	auto Rank = [](const FMantleConvertGarment& Garment)
+	// The best bare body of the pack that isn't Body, to name when Body wears clothing.
+	FString BareBody;
+	for (const FMantlePackBody& Other : Review.Bodies)
 	{
-		return Garment.Slot == TEXT("top") ? 0 : Garment.Slot == TEXT("bottom") ? 1 : Garment.Slot == TEXT("footwear") ? 2 : 3;
-	};
-	OutGarments.StableSort([&Rank](const FMantleConvertGarment& A, const FMantleConvertGarment& B)
-	{
-		return Rank(A) != Rank(B) ? Rank(A) < Rank(B) : (A.Why.IsEmpty() && !B.Why.IsEmpty());
-	});
+		if (Other.Rank >= 0 && BareBody.IsEmpty() && Review.Meshes.IsValidIndex(Other.MeshIndex) && Review.Meshes[Other.MeshIndex].Get() != &Body)
+		{
+			BareBody = Other.Label;
+		}
+	}
+	GarmentsSettle(Body, WornClothing(Body), BareBody, OutGarments);
 }
 
 void FMantleGarmentOutfit::FindSectionGarments(USkeletalMesh& Body, TArray<FMantleConvertGarment>& OutGarments, FString* OutNote)
@@ -1931,17 +1993,22 @@ double FMantleGarmentOutfit::TrimNear(const FMantleGlbMesh& Trim, const FMantleG
 	FMantleSkinnedMeshLOD Surface;
 	TArray<int32> PointOf;
 	WeldedSurface(Garment, Surface, PointOf);
+	return ShareOn(Trim.Positions, Surface, WithinCm);
+}
+
+double FMantleGarmentOutfit::ShareOn(const TConstArrayView<FVector3f> Points, const FMantleSkinnedMeshLOD& Surface, const float WithinCm)
+{
 	FMantleGarmentClearance Near;
-	if (!FMantleGarmentClearance::Compute(Trim.Positions, Surface, Near, FMantleGarmentClearance::DefaultSearchCm))
+	if (Points.IsEmpty() || !FMantleGarmentClearance::Compute(Points, Surface, Near, FMantleGarmentClearance::DefaultSearchCm))
 	{
 		return 0.0;
 	}
 	int32 Close = 0;
-	for (int32 Point = 0; Point < Trim.Positions.Num(); ++Point)
+	for (int32 Point = 0; Point < Points.Num(); ++Point)
 	{
 		Close += Near.IsTracked(Point) && FMath::Abs(Near.ClearanceCm[Point]) <= WithinCm ? 1 : 0;
 	}
-	return Trim.Positions.IsEmpty() ? 0.0 : static_cast<double>(Close) / Trim.Positions.Num();
+	return static_cast<double>(Close) / Points.Num();
 }
 
 void FMantleGarmentOutfit::AppendTrim(FMantleGlbMesh& Garment, const FMantleGlbMesh& Trim)

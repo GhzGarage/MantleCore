@@ -9,6 +9,7 @@ struct FMantleConvertContext;
 struct FMantleConvertGarment;
 struct FMantleConvertMetaHumanWork;
 struct FMantleOutfitSection;
+struct FMantlePackReview;
 struct FMeshDescription;
 struct FMantleSkinnedMeshLOD;
 struct FReferenceSkeleton;
@@ -270,6 +271,13 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 		TArray<FString>* OutPaired = nullptr);
 
 	/**
+	 * #55: the clothing Convert makes for Body from the pack review's rows as the creator left them (FMantlePackReview::Items): one
+	 * garment per item, its other pieces (edging, sleeves) as its Trims, named "Corset with Lace Corset and Lace Arms". The same
+	 * reasons as FindGarments say why a piece can't be an Outfit (too few of Body's bones; Body wears clothing). Top first.
+	 */
+	static void GarmentsFromReview(USkeletalMesh& Body, const FMantlePackReview& Review, TArray<FMantleConvertGarment>& OutGarments);
+
+	/**
 	 * A piece is trim on another (IsTrimOn) when it has at most TrimMaxTriangleShare of the other's triangles and at least
 	 * TrimNearShare of its points are within TrimNearCm of the other's surface, both as made (bind pose). An edging stands
 	 * up from the garment's rim, so not all of it lies on it: Vampire's corset lace (152 of the corset's 2650 triangles)
@@ -291,6 +299,9 @@ struct MANTLEEDITOR_API FMantleGarmentOutfit
 	 */
 	static double TrimNear(const FMantleGlbMesh& Trim, const FMantleGlbMesh& Garment, float WithinCm = TrimNearCm, int32* OutTrimTriangles = nullptr,
 		int32* OutGarmentTriangles = nullptr);
+
+	/** Pure (tested through TrimNear): the share of Points within WithinCm of Surface (FMantleGarmentClearance); 0 for no points. */
+	static double ShareOn(TConstArrayView<FVector3f> Points, const FMantleSkinnedMeshLOD& Surface, float WithinCm);
 
 	/**
 	 * Pure (tested): Trim's geometry added to Garment as more primitives (its materials after Garment's: OutMaterials gets

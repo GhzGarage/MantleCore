@@ -18,6 +18,15 @@ class SVerticalBox;
 struct FAssetData;
 struct FSlateDynamicImageBrush;
 template <typename OptionType> class SComboBox;
+struct FMantlePackReview;
+
+/** #55: one "Make it" choice of a pack review row: a slot (empty: not used), or into another piece (PartOf). */
+struct FMantlePackMove
+{
+	FString Label;
+	FString Slot;
+	int32 PartOf = INDEX_NONE;
+};
 
 /**
  * What the Cosmetics panel's Convert section shows, apart from Slate. Nothing here asks Epic: the
@@ -271,6 +280,25 @@ private:
 	FString ConvertStatus;
 	bool bConvertFailed = false;
 	TSharedPtr<SVerticalBox> ConvertBox;
+
+	/**
+	 * #55, "Found in this pack": the pack review of the picked character (FMantleCharacterSplit::ReviewFor), when its pack has
+	 * more than the one mesh. The body row picks the mesh Convert makes the MetaHuman of; the clothing rows are what it takes
+	 * (FMantleConvertOptions::Review), read again when Convert runs, so every change the creator makes counts.
+	 */
+	TSharedPtr<FMantlePackReview> ConvertReview;
+	/** Each row's "Make it" choices and the body choices, kept while their combo boxes show them. */
+	TArray<TSharedRef<TArray<TSharedPtr<FMantlePackMove>>>> PackMoveOptions;
+	TArray<TSharedPtr<int32>> PackBodyOptions;
+
+	/** #55: lists the fixes for the chosen body (the review's, else the selection), keeping the review's rows. */
+	void AnalyzeConvertBody();
+
+	/** #55: the "Found in this pack" rows, above the fix list. */
+	void AddPackReviewRows();
+
+	/** #55: rebuilds the rows on the next tick (bAnalyze: lists the fixes again first): a row's combo box outlives its own callback. */
+	void RefreshConvertRowsLater(bool bAnalyze);
 
 	FMantleCosmeticDraft Draft;
 	TOptional<FMantleCosmeticPackage> Package;

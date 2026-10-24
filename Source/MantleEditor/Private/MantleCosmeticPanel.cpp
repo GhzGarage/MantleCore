@@ -5,6 +5,7 @@
 #include "MantleAvatarContract.h"
 #include "MantleAvatarStripFixer.h"
 #include "MantleBuiltInMannequin.h"
+#include "MantleCharacterSplit.h"
 #include "MantleCosmeticItem.h"
 #include "MantleCosmeticPreview.h"
 #include "MantleCosmeticPreviewRetarget.h"
@@ -3666,6 +3667,7 @@ UObject* SMantleCosmeticPanel::GetConvertSelection() const
 
 void SMantleCosmeticPanel::ResetConvert()
 {
+	ConvertReview.Reset();
 	ConvertContext.Reset();
 	ConvertFixes.Reset();
 	ConvertResult.Reset();
@@ -3781,6 +3783,42 @@ FReply SMantleCosmeticPanel::OnAnalyzeConvert()
 	{
 		return FReply::Handled();
 	}
+	// #55: what the pack holds beside a character's skeletal mesh converted as an avatar, as rows the creator changes.
+	ConvertReview.Reset();
+	USkeletalMesh* Picked = Cast<USkeletalMesh>(Selection);
+	const bool bAvatar = Selection != Draft.Source.Get() || Draft.Slot.IsEmpty() || Draft.Slot == TEXT("avatar");
+	// Not a MetaHuman Creator assembly (its folder scans as one, as MakeContext checks).
+	const FString AssemblyFolder = Picked ? FMantleAvatarAssemblyFixer::AssemblyFolderOf(Picked) : FString();
+	FMantleAssemblyScan AssemblyScan;
+	FString ScanError;
+	const bool bAssembly = !AssemblyFolder.IsEmpty() && FMantleAvatarAssemblyFixer::Scan(AssemblyFolder, AssemblyScan, ScanError);
+	if (Picked && bAvatar && FMantleConvertSection::EffectiveRoute(ConvertRoute) == EMantleAvatarRoute::Convert && Picked->GetRefSkeleton().GetRawBoneNum() > 1 && !bAssembly)
+	{
+		FScopedSlowTask Progress(1.0f, LOCTEXT("ConvertScanning", "Looking at what's in the pack..."));
+		Progress.MakeDialogDelayed(0.5f);
+		Progress.EnterProgressFrame(1.0f);
+		const TSharedRef<FMantlePackReview> Review = MakeShared<FMantlePackReview>(FMantleCharacterSplit::ReviewFor(*Picked));
+		if (Review->HasRows() && Review->BodyMesh() != INDEX_NONE)
+		{
+			ConvertReview = Review;
+		}
+		else
+		{
+			UE_LOG(LogMantle, Log, TEXT("MANTLE_PACK %s: no rows (%s)"), *Picked->GetName(), Review->HasRows() ? TEXT("no bare body to offer") : TEXT("nothing beside it"));
+		}
+	}
+	AnalyzeConvertBody();
+	return FReply::Handled();
+}
+
+void SMantleCosmeticPanel::AnalyzeConvertBody()
+{
+	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
+	UObject* Selection = GetConvertSelection();
+	if (!Contract || !Selection)
+	{
+		return;
+	}
 	// The slot the panel shows applies to the panel's own asset; anything else converts for the slot it has (or as an avatar).
 	FMantleConvertOptions Options;
 	if (Selection == Draft.Source.Get())
@@ -3790,6 +3828,13 @@ FReply SMantleCosmeticPanel::OnAnalyzeConvert()
 	// #625: Convert unless As-is is allowed and picked. The fix list never asks Epic (MHBuild's line says the sign-in is
 	// checked when Convert runs).
 	Options.Route = FMantleConvertSection::EffectiveRoute(ConvertRoute);
+	// #55: the body the review's row chose, with the clothing its rows take.
+	const int32 BodyMesh = ConvertReview.IsValid() ? ConvertReview->BodyMesh() : INDEX_NONE;
+	if (ConvertReview.IsValid() && ConvertReview->Meshes.IsValidIndex(BodyMesh) && ConvertReview->Meshes[BodyMesh].IsValid())
+	{
+		Selection = ConvertReview->Meshes[BodyMesh].Get();
+		Options.Review = ConvertReview;
+	}
 	ConvertResult.Reset();
 	ConvertFixes.Reset();
 	ConvertContext = MakeShared<FMantleConvertContext>();
@@ -3805,7 +3850,7 @@ FReply SMantleCosmeticPanel::OnAnalyzeConvert()
 			bConvertFailed = true;
 			RefreshConvertRows();
 			UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT refused %s: %s"), *Selection->GetPathName(), *Error);
-			return FReply::Handled();
+			return;
 		}
 		ConvertFixes = FMantleAvatarConverter::Analyze(*ConvertContext);
 	}
@@ -3824,7 +3869,6 @@ FReply SMantleCosmeticPanel::OnAnalyzeConvert()
 		UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT fix %s"), *Key);
 	}
 	RefreshConvertRows();
-	return FReply::Handled();
 }
 
 FReply SMantleCosmeticPanel::OnRunConvert()
@@ -3841,6 +3885,11 @@ FReply SMantleCosmeticPanel::OnRunConvert()
 		FScopedSlowTask Progress(1.0f, LOCTEXT("ConvertRunning", "Converting. Making a MetaHuman can take several minutes; the editor waits until it is done."));
 		Progress.MakeDialog();
 		Progress.EnterProgressFrame(1.0f);
+		// #55: the clothing as the rows stand now (the creator may have changed them since the fixes were listed).
+		if (ConvertReview.IsValid() && ConvertContext->Parts.IsValidIndex(0) && ConvertContext->Parts[0].Original.IsValid())
+		{
+			FMantleGarmentOutfit::GarmentsFromReview(*ConvertContext->Parts[0].Original.Get(), *ConvertReview, ConvertContext->Garments);
+		}
 		ConvertResult = FMantleAvatarConverter::Convert(*ConvertContext, ConvertFixes, Options, *Contract);
 	}
 	int32 Ready = 0;
@@ -3866,6 +3915,8 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get();
 	if (!ConvertContext.IsValid() || !Contract)
 	{
+		// #55: a body that can't convert keeps the rows, so another can be picked.
+		AddPackReviewRows();
 		return;
 	}
 	auto PartLabel = [this, Contract](int32 PartIndex)
@@ -3883,7 +3934,9 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 
 	if (!ConvertResult.IsSet())
 	{
-		// The parts, then the fix list: one checkbox per fix, what is wrong and what it does; a line it can't fix greyed with why.
+		// #55: what the pack holds, as rows the creator changes; then the parts, then the fix list: one checkbox per fix, what is
+		// wrong and what it does; a line it can't fix greyed with why.
+		AddPackReviewRows();
 		TArray<FString> Parts;
 		for (int32 Index = 0; Index < ConvertContext->Parts.Num(); ++Index)
 		{
@@ -3896,7 +3949,7 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 		{
 			Clothing.Add(Garment.Why.IsEmpty() ? FString::Printf(TEXT("%s (%s)"), *Garment.Name, *Garment.Slot) : FString::Printf(TEXT("%s (can't: %s)"), *Garment.Name, *Garment.Why));
 		}
-		if (Clothing.Num() > 0)
+		if (Clothing.Num() > 0 && !ConvertReview.IsValid())
 		{
 			AddLine(FString::Printf(TEXT("Clothing: %s. After Convert, each piece gets a Use button that makes it a MetaHuman Outfit on this character's MetaHuman."),
 				*FString::Join(Clothing, TEXT("; "))), FSlateColor::UseSubduedForeground());
@@ -4121,6 +4174,286 @@ void SMantleCosmeticPanel::RefreshConvertRows()
 	];
 }
 
+void SMantleCosmeticPanel::RefreshConvertRowsLater(const bool bAnalyze)
+{
+	RegisterActiveTimer(0.0f, FWidgetActiveTimerDelegate::CreateSPLambda(this, [this, bAnalyze](double, float)
+	{
+		if (bAnalyze)
+		{
+			AnalyzeConvertBody();
+		}
+		else
+		{
+			RefreshConvertRows();
+		}
+		return EActiveTimerReturnType::Stop;
+	}));
+}
+
+void SMantleCosmeticPanel::AddPackReviewRows()
+{
+	PackMoveOptions.Reset();
+	PackBodyOptions.Reset();
+	if (!ConvertReview.IsValid() || !ConvertBox.IsValid())
+	{
+		return;
+	}
+	const FMantlePackReview& Review = *ConvertReview;
+	auto Subdued = [this](const FString& Text, const float Indent)
+	{
+		ConvertBox->AddSlot().AutoHeight().Padding(Indent, 0, 0, 2)
+		[
+			SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground()).Text(FText::FromString(Text))
+		];
+	};
+	ConvertBox->AddSlot().AutoHeight().Padding(0, 2, 0, 2)
+	[
+		SNew(STextBlock).Font(FAppStyle::GetFontStyle("NormalFontBold")).Text(LOCTEXT("PackHeading", "Found in this pack"))
+	];
+	Subdued(TEXT("Each piece is placed by where it sits on the body. Change any row: Convert uses them as you leave them."), 0.0f);
+
+	// The body Convert makes the MetaHuman of: the bare bodies of the pack, best first.
+	TSharedPtr<int32> ChosenBody;
+	TArray<FString> NotOffered;
+	for (int32 Index = 0; Index < Review.Bodies.Num(); ++Index)
+	{
+		if (Review.Bodies[Index].Rank < 0)
+		{
+			NotOffered.Add(FString::Printf(TEXT("%s (%s)"), *Review.Bodies[Index].Label, *Review.Bodies[Index].Why));
+			continue;
+		}
+		PackBodyOptions.Add(MakeShared<int32>(Index));
+		if (Index == Review.Body)
+		{
+			ChosenBody = PackBodyOptions.Last();
+		}
+	}
+	auto BodyText = [this](const int32 Index)
+	{
+		const FMantlePackBody* Body = ConvertReview.IsValid() && ConvertReview->Bodies.IsValidIndex(Index) ? &ConvertReview->Bodies[Index] : nullptr;
+		return Body ? FText::FromString(FString::Printf(TEXT("%s (%s)"), *Body->Label, *Body->Why)) : FText::GetEmpty();
+	};
+	ConvertBox->AddSlot().AutoHeight().Padding(0, 4, 0, 2)
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+		[
+			SNew(STextBlock).Text(LOCTEXT("PackBody", "Body:"))
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.0f)
+		[
+			SNew(SComboBox<TSharedPtr<int32>>)
+			.OptionsSource(&PackBodyOptions)
+			.InitiallySelectedItem(ChosenBody)
+			.IsEnabled_Lambda([this] { return !IsRunning(); })
+			.ToolTipText(LOCTEXT("PackBodyTooltip", "The body Convert makes the MetaHuman of. The pack's other bare bodies are listed; a body that wears clothing isn't one."))
+			.OnGenerateWidget_Lambda([BodyText](TSharedPtr<int32> Item)
+			{
+				return SNew(STextBlock).Text(Item.IsValid() ? BodyText(*Item) : FText::GetEmpty());
+			})
+			.OnSelectionChanged_Lambda([this](TSharedPtr<int32> Item, ESelectInfo::Type Info)
+			{
+				if (Info != ESelectInfo::Direct && Item.IsValid() && ConvertReview.IsValid() && ConvertReview->Body != *Item)
+				{
+					ConvertReview->Body = *Item;
+					UE_LOG(LogMantle, Log, TEXT("MANTLE_PACK body changed to %s"), *ConvertReview->Bodies[*Item].Label);
+					RefreshConvertRowsLater(/*bAnalyze*/ true);
+				}
+			})
+			[
+				SNew(STextBlock).Text_Lambda([this, BodyText] { return ConvertReview.IsValid() ? BodyText(ConvertReview->Body) : FText::GetEmpty(); })
+			]
+		]
+	];
+	if (NotOffered.Num() > 0)
+	{
+		Subdued(FString::Printf(TEXT("Other bodies in the pack, not used: %s."), *FString::Join(NotOffered, TEXT("; "))), 0.0f);
+	}
+
+	// One row per piece, grouped by where it goes; the pieces that go into one shown under it.
+	auto Order = [](const FString& Slot)
+	{
+		return Slot == TEXT("top") ? 0 : Slot == TEXT("bottom") ? 1 : Slot == TEXT("footwear") ? 2 : Slot == TEXT("accessory") ? 3 : Slot.IsEmpty() ? 5 : 4;
+	};
+	auto IsGarment = [](const FString& Slot) { return Slot == TEXT("top") || Slot == TEXT("bottom") || Slot == TEXT("footwear"); };
+	TArray<int32> Heads;
+	for (int32 Index = 0; Index < Review.Pieces.Num(); ++Index)
+	{
+		if (Review.Pieces[Index].PartOf == INDEX_NONE || !Review.Pieces.IsValidIndex(Review.Pieces[Index].PartOf))
+		{
+			Heads.Add(Index);
+		}
+	}
+	Heads.StableSort([&Review, &Order](const int32 A, const int32 B) { return Order(Review.Pieces[A].Slot) < Order(Review.Pieces[B].Slot); });
+	auto PieceRow = [this, &Review, &Subdued, &IsGarment](const int32 Index, const float Indent)
+	{
+		const FMantlePackPiece& Piece = Review.Pieces[Index];
+		const bool bUsed = !Piece.Slot.IsEmpty();
+		// "Make it": a slot, into another piece's item, or not used.
+		const TSharedRef<TArray<TSharedPtr<FMantlePackMove>>> Moves = MakeShared<TArray<TSharedPtr<FMantlePackMove>>>();
+		TSharedPtr<FMantlePackMove> Current;
+		auto AddMove = [&Moves, &Current, &Piece](const FString& Label, const FString& Slot, const int32 PartOf)
+		{
+			const TSharedPtr<FMantlePackMove> Move = MakeShared<FMantlePackMove>(FMantlePackMove{ Label, Slot, PartOf });
+			Moves->Add(Move);
+			if (PartOf != INDEX_NONE ? Piece.PartOf == PartOf : (Piece.PartOf == INDEX_NONE && Piece.Slot == Slot))
+			{
+				Current = Move;
+			}
+		};
+		AddMove(TEXT("Top"), TEXT("top"), INDEX_NONE);
+		AddMove(TEXT("Bottom"), TEXT("bottom"), INDEX_NONE);
+		AddMove(TEXT("Footwear"), TEXT("footwear"), INDEX_NONE);
+		AddMove(TEXT("Accessory"), TEXT("accessory"), INDEX_NONE);
+		AddMove(TEXT("Hair"), TEXT("hair"), INDEX_NONE);
+		if (bUsed && Piece.PartOf == INDEX_NONE && !Current.IsValid())
+		{
+			AddMove(Review.SlotHeading(Piece), Piece.Slot, INDEX_NONE);
+		}
+		for (int32 Other = 0; Other < Review.Pieces.Num(); ++Other)
+		{
+			if (Other != Index && Review.Pieces[Other].PartOf == INDEX_NONE && Review.Pieces[Other].bTicked && IsGarment(Review.Pieces[Other].Slot))
+			{
+				AddMove(FString::Printf(TEXT("Part of %s"), *Review.Pieces[Other].Label), FString(), Other);
+			}
+		}
+		AddMove(TEXT("Not used"), FString(), INDEX_NONE);
+		PackMoveOptions.Add(Moves);
+		ConvertBox->AddSlot().AutoHeight().Padding(Indent, 2, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			.ToolTipText(FText::FromString(Piece.Why))
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+			[
+				SNew(SCheckBox)
+				.Visibility(bUsed ? EVisibility::Visible : EVisibility::Hidden)
+				.IsEnabled_Lambda([this] { return !IsRunning(); })
+				.ToolTipText(LOCTEXT("PackTickTooltip", "Untick to leave this piece out of this conversion; tick it again to bring it back."))
+				.IsChecked_Lambda([this, Index]
+				{
+					return ConvertReview.IsValid() && ConvertReview->Pieces.IsValidIndex(Index) && ConvertReview->Pieces[Index].bTicked ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+				})
+				.OnCheckStateChanged_Lambda([this, Index](const ECheckBoxState State)
+				{
+					if (ConvertReview.IsValid() && ConvertReview->Pieces.IsValidIndex(Index))
+					{
+						ConvertReview->Pieces[Index].bTicked = State == ECheckBoxState::Checked;
+						UE_LOG(LogMantle, Log, TEXT("MANTLE_PACK %s %s"), *ConvertReview->Pieces[Index].Label, ConvertReview->Pieces[Index].bTicked ? TEXT("ticked") : TEXT("unticked"));
+					}
+				})
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.AutoWrapText(true)
+				.ColorAndOpacity_Lambda([this, Index]
+				{
+					return ConvertReview.IsValid() && ConvertReview->Pieces.IsValidIndex(Index) && ConvertReview->Pieces[Index].bTicked ? FSlateColor::UseForeground() : FSlateColor::UseSubduedForeground();
+				})
+				.Text_Lambda([this, Index] { return ConvertReview.IsValid() ? FText::FromString(ConvertReview->RowText(Index)) : FText::GetEmpty(); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 0, 0)
+			[
+				SNew(SComboBox<TSharedPtr<FMantlePackMove>>)
+				.OptionsSource(&Moves.Get())
+				.InitiallySelectedItem(Current)
+				.IsEnabled_Lambda([this] { return !IsRunning(); })
+				.ToolTipText(LOCTEXT("PackMoveTooltip", "Where this piece goes: a slot, into another piece's item (one item), or not used."))
+				.OnGenerateWidget_Lambda([](TSharedPtr<FMantlePackMove> Item)
+				{
+					return SNew(STextBlock).Text(Item.IsValid() ? FText::FromString(Item->Label) : FText::GetEmpty());
+				})
+				.OnSelectionChanged_Lambda([this, Index](TSharedPtr<FMantlePackMove> Item, ESelectInfo::Type Info)
+				{
+					if (Info != ESelectInfo::Direct && Item.IsValid() && ConvertReview.IsValid())
+					{
+						ConvertReview->Move(Index, Item->Slot, Item->PartOf);
+						UE_LOG(LogMantle, Log, TEXT("MANTLE_PACK %s made %s"), *ConvertReview->Pieces[Index].Label, *Item->Label);
+						RefreshConvertRowsLater(/*bAnalyze*/ false);
+					}
+				})
+				[
+					SNew(STextBlock).Text(FText::FromString(Current.IsValid() ? Current->Label : FString(TEXT("Not used"))))
+				]
+			]
+		];
+		if (!bUsed || Piece.Slot == TEXT("accessory") || (!IsGarment(Piece.Slot) && Piece.PartOf == INDEX_NONE))
+		{
+			Subdued(Piece.Why, Indent + 22.0f);
+		}
+	};
+	FString Group;
+	bool bNotMade = false;
+	for (const int32 Head : Heads)
+	{
+		const FMantlePackPiece& Piece = Review.Pieces[Head];
+		const FString Heading = Review.SlotHeading(Piece);
+		if (Heading != Group)
+		{
+			Group = Heading;
+			const FString Slot = Piece.Slot;
+			ConvertBox->AddSlot().AutoHeight().Padding(0, 6, 0, 0)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(STextBlock).Font(FAppStyle::GetFontStyle("NormalFontBold")).Text(FText::FromString(Heading + TEXT(":")))
+				]
+				// Several pieces in one slot: one item (the default), or one item each.
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12, 0, 0, 0)
+				[
+					SNew(SCheckBox)
+					.Visibility_Lambda([this, Slot, IsGarment]
+					{
+						int32 Ticked = 0;
+						if (ConvertReview.IsValid())
+						{
+							for (const FMantlePackPiece& Other : ConvertReview->Pieces)
+							{
+								Ticked += Other.bTicked && Other.Slot == Slot && Other.PartOf == INDEX_NONE ? 1 : 0;
+							}
+						}
+						return IsGarment(Slot) && Ticked > 1 ? EVisibility::Visible : EVisibility::Collapsed;
+					})
+					.ToolTipText(LOCTEXT("PackOneItemTooltip", "Ticked: the ticked pieces here make one item (a corset with its sleeves). Unticked: one item each."))
+					.IsChecked_Lambda([this, Slot] { return ConvertReview.IsValid() && ConvertReview->IsOneItem(Slot) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([this, Slot](const ECheckBoxState State)
+					{
+						if (ConvertReview.IsValid())
+						{
+							if (State == ECheckBoxState::Checked)
+							{
+								ConvertReview->Separate.Remove(Slot);
+							}
+							else
+							{
+								ConvertReview->Separate.Add(Slot);
+							}
+							UE_LOG(LogMantle, Log, TEXT("MANTLE_PACK %s: %s"), *Slot, State == ECheckBoxState::Checked ? TEXT("one item") : TEXT("one item each"));
+						}
+					})
+					[
+						SNew(STextBlock).Text(LOCTEXT("PackOneItem", "One item"))
+					]
+				]
+			];
+		}
+		bNotMade |= Piece.bTicked && !Piece.Slot.IsEmpty() && !IsGarment(Piece.Slot);
+		PieceRow(Head, 0.0f);
+		for (int32 Index = 0; Index < Review.Pieces.Num(); ++Index)
+		{
+			if (Review.Pieces[Index].PartOf == Head)
+			{
+				PieceRow(Index, 24.0f);
+			}
+		}
+	}
+	if (bNotMade)
+	{
+		Subdued(TEXT("Convert makes the body and the clothing (top, bottom, footwear). Accessories and hair aren't made by it yet: upload them under Accessory and Hair."), 0.0f);
+	}
+}
+
 void SMantleCosmeticPanel::LoadConvertedPart(const int32 PartIndex)
 {
 	const FMantleAvatarContract* Contract = FMantleAvatarContract::Get(&ContractError);
@@ -4304,7 +4637,7 @@ namespace MantleCosmeticPanelDevShot
 
 	FAutoConsoleCommand Command(
 		TEXT("Mantle.Dev.ConvertPanelShot"),
-		TEXT("Mantle.Dev.ConvertPanelShot <Character> <Directory> [Confirm keys]: converts a character in the Cosmetics panel, uses its first clothing piece, and renders the panel after each step. Nothing uploads."),
+		TEXT("Mantle.Dev.ConvertPanelShot <Character> <Directory> [Confirm keys] [body=<Mesh> untick=<Mesh> tick=<Mesh> move=<Mesh>:<slot|none> separate=<slot> ...] [list-only]: converts a character in the Cosmetics panel (the pack's rows changed step by step first, a picture after each), uses its first clothing piece, and renders the panel after each step. Nothing uploads."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&SMantleCosmeticPanel::DevConvertShot));
 }
 
@@ -4426,7 +4759,7 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 	using namespace MantleCosmeticPanelDevShot;
 	if (Args.Num() < 2)
 	{
-		UE_LOG(LogMantle, Error, TEXT("MANTLE_CONVERT_SHOT usage: Mantle.Dev.ConvertPanelShot <Character> <Directory> [Confirm keys]"));
+		UE_LOG(LogMantle, Error, TEXT("MANTLE_CONVERT_SHOT usage: Mantle.Dev.ConvertPanelShot <Character> <Directory> [Confirm keys] [body=<Mesh> untick=<Mesh> ...] [list-only]"));
 		return;
 	}
 	FString Path = Args[0];
@@ -4443,11 +4776,46 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 	}
 	const TSharedRef<SMantleCosmeticPanel> Panel = StaticCastSharedRef<SMantleCosmeticPanel>(Tab->GetContent());
 	const FString Stem = FPaths::Combine(Args[1], FPackageName::GetShortName(Character->GetOutermost()->GetName()));
+	// #55: the pack review's rows changed one step at a time (body=<Mesh>, untick=<Mesh>, tick=<Mesh>, move=<Mesh>:<slot>,
+	// separate=<slot>), a picture after each; list-only stops before Convert.
 	TArray<FString> Confirm;
-	if (Args.Num() > 2)
+	TArray<FString> Edits;
+	bool bListOnly = false;
+	for (int32 Arg = 2; Arg < Args.Num(); ++Arg)
 	{
-		Args[2].ParseIntoArray(Confirm, TEXT("+"));
+		if (Args[Arg] == TEXT("list-only"))
+		{
+			bListOnly = true;
+		}
+		else if (Args[Arg].Contains(TEXT("=")))
+		{
+			Edits.Add(Args[Arg]);
+		}
+		else
+		{
+			Args[Arg].ParseIntoArray(Confirm, TEXT("+"));
+		}
 	}
+	auto ConfirmAndShoot = [&Panel, &Confirm](const FString& File)
+	{
+		const TArray<FString> Keys = FMantleAvatarConverter::FixKeys(Panel->ConvertFixes);
+		for (int32 Index = 0; Index < Keys.Num(); ++Index)
+		{
+			if (Confirm.Contains(Keys[Index]))
+			{
+				Panel->ConvertFixes[Index].bEnabled = true;
+			}
+		}
+		Panel->RefreshConvertRows();
+		Save(Panel->ConvertBox.ToSharedRef(), File, 820.0f, 4000.0f);
+		// What Convert would take from the rows as they stand (OnRunConvert's own call).
+		if (Panel->ConvertReview.IsValid() && Panel->ConvertContext.IsValid() && Panel->ConvertContext->Parts.IsValidIndex(0) && Panel->ConvertContext->Parts[0].Original.IsValid())
+		{
+			TArray<FMantleConvertGarment> Garments;
+			FMantleGarmentOutfit::GarmentsFromReview(*Panel->ConvertContext->Parts[0].Original.Get(), *Panel->ConvertReview, Garments);
+			UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT %s: body %s, %d clothing item(s)"), *FPaths::GetCleanFilename(File), *Panel->ConvertContext->Parts[0].Original->GetName(), Garments.Num());
+		}
+	};
 
 	// Convert a character: pick it, list its fixes, tick the ones to confirm.
 	Panel->ConvertSource = Character;
@@ -4457,16 +4825,61 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 		UE_LOG(LogMantle, Error, TEXT("MANTLE_CONVERT_SHOT %s: %s"), *Path, *Panel->ConvertStatus);
 		return;
 	}
-	const TArray<FString> Keys = FMantleAvatarConverter::FixKeys(Panel->ConvertFixes);
-	for (int32 Index = 0; Index < Keys.Num(); ++Index)
+	ConfirmAndShoot(Stem + TEXT("_list.png"));
+	for (int32 Step = 0; Step < Edits.Num(); ++Step)
 	{
-		if (Confirm.Contains(Keys[Index]))
+		FString Key;
+		FString Value;
+		Edits[Step].Split(TEXT("="), &Key, &Value);
+		FMantlePackReview* Review = Panel->ConvertReview.Get();
+		const int32 Piece = Review ? Review->Pieces.IndexOfByPredicate([Review, &Value](const FMantlePackPiece& Each)
 		{
-			Panel->ConvertFixes[Index].bEnabled = true;
+			return Review->MeshNames.IsValidIndex(Each.MeshIndex) && Value.StartsWith(Review->MeshNames[Each.MeshIndex]) && (Value.Len() == Review->MeshNames[Each.MeshIndex].Len() || Value[Review->MeshNames[Each.MeshIndex].Len()] == TEXT(':'));
+		}) : INDEX_NONE;
+		if (!Review)
+		{
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_CONVERT_SHOT %s: no pack rows to change"), *Edits[Step]);
+			break;
 		}
+		if (Key == TEXT("body"))
+		{
+			const int32 Body = Review->Bodies.IndexOfByPredicate([Review, &Value](const FMantlePackBody& Each) { return Review->MeshNames.IsValidIndex(Each.MeshIndex) && Review->MeshNames[Each.MeshIndex] == Value; });
+			if (Body != INDEX_NONE)
+			{
+				Review->Body = Body;
+				Panel->AnalyzeConvertBody();
+			}
+		}
+		else if ((Key == TEXT("untick") || Key == TEXT("tick")) && Piece != INDEX_NONE)
+		{
+			Review->Pieces[Piece].bTicked = Key == TEXT("tick");
+		}
+		else if (Key == TEXT("move") && Piece != INDEX_NONE)
+		{
+			FString Slot;
+			Value.Split(TEXT(":"), nullptr, &Slot);
+			Review->Move(Piece, Slot == TEXT("none") ? FString() : Slot);
+		}
+		else if (Key == TEXT("separate"))
+		{
+			Review->Separate.Add(Value);
+		}
+		else
+		{
+			UE_LOG(LogMantle, Error, TEXT("MANTLE_CONVERT_SHOT %s: no such change or piece"), *Edits[Step]);
+			continue;
+		}
+		UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT changed %s"), *Edits[Step]);
+		for (const FString& Line : Review->Describe(Character->GetName()))
+		{
+			UE_LOG(LogMantle, Display, TEXT("%s"), *Line);
+		}
+		ConfirmAndShoot(FString::Printf(TEXT("%s_list_%d.png"), *Stem, Step + 1));
 	}
-	Panel->RefreshConvertRows();
-	Save(Panel->ConvertBox.ToSharedRef(), Stem + TEXT("_list.png"), 820.0f, 4000.0f);
+	if (bListOnly)
+	{
+		return;
+	}
 
 	Panel->OnRunConvert();
 	UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT converted: %s"), *Panel->ConvertStatus);

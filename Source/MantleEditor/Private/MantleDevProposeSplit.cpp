@@ -2,8 +2,9 @@
 //
 // Maintainer command: Mantle.Dev.ProposeSplit <SkeletalMesh> [<SkeletalMesh> ...]
 // Logs how each character would split into a body and clothing items (FMantleCharacterSplit::ProposeFor: the mesh, the skeletal meshes
-// beside it, their sections, bones and fused-clothing verdicts). Reads only; nothing is made, saved or uploaded and no renderer is
-// needed. Logs MANTLE_SPLIT lines.
+// beside it, their sections, bones and fused-clothing verdicts), then the pack review's rows (FMantleCharacterSplit::ReviewFor: where
+// each piece sits, its slot, what goes into it, what isn't used and why). Reads only; nothing is made, saved or uploaded and no
+// renderer is needed. Logs MANTLE_SPLIT and MANTLE_PACK lines.
 #include "MantleCharacterSplit.h"
 
 #include "Engine/SkeletalMesh.h"
@@ -36,6 +37,8 @@ namespace MantleDevProposeSplitPrivate
 			}
 			TArray<FMantleSplitSource> Sources;
 			FMantleCharacterSplit::ProposeFor(*Mesh, Sources);
+			// #55: the pack review's rows, as the Convert section shows them (MANTLE_PACK lines).
+			FMantleCharacterSplit::ReviewFor(*Mesh);
 		}
 		UE_LOG(LogMantleProposeSplit, Display, TEXT("MANTLE_SPLIT done"));
 	}
