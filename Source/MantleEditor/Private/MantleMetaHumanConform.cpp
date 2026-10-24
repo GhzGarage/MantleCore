@@ -604,6 +604,8 @@ bool FMantleMetaHumanConform::Conform(UStaticMesh& Posed, const TOptional<FVecto
 		return false;
 	}
 	Character->MarkPackageDirty();
+	OutResult.APoseBody = ExportBody;
+	OutResult.APoseHead = ExportHead;
 	// The guide's hand numbers on the final export, for the record (the bars are judged after the build).
 	TArray<USkinnedAsset*> Compiling = { ExportBody };
 	FSkinnedAssetCompilingManager::Get().FinishCompilation(Compiling);

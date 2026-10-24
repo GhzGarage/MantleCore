@@ -71,6 +71,10 @@ struct MANTLEEDITOR_API FMantleMetaHumanConformResult
 	/** The guide's hand numbers on the final A-pose export (MeasureHands), for the record. */
 	FMantleHandMeasure Hands;
 
+	/** The final A-pose body and head exports (Epic's MetaHuman skeleton, its joints where the conform put them); null until made. */
+	TWeakObjectPtr<USkeletalMesh> APoseBody;
+	TWeakObjectPtr<USkeletalMesh> APoseHead;
+
 	/** Every asset made (the character, its A-pose head and body exports), for the converter to record, or to discard on failure. */
 	TArray<TWeakObjectPtr<UObject>> Created;
 };

@@ -15,6 +15,7 @@
 #include "MantleMetaHumanBuild.h"
 #include "MantleMetaHumanConform.h"
 #include "MantleMetaHumanPose.h"
+#include "MantleUnriggedAsIs.h"
 #include "MantleUnriggedBody.h"
 #include "MantleCosmeticPanel.h"
 #include "MantleCreatorSignIn.h"
@@ -649,6 +650,8 @@ void FMantleEditorModule::StartupModule()
 	}
 	// #1011: Place Settings > Secrets.
 	FMantlePlaceSecretsDetails::Register();
+	// Chunk 7: As-is's auto-rig (a model with no rig keeps its look, skinned to Epic's MetaHuman body skeleton).
+	RegisterMantleUnriggedAsIsFixer();
 	// #610: the avatar converter's third-party rig fixer (Mixamo, Character Creator, Daz, guided mapping).
 	RegisterMantleAvatarRigMapFixer();
 	// #610: the avatar converter's Repose step (reference pose to the skeleton's A-pose).

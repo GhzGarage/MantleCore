@@ -169,7 +169,8 @@ public:
 	 * avatar, each garment and each hair piece as parts (MakeAssemblyContext); any other skeletal mesh one part for
 	 * Options.Slot. #776: a static mesh, or a skeletal mesh with no usable weights (FMantleUnriggedBody::HasNoUsableWeights),
 	 * has no skeleton: it yields one avatar part that Convert
-	 * fits to a MetaHuman body (FMantleUnriggedBody; Convert route only). #625: a MetaHuman Creator character asset (UMetaHumanCharacter: an Epic preset or the creator's own) one
+	 * fits to a MetaHuman body (FMantleUnriggedBody), or that As-is skins to Epic's MetaHuman body skeleton, keeping its look
+	 * (chunk 7, FMantleUnriggedAsIs; the part's Mesh stays null until the AsIsRig step makes it). #625: a MetaHuman Creator character asset (UMetaHumanCharacter: an Epic preset or the creator's own) one
 	 * avatar part with no mesh, the context's source the character (the MetaHuman-source route, FMantleMetaHumanSourceFixer;
 	 * Convert route only), output next to a character under /Game, else /Game/Converted. False with a sentence for the
 	 * creator for anything else.
