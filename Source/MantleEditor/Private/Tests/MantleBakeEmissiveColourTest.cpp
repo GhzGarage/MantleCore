@@ -1,6 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAvatarAtlasFixer.h"
 
+#include "Engine/EngineTypes.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -27,6 +28,32 @@ bool FMantleBakeEmissiveColourTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("dark fabric with glowing trim keeps its fabric"), FMantleAvatarAtlasFixer::BakesEmissiveAsColour(false, DarkFabric, Glow));
 	TestFalse(TEXT("an unlit material with no emissive keeps what it has"), FMantleAvatarAtlasFixer::BakesEmissiveAsColour(true, Grey, Black));
 	TestFalse(TEXT("no emissive baked, nothing changes"), FMantleAvatarAtlasFixer::BakesEmissiveAsColour(true, Grey, TArray<FColor>()));
+	return true;
+}
+
+
+// #167: the Hair shading model's Metallic pin is Scatter and its Normal pin the strand Tangent; the Eye model's Metallic is Curvature.
+// Neither is baked as metal (or the hair turns near-black); a default lit material bakes both.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMantleBakeShadingModelPinsTest,
+	"Mantle.Editor.AvatarAtlas.HairShadingPins",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMantleBakeShadingModelPinsTest::RunTest(const FString& Parameters)
+{
+	const FMaterialShadingModelField Lit(MSM_DefaultLit);
+	const FMaterialShadingModelField Hair(MSM_Hair);
+	const FMaterialShadingModelField Eye(MSM_Eye);
+	FMaterialShadingModelField Mixed(MSM_DefaultLit);
+	Mixed.AddShadingModel(MSM_Hair);
+
+	TestTrue(TEXT("a lit material bakes its metal"), FMantleAvatarAtlasFixer::BakesMetallic(Lit));
+	TestTrue(TEXT("a lit material bakes its normal"), FMantleAvatarAtlasFixer::BakesNormal(Lit));
+	TestFalse(TEXT("hair bakes metal 0 (its Metallic is Scatter)"), FMantleAvatarAtlasFixer::BakesMetallic(Hair));
+	TestFalse(TEXT("hair bakes a flat normal (its Normal is the strand Tangent)"), FMantleAvatarAtlasFixer::BakesNormal(Hair));
+	TestFalse(TEXT("an eye bakes metal 0 (its Metallic is Curvature)"), FMantleAvatarAtlasFixer::BakesMetallic(Eye));
+	TestTrue(TEXT("an eye keeps its normal"), FMantleAvatarAtlasFixer::BakesNormal(Eye));
+	TestFalse(TEXT("a material that may shade as hair bakes metal 0"), FMantleAvatarAtlasFixer::BakesMetallic(Mixed));
 	return true;
 }
 
