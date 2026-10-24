@@ -727,32 +727,27 @@ FMantleConvertResult FMantleAvatarConverter::Convert(FMantleConvertContext& Cont
 		Chosen.Add(ChoiceKeys[Index], Choices[Index].bEnabled);
 	}
 
-	// A line the creator must confirm (bNeedsConfirm, e.g. "the kept parts are bare skin") left unticked stops the
-	// whole conversion before anything is written or replaced.
-	auto Unconfirmed = [&Chosen](const FMantleConvertFix& Fix, const FString& FixKey)
-	{
-		// With "keep the face, choose a body" ticked nothing is stripped, so there is no bare skin to confirm.
-		if (Fix.Kind == FMantleAvatarStripFixer::KindBareSkin && FixKey.EndsWith(Fix.Kind.ToString()))
-		{
-			const FString FaceKey = FixKey.LeftChop(Fix.Kind.ToString().Len()) + FMantleAvatarStripFixer::KindFaceOnly.ToString();
-			if (const bool* Face = Chosen.Find(FaceKey); Face && *Face)
-			{
-				return false;
-			}
-		}
-		const bool* Choice = Chosen.Find(FixKey);
-		return Fix.bNeedsConfirm && !(Choice ? *Choice : Fix.bEnabled);
-	};
 	{
 		const TArray<FMantleConvertFix> Initial = Analyze(Context);
 		const TArray<FString> InitialKeys = FixKeys(Initial);
-		for (int32 Index = 0; Index < Initial.Num(); ++Index)
+		// The lines as the creator left them (a line the choices don't name keeps its default).
+		TArray<FMantleConvertFix> AsChosen = Initial;
+		for (int32 Index = 0; Index < AsChosen.Num(); ++Index)
 		{
-			if (Options.OnlyFixers.Num() > 0 && !Options.OnlyFixers.Contains(Initial[Index].FixerId))
+			if (const bool* Choice = Chosen.Find(InitialKeys[Index]))
+			{
+				AsChosen[Index].bEnabled = *Choice;
+			}
+		}
+		// A line the creator must confirm (bNeedsConfirm, e.g. "the kept parts are bare skin") left unticked stops the
+		// whole conversion before anything is written or replaced; with the face on a MetaHuman body there's no bare skin to confirm.
+		for (int32 Index = 0; Index < AsChosen.Num(); ++Index)
+		{
+			if (Options.OnlyFixers.Num() > 0 && !Options.OnlyFixers.Contains(AsChosen[Index].FixerId))
 			{
 				continue;
 			}
-			if (Unconfirmed(Initial[Index], InitialKeys[Index]))
+			if (FMantleAvatarStripFixer::IsUnconfirmed(AsChosen, AsChosen[Index]))
 			{
 				FMantleConvertOutcome Outcome;
 				Outcome.Fix = Initial[Index];
@@ -762,15 +757,7 @@ FMantleConvertResult FMantleAvatarConverter::Convert(FMantleConvertContext& Cont
 				Result.Failed.Add(MoveTemp(Outcome));
 			}
 		}
-		// With the face kept, the creator picks its body (masculine or feminine); Convert never guesses it.
-		TArray<FMantleConvertFix> AsChosen = Initial;
-		for (int32 Index = 0; Index < AsChosen.Num(); ++Index)
-		{
-			if (const bool* Choice = Chosen.Find(InitialKeys[Index]))
-			{
-				AsChosen[Index].bEnabled = *Choice;
-			}
-		}
+		// With the face on a MetaHuman body, the creator picks it (Women's or Men's); Convert never guesses it.
 		for (int32 PartIndex = 0; PartIndex < Context.Parts.Num(); ++PartIndex)
 		{
 			const FString Missing = FMantleAvatarStripFixer::MissingBodyChoice(AsChosen, PartIndex);
@@ -827,12 +814,20 @@ FMantleConvertResult FMantleAvatarConverter::Convert(FMantleConvertContext& Cont
 			}
 		}
 		const TArray<FString> Keys = FixKeys(Fixes);
+		TArray<FMantleConvertFix> FixesAsChosen = Fixes;
+		for (int32 Index = 0; Index < FixesAsChosen.Num(); ++Index)
+		{
+			if (const bool* Choice = Chosen.Find(Keys[Index]))
+			{
+				FixesAsChosen[Index].bEnabled = *Choice;
+			}
+		}
 		for (int32 Index = 0; Index < Fixes.Num(); ++Index)
 		{
 			FMantleConvertOutcome Outcome;
 			Outcome.Fix = Fixes[Index];
 			Outcome.Key = Keys[Index];
-			if (Unconfirmed(Outcome.Fix, Outcome.Key))
+			if (FMantleAvatarStripFixer::IsUnconfirmed(FixesAsChosen, FixesAsChosen[Index]))
 			{
 				// Met only now (an earlier fixer made the case for it): stop here.
 				Outcome.Reason = TEXT("not confirmed: tick it to convert (the conversion stopped here)");

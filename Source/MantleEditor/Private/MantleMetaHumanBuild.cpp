@@ -1101,7 +1101,7 @@ FString FMantleMetaHumanBuild::AssemblyNotBuiltMessage(const FString& Name, cons
 
 FString FMantleMetaHumanBuild::AssemblyFaceOnlyHint()
 {
-	return TEXT("Convert it again to keep only its face on MetaHuman's own body: tick Keep the face and choose Masculine body or Feminine body.");
+	return TEXT("Convert it again and pick Body: Put the face on a MetaHuman body, Women's or Men's.");
 }
 
 bool FMantleMetaHumanBuild::BodyLooksMergedWithClothing(const int32 BodyVertices, const int32 DnaVertices, const int32 ReferenceVertices)
