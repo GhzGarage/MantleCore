@@ -23,13 +23,13 @@ const TCHAR* FMantleCosmeticChecks::NotGarmentCompatibleMessage =
 	TEXT("not garment-compatible: export the MetaHuman with UE Optimized at Medium, High or Cinematic quality, without clothing");
 
 const TCHAR* FMantleCosmeticChecks::NotGarmentCompatibleHint =
-	TEXT("It still uploads as-is: it wears accessories and emotes, not 3D clothing. To wear clothing, pick it under Convert a character and choose Convert...: it becomes a MetaHuman.");
+	TEXT("It still uploads as-is: it wears accessories and emotes, not 3D clothing. To wear clothing, pick it under Avatar and choose Convert...: it becomes a MetaHuman.");
 
 const TCHAR* FMantleCosmeticChecks::ConvertFirstMessage =
 	TEXT("Convert it first: this body isn't a MetaHuman with Mantle's reference topology");
 
 const TCHAR* FMantleCosmeticChecks::ConvertFirstHint =
-	TEXT("Pick it under Convert a character and choose Convert...: it becomes a MetaHuman that wears clothing and takes the avatar options, at Mantle's default height.");
+	TEXT("Pick it under Avatar and choose Convert...: it becomes a MetaHuman that wears clothing and takes the avatar options, at Mantle's default height.");
 
 const TCHAR* FMantleCosmeticChecks::NotClothingReadyMessage =
 	TEXT("not clothing-ready yet: a converted MetaHuman wears no 3D clothing for now");
