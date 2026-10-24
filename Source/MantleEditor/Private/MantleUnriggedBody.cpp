@@ -106,6 +106,16 @@ FMantleUnriggedWeld FMantleUnriggedBody::WeldVertices(UDynamicMesh& Mesh, const 
 	return Out;
 }
 
+int32 FMantleUnriggedBody::RemoveUnusedVertices(UDynamicMesh& Mesh)
+{
+	int32 Removed = 0;
+	Mesh.EditMesh([&Removed](UE::Geometry::FDynamicMesh3& Edit)
+	{
+		Removed = Edit.RemoveUnusedVertices();
+	});
+	return Removed;
+}
+
 FString FMantleUnriggedBody::LoosePiecesMessage()
 {
 	return TEXT("This model's surface is made of loose pieces, so it can't be fitted. Re-export it with its vertices merged.");
@@ -359,6 +369,11 @@ bool FMantleUnriggedBody::MakePosedMesh(const FMantleConvertPart& Part, const FS
 		return false;
 	}
 
+	// #165: vertices no triangle uses go first. Epic's conform reads every vertex of the posed mesh's description, its render
+	// only the ones triangles draw, so one left over fails the conform's input check (ElfArden: 10 cm off); they would also
+	// count in the height, the scale and the arm estimate below.
+	const int32 UnusedVertices = RemoveUnusedVertices(*Copy);
+
 	// Coincident vertices are welded before anything reads the shape (a triangle soup tears in the conform), by position alone,
 	// WeldToleranceCm apart at the default height (the model's own units scaled by the height it is about to be scaled to).
 	// Still mostly loose after that: refused, nothing made.
@@ -366,9 +381,10 @@ bool FMantleUnriggedBody::MakePosedMesh(const FMantleConvertPart& Part, const FS
 	const double RawHeight = RawBounds.IsValid ? RawBounds.Max.Z - RawBounds.Min.Z : 0.0;
 	const double WeldTolerance = RawHeight > 0.0 && DefaultHeightCm > 0.0 ? WeldToleranceCm * RawHeight / DefaultHeightCm : WeldToleranceCm;
 	OutResult.Weld = WeldVertices(*Copy, WeldTolerance);
-	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_UNRIGGED weld: %d -> %d vertices (%s, %d triangles, tolerance %g; %d vertices in %d loose triangles, %.2f%% of the vertices, the limit %.0f%%)"),
-		OutResult.Weld.VerticesBefore, OutResult.Weld.VerticesAfter, *SourceName, OutResult.Weld.Triangles, WeldTolerance, OutResult.Weld.LooseVertices,
-		OutResult.Weld.LooseTriangles, 100.0 * OutResult.Weld.LooseShare(), 100.0 * MaxLooseVertexShare);
+	OutResult.Weld.UnusedRemoved = UnusedVertices;
+	UE_LOG(LogMantle, Log, TEXT("MANTLE_CONVERT_UNRIGGED weld: %d -> %d vertices (%s, %d triangles, tolerance %g; %d unused vertices removed first; %d vertices in %d loose triangles, %.2f%% of the vertices, the limit %.0f%%)"),
+		OutResult.Weld.VerticesBefore, OutResult.Weld.VerticesAfter, *SourceName, OutResult.Weld.Triangles, WeldTolerance, OutResult.Weld.UnusedRemoved,
+		OutResult.Weld.LooseVertices, OutResult.Weld.LooseTriangles, 100.0 * OutResult.Weld.LooseShare(), 100.0 * MaxLooseVertexShare);
 	if (OutResult.Weld.bLoosePieces)
 	{
 		OutError = LoosePiecesMessage();
