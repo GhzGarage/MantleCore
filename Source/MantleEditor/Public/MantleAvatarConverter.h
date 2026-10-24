@@ -9,6 +9,7 @@
 
 class FJsonObject;
 class FMantleAvatarContract;
+struct FMantlePackReview;
 class UObject;
 class USkeletalMesh;
 
@@ -43,6 +44,13 @@ struct MANTLEEDITOR_API FMantleConvertOptions
 	 * MHConform to make a MetaHuman of a garment's own body, without the build).
 	 */
 	TSet<FName> OnlyFixers;
+
+	/**
+	 * #55: the pack review's rows ("Found in this pack", FMantleCharacterSplit::ReviewFor) as the creator left them: the selection is
+	 * the body they chose, and its clothing comes from the rows (FMantleGarmentOutfit::GarmentsFromReview) instead of the pack's own
+	 * scan. Null: the scan decides, as before.
+	 */
+	TSharedPtr<const FMantlePackReview> Review;
 };
 
 /** What the upload checks say about one converted part. */

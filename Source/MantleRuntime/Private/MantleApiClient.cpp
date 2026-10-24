@@ -1335,6 +1335,11 @@ void FMantleApiClient::ServerSeatsHeartbeatAsync(const TArray<FString>& UserIds,
 	SendServerTokenRequest(TEXT("/server/seats/heartbeat"), BuildServerSeatsHeartbeatBody(UserIds), OnDone);
 }
 
+void FMantleApiClient::ServerPlaceReadyAsync(FMantleApiCallback OnDone)
+{
+	SendServerTokenRequest(TEXT("/server/sessions/place-ready"), TEXT("{}"), OnDone);
+}
+
 FString FMantleApiClient::ParseVerifiedUserId(const FMantleApiResult& Response)
 {
 	if (!Response.bSuccess)

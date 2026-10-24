@@ -2,6 +2,7 @@
 #include "MantleEditor.h"
 #include "MantleApiClient.h"
 #include "MantleAvatarHeightFixer.h"
+#include "MantleAvatarPropsFixer.h"
 #include "MantleAvatarReposeFixer.h"
 #include "MantleAssetLibrary.h"
 #include "MantleAvatarAtlasFixer.h"
@@ -657,6 +658,8 @@ void FMantleEditorModule::StartupModule()
 	RegisterMantleAvatarReposeFixer();
 	// #774: As-is avatars are resized to the default height, as Convert does.
 	RegisterMantleAvatarHeightFixer();
+	// #46: As-is drops cloth simulation, hidden sections and hand-held props, before AsIsHeight measures the body.
+	RegisterMantleAvatarPropsFixer();
 	// #625: Convert's Strip step (the body cut down to bare skin, once the creator confirms it is bare skin).
 	RegisterMantleAvatarStripFixer();
 	// #776: Convert's step for a model with no skeleton (arms bent into an A-pose, scaled to the default height; takes Strip's and the A-pose step's place).

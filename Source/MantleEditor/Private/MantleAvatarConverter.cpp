@@ -1,5 +1,7 @@
 // Copyright Joshua Eger. All Rights Reserved.
 #include "MantleAvatarConverter.h"
+
+#include "MantleCharacterSplit.h"
 #include "MantleAvatarStripFixer.h"
 #include "MantleAvatarContract.h"
 #include "MantleEditorActions.h"
@@ -110,6 +112,10 @@ namespace MantleAvatarConverterPrivate
 		if (FixerId == MantleAvatarFixerIds::AsIsHeight)
 		{
 			return NSLOCTEXT("MantleAvatarConverter", "StepAsIsHeight", "Setting the avatar to the default height...");
+		}
+		if (FixerId == MantleAvatarFixerIds::Props)
+		{
+			return NSLOCTEXT("MantleAvatarConverter", "StepProps", "Removing held props and cloth simulation...");
 		}
 		if (FixerId == MantleAvatarFixerIds::Repose)
 		{
@@ -455,6 +461,12 @@ bool FMantleAvatarConverter::MakeContext(UObject* Selection, const FMantleConver
 	// A third-party avatar's body picked on its own: its separate clothing beside it, which can become MetaHuman Outfits on
 	// the MetaHuman Convert makes of this body.
 	if (!InAssembly && Class == EMantleCosmeticClass::Avatar && OutContext.Route == EMantleAvatarRoute::Convert && !Part.bUnrigged
+		&& Options.OnlyFixers.Num() == 0 && Options.Review.IsValid())
+	{
+		// #55: the clothing the creator left ticked in the pack review's rows.
+		FMantleGarmentOutfit::GarmentsFromReview(*Mesh, *Options.Review, OutContext.Garments);
+	}
+	else if (!InAssembly && Class == EMantleCosmeticClass::Avatar && OutContext.Route == EMantleAvatarRoute::Convert && !Part.bUnrigged
 		&& Options.OnlyFixers.Num() == 0)
 	{
 		TArray<FString> NotOffered;

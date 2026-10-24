@@ -29,6 +29,8 @@ class UObject;
  *               becomes a skeletal mesh on that skeleton for the as-is fixers after it (RigMap skips it)
  *   RigMap      (as-is) third-party rig (Mixamo, Character Creator, Daz, guided mapping) onto a supported skeleton
  *   Repose      (as-is) the reference pose re-posed to the skeleton's A-pose, the mesh re-bound in it
+ *   Props       (as-is, #46) cloth simulation, hidden sections and held props (weapons) removed, on a copy (FMantleAvatarPropsFixer);
+ *               before AsIsHeight, so the height is measured without them (Riktor's 7 m chain)
  *   AsIsHeight  (as-is, #774) the body scaled about its feet to the default height (FMantleAvatarHeight::TargetCm), as Convert does
  *   Strip       (convert) the body cut down to bare skin: clothing, hair, eyes and the pieces inside the head removed, on a
  *               copy, once the creator confirms the kept parts are bare skin (pipeline step 01)
@@ -61,6 +63,7 @@ namespace MantleAvatarFixerIds
 	inline const FName RigMap(TEXT("RigMap"));
 	inline const FName Repose(TEXT("Repose"));
 	inline const FName AsIsHeight(TEXT("AsIsHeight"));
+	inline const FName Props(TEXT("Props"));
 	inline const FName Strip(TEXT("Strip"));
 	inline const FName MHUnrigged(TEXT("MHUnrigged"));
 	inline const FName MHPose(TEXT("MHPose"));
