@@ -194,9 +194,13 @@ const TCHAR* LexToString(const EMantleRefitCorrespondence Path)
 
 FString FMantleRefitPushOut::ToString() const
 {
-	const FString Line = FString::Printf(TEXT("%d of %d under the skin (deepest %.2f cm), %d moved (largest %.2f cm), %d left under (%d deeper than %.0f cm)"),
-		InsideBefore, Tracked, DeepestCm, Moved, MaxMoveCm, InsideAfter, TooDeep, FMantleAvatarRefit::MaxPushDepthCm);
-	return SkinThroughBefore < 0 ? Line : FString::Printf(TEXT("%s; skin through it between vertices %d, covered to %d"), *Line, SkinThroughBefore, SkinThroughAfter);
+	FString Line = FString::Printf(TEXT("%d of %d under the skin (deepest %.2f cm), %d moved (largest %.2f cm), %d left under (%d deeper than %.0f cm, %d under their own shell, %d under cover further than %.0f cm from an opening)"),
+		InsideBefore, Tracked, DeepestCm, Moved, MaxMoveCm, InsideAfter, TooDeep, FMantleAvatarRefit::MaxPushDepthCm, UnderShell, UnderCover, FMantleAvatarRefit::OpeningReachCm);
+	if (SkinThroughBefore >= 0)
+	{
+		Line += FString::Printf(TEXT("; skin through it between vertices %d, covered to %d"), SkinThroughBefore, SkinThroughAfter);
+	}
+	return Detail.IsEmpty() ? Line : FString::Printf(TEXT("%s; %s"), *Line, *Detail);
 }
 
 FVector3f FMantleRefitPlan::Warp(const FVector3f& P) const
@@ -890,6 +894,75 @@ bool FMantleAvatarRefit::PushOutOfBody(FMeshDescription& Mesh, const FMantleSkin
 	return true;
 }
 
+TArray<float> FMantleAvatarRefit::DistanceToOpenings(const FMantleSkinnedMeshLOD& Garment)
+{
+	const int32 N = Garment.NumVertices();
+	TArray<float> Distance;
+	Distance.Init(TNumericLimits<float>::Max(), N);
+	if (N == 0 || Garment.NumTriangles() == 0)
+	{
+		return Distance;
+	}
+	// Edges with their triangle counts, and each vertex's neighbours.
+	TMap<uint64, int32> EdgeTriangles;
+	TArray<TArray<int32>> Neighbours;
+	Neighbours.SetNum(N);
+	auto Key = [](const int32 A, const int32 B) { return (static_cast<uint64>(FMath::Min(A, B)) << 32) | static_cast<uint32>(FMath::Max(A, B)); };
+	for (int32 Triangle = 0; Triangle < Garment.NumTriangles(); ++Triangle)
+	{
+		const int32 V[3] = { static_cast<int32>(Garment.Indices[Triangle * 3]), static_cast<int32>(Garment.Indices[Triangle * 3 + 1]), static_cast<int32>(Garment.Indices[Triangle * 3 + 2]) };
+		for (int32 Corner = 0; Corner < 3; ++Corner)
+		{
+			const int32 A = V[Corner];
+			const int32 B = V[(Corner + 1) % 3];
+			if (A == B || !Garment.Positions.IsValidIndex(A) || !Garment.Positions.IsValidIndex(B))
+			{
+				continue;
+			}
+			if (++EdgeTriangles.FindOrAdd(Key(A, B)) == 1)
+			{
+				Neighbours[A].Add(B);
+				Neighbours[B].Add(A);
+			}
+		}
+	}
+	// Dijkstra from every vertex of an open edge (an edge with one triangle), along the edges.
+	TArray<TPair<float, int32>> Heap;
+	for (const TPair<uint64, int32>& Edge : EdgeTriangles)
+	{
+		if (Edge.Value == 1)
+		{
+			for (const int32 Vertex : { static_cast<int32>(Edge.Key >> 32), static_cast<int32>(Edge.Key & 0xffffffffu) })
+			{
+				if (Distance[Vertex] > 0.0f)
+				{
+					Distance[Vertex] = 0.0f;
+					Heap.HeapPush(TPair<float, int32>(0.0f, Vertex));
+				}
+			}
+		}
+	}
+	while (Heap.Num() > 0)
+	{
+		TPair<float, int32> Top;
+		Heap.HeapPop(Top, EAllowShrinking::No);
+		if (Top.Key > Distance[Top.Value])
+		{
+			continue;
+		}
+		for (const int32 Next : Neighbours[Top.Value])
+		{
+			const float Through = Top.Key + FVector3f::Dist(Garment.Positions[Top.Value], Garment.Positions[Next]);
+			if (Through < Distance[Next])
+			{
+				Distance[Next] = Through;
+				Heap.HeapPush(TPair<float, int32>(Through, Next));
+			}
+		}
+	}
+	return Distance;
+}
+
 bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError, const bool bCoverSkin)
 {
 	Out = FMantleRefitPushOut();
@@ -905,6 +978,21 @@ bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMa
 		return false;
 	}
 	Target.UntrackBoundary(Body);
+	// #153: an inner layer under its own shell (its layer twin outside the skin) is left where it is. The restore couples a
+	// vertex and its twin to the larger push, so pushing a padded cup's lining out of the bust pushed the whole cup out and
+	// folded it (Vampire's corset: 124 vertices under, 1465 moved, up to 5 cm). The client's coverage hides the skin under
+	// the shell. Read on the clearances as measured, before any target is raised.
+	TArray<int32> Twin;
+	FMantleLayerCrossing::FindTwins(Garment, Twin);
+	// #153, try 2: how far each vertex is from the garment's nearest opening (an edge with one triangle), along the
+	// surface. Skin is only visible at the openings: under the rest of the garment the client's coverage hides it, so a
+	// vertex under the skin there is left where it is instead of being pushed out (a corset cinches tighter than the
+	// body; pushing its waist out stretched the front panel and folded the cups).
+	const TArray<float> OpeningCm = DistanceToOpenings(Garment);
+	const TArray<float> Measured = Target.ClearanceCm;
+	// The under-skin vertices by depth and by distance to an opening, for the log.
+	int32 DepthBuckets[5] = { 0, 0, 0, 0, 0 };
+	int32 OpeningBuckets[5] = { 0, 0, 0, 0, 0 };
 	for (int32 Vertex = 0; Vertex < Garment.NumVertices(); ++Vertex)
 	{
 		if (!Target.IsTracked(Vertex))
@@ -912,11 +1000,15 @@ bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMa
 			continue;
 		}
 		++Out.Tracked;
-		const float Clearance = Target.ClearanceCm[Vertex];
+		const float Clearance = Measured[Vertex];
 		if (Clearance < 0.0f)
 		{
 			++Out.InsideBefore;
 			Out.DeepestCm = FMath::Max(Out.DeepestCm, -Clearance);
+			const float Depth = -Clearance;
+			++DepthBuckets[Depth < 0.5f ? 0 : Depth < 1.0f ? 1 : Depth < 2.0f ? 2 : Depth < 4.0f ? 3 : 4];
+			const float Opening = OpeningCm.IsValidIndex(Vertex) ? OpeningCm[Vertex] : TNumericLimits<float>::Max();
+			++OpeningBuckets[Opening < 1.0f ? 0 : Opening < 2.0f ? 1 : Opening < 4.0f ? 2 : Opening < 8.0f ? 3 : 4];
 		}
 		if (Clearance < -MaxPushDepthCm)
 		{
@@ -924,7 +1016,26 @@ bool FMantleAvatarRefit::PushOutOfBody(FMantleSkinnedMeshLOD& Garment, const FMa
 			Target.Untrack(Vertex);
 			continue;
 		}
+		const int32 Other = Twin.IsValidIndex(Vertex) ? Twin[Vertex] : INDEX_NONE;
+		if (Clearance < 0.0f && Other != INDEX_NONE && Target.IsTracked(Other) && Measured[Other] >= 0.0f)
+		{
+			++Out.UnderShell;
+			Target.Untrack(Vertex);
+			continue;
+		}
+		if (Clearance < 0.0f && OpeningCm.IsValidIndex(Vertex) && OpeningCm[Vertex] > OpeningReachCm)
+		{
+			++Out.UnderCover;
+			Target.Untrack(Vertex);
+			continue;
+		}
 		Target.ClearanceCm[Vertex] = FMath::Max(Clearance, PushOutCm);
+	}
+	if (Out.InsideBefore > 0)
+	{
+		Out.Detail = FString::Printf(TEXT("under the skin by <0.5 cm %d, <1 %d, <2 %d, <4 %d, more %d; from an opening <1 cm %d, <2 %d, <4 %d, <8 %d, further %d"),
+			DepthBuckets[0], DepthBuckets[1], DepthBuckets[2], DepthBuckets[3], DepthBuckets[4],
+			OpeningBuckets[0], OpeningBuckets[1], OpeningBuckets[2], OpeningBuckets[3], OpeningBuckets[4]);
 	}
 
 	const FMantleSkinnedMeshLOD Before = Garment;

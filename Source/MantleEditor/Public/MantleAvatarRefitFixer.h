@@ -38,6 +38,23 @@ struct MANTLEEDITOR_API FMantleRefitPushOut
 	/** Vertices deeper than FMantleAvatarRefit::MaxPushDepthCm, left where they are (the client's coverage hides the skin there). */
 	int32 TooDeep = 0;
 
+	/**
+	 * #153: vertices under the skin whose layer twin (FMantleLayerCrossing) is outside it, left where they are: the inner layer
+	 * of a padded cup or a lined piece, under its own shell. Pushed, the twin coupling would push the shell with it and fold the piece;
+	 * left, the client's coverage hides the skin under the shell.
+	 */
+	int32 UnderShell = 0;
+
+	/**
+	 * #153: vertices under the skin further than FMantleAvatarRefit::OpeningReachCm along the surface from any opening of the
+	 * garment, left where they are: skin is only visible at the openings, and the client's coverage hides it under the rest (a
+	 * corset cinches tighter than the body; pushing its waist out stretched the front and folded the cups).
+	 */
+	int32 UnderCover = 0;
+
+	/** The under-skin vertices by depth and by distance to an opening ("under the skin by <0.5 cm 12, ..."); empty when none. */
+	FString Detail;
+
 	/** Vertices moved, and the largest move, cm. */
 	int32 Moved = 0;
 	double MaxMoveCm = 0.0;
@@ -218,11 +235,22 @@ public:
 	/** ... unless they sit deeper than this, cm: a part made to pass under the skin (the client's coverage hides it). */
 	static constexpr float MaxPushDepthCm = 6.0f;
 
+	/** ... or further than this from any opening of the garment, along its surface, cm (#153: skin is only visible at the openings). */
+	static constexpr float OpeningReachCm = 4.0f;
+
+	/**
+	 * Each vertex's distance along the surface (Dijkstra over the edges) to the nearest opening of Garment: an edge with one
+	 * triangle. Max for a vertex no opening reaches (a closed surface, or one with no triangles). Pure (tested).
+	 */
+	static TArray<float> DistanceToOpenings(const FMantleSkinnedMeshLOD& Garment);
+
 	/**
 	 * After the warp: every vertex of Mesh under Body's skin (FMantleGarmentClearance, the open neck ring left out) is
 	 * pushed out to PushOutCm, and every vertex at the skin up to it, by the client's clearance restore
 	 * (FMantleClearanceRestore: a smoothed push field, layer twins moved together, triangles never turned over). Vertices
-	 * deeper than MaxPushDepthCm stay. Positions only. False with why on bad inputs.
+	 * deeper than MaxPushDepthCm stay, and so do an inner layer under its own shell (#153, FMantleRefitPushOut::UnderShell:
+	 * a vertex under the skin whose layer twin is outside it) and a vertex further than OpeningReachCm from any opening
+	 * (FMantleRefitPushOut::UnderCover). Positions only. False with why on bad inputs.
 	 */
 	static bool PushOutOfBody(FMeshDescription& Mesh, const FMantleSkinnedMeshLOD& Body, FMantleRefitPushOut& Out, FString& OutError, bool bCoverSkin = false);
 
