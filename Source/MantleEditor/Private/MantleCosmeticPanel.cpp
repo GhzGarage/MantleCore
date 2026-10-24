@@ -44,6 +44,7 @@
 #include "Animation/Skeleton.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
+#include "ChaosClothAsset/ClothAssetBase.h"
 #include "ChaosOutfitAsset/OutfitAsset.h"
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -1207,8 +1208,11 @@ bool SMantleCosmeticPanel::IsAllowedSource(const FAssetData& Asset) const
 	}
 	if (Draft.Class == EMantleCosmeticClass::Garment)
 	{
+		// Chunk 8: a Chaos cloth asset too, as the agent toolset takes it (wrapped as an Outfit for its sizes).
+		const UClass* AssetClass = FindObject<UClass>(Asset.AssetClassPath);
 		return Asset.AssetClassPath == USkeletalMesh::StaticClass()->GetClassPathName()
-			|| Asset.AssetClassPath == FTopLevelAssetPath(TEXT("/Script/ChaosOutfitAssetEngine"), TEXT("ChaosOutfitAsset"));
+			|| Asset.AssetClassPath == FTopLevelAssetPath(TEXT("/Script/ChaosOutfitAssetEngine"), TEXT("ChaosOutfitAsset"))
+			|| (AssetClass && AssetClass->IsChildOf(UChaosClothAssetBase::StaticClass()));
 	}
 	if (Draft.Class != EMantleCosmeticClass::Hair)
 	{
@@ -2063,11 +2067,12 @@ bool SMantleCosmeticPanel::BuildPackage()
 	{
 		return false;
 	}
-	if (Draft.Class == EMantleCosmeticClass::Garment && FMantleParametricOutfit::IsSource(Draft.Source.Get()) && Draft.OutfitTargets.IsEmpty())
+	// Chunk 8: the same preparation the agent toolset runs (publication mode, converted face, the fit-size refusal).
+	TArray<FMantleCosmeticIssue> Blockers;
+	if (!FMantleEditorActions::PrepareCosmeticBuild(Draft, DoorRoute(), Blockers))
 	{
-		const TArray<FMantleCosmeticIssue> Issues = { FMantleCosmeticChecks::Error(FString(TEXT("Mantle could not make its standard fit bodies for this Outfit, so add at least one fit source in Parametric clothing before checking or uploading it. ")) + Draft.FitBodiesStatus) };
 		Package.Reset();
-		ShowIssues(Issues, {});
+		ShowIssues(Blockers, {});
 		return false;
 	}
 	if (Draft.Class == EMantleCosmeticClass::Accessory && !bAccessoryPlacementInitialized)
@@ -2085,9 +2090,6 @@ bool SMantleCosmeticPanel::BuildPackage()
 	FScopedSlowTask Progress(1.0f, LOCTEXT("Preparing", "Checking and exporting..."));
 	Progress.MakeDialogDelayed(0.5f);
 	Progress.EnterProgressFrame(1.0f);
-	if (Draft.Class==EMantleCosmeticClass::Avatar)
-		Draft.AvatarPublicationMode=DoorRoute()==EMantleAvatarRoute::AsIs ? TEXT("as_is") : TEXT("converted");
-	else Draft.AvatarPublicationMode.Empty();
 	Package = FMantleCosmeticExport::Build(Draft, *Contract);
 	for (const FString& Note : Package->Notes)
 	{
@@ -2104,6 +2106,7 @@ bool SMantleCosmeticPanel::BuildPackage()
 
 void SMantleCosmeticPanel::ShowIssues(const TArray<FMantleCosmeticIssue>& Issues, const TArray<FString>& Notes)
 {
+	ShownIssues = Issues;
 	if (!IssuesBox.IsValid())
 	{
 		return;
@@ -5293,6 +5296,19 @@ void SMantleCosmeticPanel::DevConvertShot(const TArray<FString>& Args)
 	}
 	UE_LOG(LogMantle, Display, TEXT("MANTLE_CONVERT_SHOT draft source=%s slot=%s name=%s"), Panel->Draft.Source.IsValid() ? *Panel->Draft.Source->GetPathName() : TEXT("none"),
 		*Panel->Draft.Slot, *Panel->Draft.Name);
+}
+
+bool SMantleCosmeticPanel::DevCheck(const EMantleCosmeticClass Class, UObject* Source, const FString& Slot, TArray<FMantleCosmeticIssue>& OutIssues)
+{
+	const TSharedRef<SMantleCosmeticPanel> Panel = SNew(SMantleCosmeticPanel);
+	Panel->SetClass(Class);
+	Panel->SetSlot(Slot);
+	Panel->SetSource(Source);
+	// The slot again once the source is in: a garment's section ticks follow it, as when the creator picks the slot last.
+	Panel->SetSlot(Slot);
+	const bool bPassed = Panel->BuildPackage();
+	OutIssues = Panel->ShownIssues;
+	return bPassed;
 }
 
 #undef LOCTEXT_NAMESPACE

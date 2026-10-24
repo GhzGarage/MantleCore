@@ -9,9 +9,12 @@ class FMantleAvatarContract;
 class FMantlePlacePublishSession;
 class UObject;
 class UWorld;
+class USkeletalMesh;
+enum class EMantleAvatarRoute : uint8;
 enum class EMantleCosmeticClass : uint8;
 enum class EMantleFitSex : uint8;
 struct FMantleCosmeticDraft;
+struct FMantleCosmeticIssue;
 
 /**
  * The rows of the Cosmetics panel's Sections list for a garment from a skeletal mesh (#483): the
@@ -121,4 +124,25 @@ struct MANTLEEDITOR_API FMantleEditorActions
 
 	/** KeepSlots from ticks by row: unset when every row is ticked (the whole mesh), else the ticked rows' Slots. */
 	static TOptional<TArray<int32>> CosmeticKeepSlots(TConstArrayView<bool> Keep, TConstArrayView<int32> Slots);
+
+	/**
+	 * Chunk 8, agent = panel: what Check and Upload do to the draft right before FMantleCosmeticExport::Build, in the panel
+	 * and the toolset alike. An avatar gets its publication mode for Route ("converted" or "as_is"; cleared for every other
+	 * class), and a Convert output body with no face picked its converted face (FindConvertedFace), as Use picks it.
+	 * False with OutBlockers when the draft must not be built: clothing from an Outfit whose standard fit bodies could not
+	 * be made (it would upload in one size).
+	 */
+	static bool PrepareCosmeticBuild(FMantleCosmeticDraft& Draft, EMantleAvatarRoute Route, TArray<FMantleCosmeticIssue>& OutBlockers);
+
+	/** The route an avatar body was converted on (FMantleAvatarConverter::RouteKey): As-is for an As-is output, else Convert. */
+	static EMantleAvatarRoute CosmeticRouteOf(const UObject* Body);
+
+	/** "converted" or "as_is" for an avatar on Route; "" for every other class. Pure (tested). */
+	static FString AvatarPublicationMode(EMantleCosmeticClass Class, EMantleAvatarRoute Route);
+
+	/**
+	 * The face built with a Convert output body: the skeletal mesh with a facial root under the body's build root that shares
+	 * its build (FMantleAvatarConverter::BuiltKey). Null for any other body or when none is found.
+	 */
+	static USkeletalMesh* FindConvertedFace(const USkeletalMesh* Body);
 };

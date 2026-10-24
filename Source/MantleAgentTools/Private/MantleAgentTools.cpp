@@ -35,6 +35,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkinnedAssetCommon.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "Misc/PackageName.h"
 #include "Modules/ModuleManager.h"
@@ -109,6 +110,36 @@ namespace MantleAgentToolsPrivate
 			TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Out);
 		FJsonSerializer::Serialize(Object, Writer);
 		return Out;
+	}
+
+	/**
+	 * The end of BuildCosmeticPackage for every kind: ItemId checked, then the panel's own preparation (the avatar's
+	 * publication mode for the route its body was converted on, its converted face, the fit-size refusal) and its build.
+	 * A refused preparation is a package holding only those errors, as the panel shows them.
+	 */
+	bool FinishCosmeticPackage(FMantleCosmeticDraft& Draft, const FString& ItemId, const FMantleAvatarContract& Contract,
+		FMantleCosmeticPackage& OutPackage, FString& OutObjectPath, FString& OutRefusal)
+	{
+		Draft.PublishIntoItemId = ItemId.TrimStartAndEnd();
+		if (!Draft.PublishIntoItemId.IsEmpty() && !Draft.PublishIntoItemId.StartsWith(TEXT("itm_")))
+		{
+			OutRefusal = FMantleAgentTools::Refusal(TEXT("bad_item_id"), FString::Printf(
+				TEXT("\"%s\" is not an item id. Pass the id of the item to update (itm_...), or \"\" to create a new item."), *ItemId));
+			return false;
+		}
+		OutObjectPath = Draft.Source.IsValid() ? Draft.Source->GetPathName() : FString();
+		TArray<FMantleCosmeticIssue> Blockers;
+		if (!FMantleEditorActions::PrepareCosmeticBuild(Draft, FMantleEditorActions::CosmeticRouteOf(Draft.Source.Get()), Blockers))
+		{
+			OutPackage = FMantleCosmeticPackage();
+			OutPackage.Class = Draft.Class;
+			OutPackage.Slot = Draft.Slot;
+			OutPackage.Name = Draft.Name.TrimStartAndEnd();
+			OutPackage.Issues = MoveTemp(Blockers);
+			return true;
+		}
+		OutPackage = FMantleCosmeticExport::Build(Draft, Contract);
+		return true;
 	}
 
 	TSharedRef<FJsonObject> AgentIssueJson(const FMantleValidationIssue& Issue)
@@ -721,9 +752,14 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 	}
 	const FString PackageName = FPackageName::ObjectPathToPackageName(ObjectPath);
 	UObject* Asset = nullptr;
-	if (!PackageName.IsEmpty() && FPackageName::IsValidLongPackageName(PackageName) && FPackageName::DoesPackageExist(PackageName))
+	if (!PackageName.IsEmpty() && FPackageName::IsValidLongPackageName(PackageName, /*bIncludeReadOnlyRoots*/ true))
 	{
-		Asset = LoadObject<UObject>(nullptr, *ObjectPath);
+		// An asset already in the editor counts, saved or not, as the panel's picker lists it.
+		Asset = FindObject<UObject>(nullptr, *ObjectPath);
+		if (!Asset && FPackageName::DoesPackageExist(PackageName))
+		{
+			Asset = LoadObject<UObject>(nullptr, *ObjectPath);
+		}
 	}
 	if (!Asset)
 	{
@@ -744,16 +780,23 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 			return false;
 		}
 		FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Emote, Asset, EmoteSlot, Name, *Contract, Sex);
-		Draft.PublishIntoItemId = ItemId.TrimStartAndEnd();
-		if (!Draft.PublishIntoItemId.IsEmpty() && !Draft.PublishIntoItemId.StartsWith(TEXT("itm_")))
+		return MantleAgentToolsPrivate::FinishCosmeticPackage(Draft, ItemId, *Contract, OutPackage, OutObjectPath, OutRefusal);
+	}
+
+	// A texture uploads as an overlay (a tattoo, scar or makeup mask), in an overlay slot, exactly as the panel's Overlay class
+	// exports it from a mask texture.
+	if (Cast<UTexture2D>(Asset))
+	{
+		const TArray<FString> OverlaySlots = CosmeticSlotOptions(*Contract, EMantleCosmeticClass::Overlay);
+		const FString OverlaySlot = Slot.TrimStartAndEnd().IsEmpty() && OverlaySlots.Num() > 0 ? OverlaySlots[0] : Slot.TrimStartAndEnd();
+		if (!OverlaySlots.Contains(OverlaySlot))
 		{
-			OutRefusal = Refusal(TEXT("bad_item_id"), FString::Printf(
-				TEXT("\"%s\" is not an item id. Pass the id of the item to update (itm_...), or \"\" to create a new item."), *ItemId));
+			OutRefusal = Refusal(TEXT("texture_not_overlay"), FString::Printf(
+				TEXT("%s is a texture, which uploads as an overlay. Use the slot %s, or \"\"."), *Asset->GetName(), *FString::Join(OverlaySlots, TEXT(", "))));
 			return false;
 		}
-		OutObjectPath = Asset->GetPathName();
-		OutPackage = FMantleCosmeticExport::Build(Draft, *Contract);
-		return true;
+		FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(EMantleCosmeticClass::Overlay, Asset, OverlaySlot, Name, *Contract, Sex);
+		return MantleAgentToolsPrivate::FinishCosmeticPackage(Draft, ItemId, *Contract, OutPackage, OutObjectPath, OutRefusal);
 	}
 
 	// A MetaHuman Outfit Asset (a parametric .mhpkg outfit) is clothing too: the panel exports it the same way.
@@ -765,7 +808,7 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 	if (!Cast<USkeletalMesh>(Asset) && !bOutfit && !bClothAsset && !bHairCardsSource)
 	{
 		OutRefusal = Refusal(TEXT("not_skeletal_mesh"), FString::Printf(
-			TEXT("%s is a %s, not a skeletal mesh, a Chaos cloth asset, a MetaHuman Outfit, a Groom, a hair cards static mesh or an animation sequence. These tools check and upload clothing, hair and avatars made from skeletal meshes, clothing from MetaHuman Outfits, hair from Grooms and cards meshes, and emotes from animation sequences; use Tools > Mantle > Cosmetics... for the rest."),
+			TEXT("%s is a %s, not a skeletal mesh, a Chaos cloth asset, a MetaHuman Outfit, a Groom, a hair cards static mesh, a texture or an animation sequence. These tools check and upload clothing, hair and avatars made from skeletal meshes, clothing from Chaos cloth assets and MetaHuman Outfits, hair from Grooms and cards meshes, overlays from textures and emotes from animation sequences. A MetaHuman Creator character or a Blueprint goes through ConvertCosmetic first."),
 			*Asset->GetName(), *Asset->GetClass()->GetName()));
 		return false;
 	}
@@ -798,6 +841,13 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 		return false;
 	}
 
+	if (Class == EMantleCosmeticClass::Avatar && !Cast<USkeletalMesh>(Asset))
+	{
+		OutRefusal = Refusal(TEXT("convert_first"), FString::Printf(
+			TEXT("%s is a %s. An avatar uploads the body ConvertCosmetic makes: run ConvertCosmetic on it with bApply true, then check the converted body it lists."),
+			*Asset->GetName(), *Asset->GetClass()->GetName()));
+		return false;
+	}
 	if (bOutfit && Class != EMantleCosmeticClass::Garment && Class != EMantleCosmeticClass::Accessory)
 	{
 		OutRefusal = Refusal(TEXT("outfit_not_clothing"), FString::Printf(
@@ -829,13 +879,6 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 	}
 
 	FMantleCosmeticDraft Draft = FMantleEditorActions::MakeCosmeticDraft(Class, Asset, ChosenSlot, Name, *Contract, Sex);
-	Draft.PublishIntoItemId = ItemId.TrimStartAndEnd();
-	if (!Draft.PublishIntoItemId.IsEmpty() && !Draft.PublishIntoItemId.StartsWith(TEXT("itm_")))
-	{
-		OutRefusal = Refusal(TEXT("bad_item_id"), FString::Printf(
-			TEXT("\"%s\" is not an item id. Pass the id of the item to update (itm_...), or \"\" to create a new item."), *ItemId));
-		return false;
-	}
 	TArray<FString> Wanted;
 	Sections.ParseIntoArray(Wanted, TEXT(","), true);
 	if (!Wanted.IsEmpty())
@@ -871,17 +914,7 @@ bool FMantleAgentTools::BuildCosmeticPackage(const FString& AssetPath, const FSt
 		}
 		Draft.KeepSlots = MoveTemp(Keep);
 	}
-
-	OutObjectPath = Asset->GetPathName();
-	OutPackage = FMantleCosmeticExport::Build(Draft, *Contract);
-	if (OutPackage.GarmentVariants.IsEmpty() && !Draft.FitBodiesStatus.IsEmpty())
-	{
-		// Clothing from an Outfit whose standard fit bodies could not be made: it still checks, but has no variants.
-		OutPackage.Notes.Add(Draft.FitBodiesStatus);
-		OutPackage.Issues.Add(FMantleCosmeticChecks::Warning(Draft.FitBodiesStatus,
-			TEXT("It can still be uploaded, but with one size only: the clothing is stretched from it to every wearer. Fix the cause above and check again.")));
-	}
-	return true;
+	return MantleAgentToolsPrivate::FinishCosmeticPackage(Draft, ItemId, *Contract, OutPackage, OutObjectPath, OutRefusal);
 }
 
 FString FMantleAgentTools::MeasureHead(const FString& BodyPath, const FString& FacePath)
@@ -1139,10 +1172,11 @@ UToolCallAsyncResultString* UMantleToolset::UploadCosmetic(const FString& AssetP
 	return FMantleAgentTools::UploadCosmetic(AssetPath, Slot, Name, Sections, ItemId, FitSex);
 }
 
-FString UMantleToolset::ConvertCosmetic(const FString& AssetPath, const FString& Slot, const bool bApply, const FString& TurnOff, const FString& Confirm)
+FString UMantleToolset::ConvertCosmetic(const FString& AssetPath, const FString& Slot, const bool bApply, const FString& TurnOff, const FString& Confirm,
+	const FString& Route)
 {
 	// #610: the converter's own JSON (MantleEditor), so the panel, the toolset and the tests read one description.
-	return FMantleAvatarConverter::RunForAgent(AssetPath, Slot, bApply, TurnOff, Confirm);
+	return FMantleAvatarConverter::RunForAgent(AssetPath, Slot, bApply, TurnOff, Confirm, Route);
 }
 
 FString UMantleToolset::MakeOutfitFromGarment(const FString& BodyPath, const FString& GarmentPaths, const FString& TurnOff, const FString& Confirm)
