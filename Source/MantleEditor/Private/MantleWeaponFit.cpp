@@ -169,9 +169,135 @@ namespace MantleWeaponFitImpl
 		double MaxY = 0.0;
 	};
 
-	static FString JoinNames(const TArray<FString>& Names)
+	static FString LengthWords(double Cm)
 	{
-		return FString::Join(Names, TEXT(" or "));
+		return Cm >= 100.0 ? FString::Printf(TEXT("%.1f m"), Cm / 100.0) : FString::Printf(TEXT("%.0f cm"), Cm);
+	}
+
+	static bool FitsHold(EMantleWeaponFitHold Hold, double Cm)
+	{
+		return Cm >= HoldInfo(Hold).Min && Cm <= HoldInfo(Hold).Max;
+	}
+
+	/** The hold other than Skip whose range holds Cm and whose typical length is nearest it, or Count when none does. */
+	static EMantleWeaponFitHold NearestFittingHold(double Cm, EMantleWeaponFitHold Skip)
+	{
+		EMantleWeaponFitHold Best = EMantleWeaponFitHold::Count;
+		double BestDistance = TNumericLimits<double>::Max();
+		for (int32 H = 0; H < static_cast<int32>(EMantleWeaponFitHold::Count); ++H)
+		{
+			const EMantleWeaponFitHold Other = static_cast<EMantleWeaponFitHold>(H);
+			if (Other == Skip || !FitsHold(Other, Cm))
+			{
+				continue;
+			}
+			const double Distance = FMath::Abs(FMath::Loge(Cm / HoldInfo(Other).Typical));
+			if (Distance < BestDistance)
+			{
+				BestDistance = Distance;
+				Best = Other;
+			}
+		}
+		return Best;
+	}
+
+	struct FScaleDecision
+	{
+		double Scale = 1.0;
+		FString Reason;
+		FString Suggestion;
+		bool bOutsideRange = false;
+	};
+
+	/** The "unusual for this hold" message: the real length, short or long, and the hold it fits (or the units, when none does). */
+	static FString UnusualLengthMessage(EMantleWeaponFitHold Current, double Cm)
+	{
+		const FHoldInfo& Info = HoldInfo(Current);
+		const FString Head = FString::Printf(TEXT("%s is %s for a %s (%.0f to %.0f cm)."), *LengthWords(Cm), Cm < Info.Min ? TEXT("short") : TEXT("long"), Info.Name, Info.Min, Info.Max);
+		const EMantleWeaponFitHold Named = NearestFittingHold(Cm, Current);
+		if (Named == EMantleWeaponFitHold::Count)
+		{
+			return Head + TEXT(" It is not the right size for any hold, so it looks like the wrong units. Fix the scale when you import the model.");
+		}
+		return FString::Printf(TEXT("%s It fits the %s hold%s."), *Head, HoldInfo(Named).Name,
+			Current == EMantleWeaponFitHold::Throwable && Named == EMantleWeaponFitHold::Spear ? TEXT(", which can throw the weapon model itself") : TEXT(""));
+	}
+
+	/**
+	 * A unit slip is a model whose length is not a plausible size for ANY hold. Only then is it rescaled: by the one conversion that
+	 * lands in the chosen hold's range, else in any hold's range (the one nearest a typical length). A length that fits some hold
+	 * keeps its size; when that hold is not the chosen one, the message says so.
+	 */
+	static FScaleDecision DecideScale(EMantleWeaponFitHold Current, double RawCm)
+	{
+		FScaleDecision Out;
+		const FHoldInfo& Info = HoldInfo(Current);
+		if (FitsHold(Current, RawCm))
+		{
+			Out.Reason = FString::Printf(TEXT("Kept at 1.0x: %s is a normal %s length"), *LengthWords(RawCm), Info.Name);
+			return Out;
+		}
+		if (NearestFittingHold(RawCm, Current) != EMantleWeaponFitHold::Count)
+		{
+			Out.bOutsideRange = true;
+			Out.Reason = FString::Printf(TEXT("Kept at 1.0x: %s is %s for a %s"), *LengthWords(RawCm), RawCm < Info.Min ? TEXT("short") : TEXT("long"), Info.Name);
+			Out.Suggestion = UnusualLengthMessage(Current, RawCm);
+			return Out;
+		}
+		struct FUnitFix
+		{
+			double Factor;
+			const TCHAR* Made;
+		};
+		static const FUnitFix Fixes[] = {
+			{100.0, TEXT("in metres")},
+			{2.54, TEXT("in inches")},
+			{0.1, TEXT("in millimetres")},
+			{0.01, TEXT("100 times too large")},
+		};
+		const FUnitFix* Chosen = nullptr;
+		for (const bool bChosenHoldOnly : { true, false })
+		{
+			double ChosenDistance = TNumericLimits<double>::Max();
+			for (const FUnitFix& Fix : Fixes)
+			{
+				const double Fixed = RawCm * Fix.Factor;
+				for (int32 H = 0; H < static_cast<int32>(EMantleWeaponFitHold::Count); ++H)
+				{
+					const EMantleWeaponFitHold Other = static_cast<EMantleWeaponFitHold>(H);
+					if ((bChosenHoldOnly && Other != Current) || !FitsHold(Other, Fixed))
+					{
+						continue;
+					}
+					const double Distance = FMath::Abs(FMath::Loge(Fixed / HoldInfo(Other).Typical));
+					if (Distance < ChosenDistance)
+					{
+						ChosenDistance = Distance;
+						Chosen = &Fix;
+					}
+				}
+			}
+			if (Chosen)
+			{
+				break;
+			}
+		}
+		if (!Chosen)
+		{
+			Out.bOutsideRange = true;
+			Out.Reason = FString::Printf(TEXT("Kept at 1.0x: %s is %s for a %s"), *LengthWords(RawCm), RawCm < Info.Min ? TEXT("short") : TEXT("long"), Info.Name);
+			Out.Suggestion = UnusualLengthMessage(Current, RawCm);
+			return Out;
+		}
+		Out.Scale = Chosen->Factor;
+		const double Fixed = RawCm * Chosen->Factor;
+		Out.Reason = FString::Printf(TEXT("Scaled %gx: the mesh looks like it was made %s (%.3g of its units long, now %.0f cm)"), Chosen->Factor, Chosen->Made, RawCm, Fixed);
+		if (!FitsHold(Current, Fixed))
+		{
+			Out.bOutsideRange = true;
+			Out.Suggestion = UnusualLengthMessage(Current, Fixed);
+		}
+		return Out;
 	}
 }
 
@@ -376,25 +502,15 @@ FMantleWeaponFitResult FMantleWeaponFit::Fit(const FMantleWeaponFitInput& In)
 		FBox Box(ForceInit);
 		for (const auto& P : Pts) Box += FVector((P - Centroid) | X, (P - Centroid) | Y, (P - Centroid) | Z);
 		const double Length = (bBow || bShield) ? Box.GetSize().Z : Box.GetSize().X;
-		const FHoldInfo& Info = HoldInfo(In.Hold);
-		double Scale = 1.0;
-		double Best = TNumericLimits<double>::Max();
-		if (Length < Info.Min || Length > Info.Max)
-		{
-			for (double Factor : { 100.0, 2.54, 0.1, 0.01 })
-			{
-				const double Fixed = Length * Factor;
-				if (Fixed >= Info.Min && Fixed <= Info.Max)
-				{
-					const double Distance = FMath::Abs(FMath::Loge(Fixed / Info.Typical));
-					if (Distance < Best) { Scale = Factor; Best = Distance; }
-				}
-			}
-		}
+		const FScaleDecision Decision = DecideScale(In.Hold, Length);
+		const double Scale = Decision.Scale;
 		Result.Scale = static_cast<float>(Scale);
 		Result.LengthCm = static_cast<float>(Length * Scale);
-		Result.bOutsideTypicalRange = Result.LengthCm < Info.Min || Result.LengthCm > Info.Max;
-		Result.ScaleReason = FString::Printf(TEXT("%s: %.0f cm for a %s. Check the handle and front points."), Scale == 1.0 ? TEXT("Kept at 1.0x") : TEXT("Corrected the model units"), Result.LengthCm, Info.Name);
+		Result.bOutsideTypicalRange = Decision.bOutsideRange;
+		Result.Suggestion = Decision.Suggestion;
+		Result.ScaleReason = Decision.Reason;
+		// A throwable longer than a throwing weapon's range (a javelin, a spear) is fitted like the Spear hold: the shaft grip and the second hand.
+		const bool bLongThrowable = bHandled && In.Hold == EMantleWeaponFitHold::Throwable && Length > HoldInfo(In.Hold).Max;
 		const FVector Centre = Box.GetCenter();
 		FVector Grip = Centre;
 		// A bow's riser (the middle of its length): the palm goes behind its front face and past its hand-side face (-Y), the arrow
@@ -421,7 +537,7 @@ FMantleWeaponFitResult FMantleWeaponFit::Fit(const FMantleWeaponFitInput& In)
 		if (!bBow && !bShield && (In.Hold != EMantleWeaponFitHold::Throwable || bHandled) && In.Hold != EMantleWeaponFitHold::Unarmed)
 		{
 			// A handled throwable's hand is on the handle the way a one-handed blade's is (the handle is the first 12% of it); a compact one keeps the middle.
-			const bool bShaft = In.Hold == EMantleWeaponFitHold::Spear;
+			const bool bShaft = In.Hold == EMantleWeaponFitHold::Spear || bLongThrowable;
 			Grip.X = Box.Min.X + Box.GetSize().X * (bStaff ? FMantleWeaponFit::StaffGripFromButtShare : bShaft ? 0.35 : 0.12);
 		}
 		// A staff's palm is on the shaft's middle line, not the middle of the box (a curled head pulls the box's middle off the shaft): the
@@ -484,7 +600,7 @@ FMantleWeaponFitResult FMantleWeaponFit::Fit(const FMantleWeaponFitInput& In)
 			Point(TEXT("Grip_R"), bBlade ? Grip - FVector(0.0, 0.0, BladePalmFromHandleCm / Scale) : Grip);
 			if (bStaff)
 				Point(TEXT("Grip_L"), Grip - FVector(Box.GetSize().X * FMantleWeaponFit::StaffLeftHandBehindShare, 0.0, 0.0));
-			else if (In.Hold == EMantleWeaponFitHold::Melee2h || In.Hold == EMantleWeaponFitHold::Spear)
+			else if (In.Hold == EMantleWeaponFitHold::Melee2h || In.Hold == EMantleWeaponFitHold::Spear || bLongThrowable)
 				Point(TEXT("Grip_L"), Grip + FVector(Box.GetSize().X * (In.Hold == EMantleWeaponFitHold::Melee2h ? 0.08 : 0.15), 0.0, 0.0));
 			if (bStaff) Point(TEXT("Focus"), FVector(Box.Max.X, StaffFocusY, StaffFocusZ));
 			else if (In.Hold != EMantleWeaponFitHold::Unarmed)
@@ -662,84 +778,13 @@ FMantleWeaponFitResult FMantleWeaponFit::Fit(const FMantleWeaponFitInput& In)
 	const FVector AxisZ = Up;
 	const FVector AxisY = AxisZ ^ AxisX;
 
-	// 5. Scale. A unit slip is recognised when the length is outside the hold's range, one conversion lands inside it,
-	//    and no other conversion is closer to the typical length. Otherwise 1.0, flagged when outside the range.
-	const FHoldInfo& Hold = HoldInfo(In.Hold);
-	const double HoldMin = Hold.Min;
-	const double HoldMax = Hold.Max;
-	double Scale = 1.0;
-	if (RawLength >= HoldMin && RawLength <= HoldMax)
-	{
-		Result.ScaleReason = FString::Printf(TEXT("Kept at 1.0x: %.0f cm is a normal %s length"), RawLength, Hold.Name);
-	}
-	else
-	{
-		struct FUnitFix
-		{
-			double Factor;
-			const TCHAR* Made;
-		};
-		static const FUnitFix Fixes[] = {
-			{100.0, TEXT("in metres")},
-			{2.54, TEXT("in inches")},
-			{0.1, TEXT("in millimetres")},
-			{0.01, TEXT("100 times too large")},
-		};
-		const FUnitFix* Chosen = nullptr;
-		double ChosenDistance = TNumericLimits<double>::Max();
-		for (const FUnitFix& Fix : Fixes)
-		{
-			const double Fixed = RawLength * Fix.Factor;
-			if (Fixed >= HoldMin && Fixed <= HoldMax)
-			{
-				const double Distance = FMath::Abs(FMath::Loge(Fixed / Hold.Typical));
-				if (Distance < ChosenDistance)
-				{
-					ChosenDistance = Distance;
-					Chosen = &Fix;
-				}
-			}
-		}
-		if (Chosen)
-		{
-			Scale = Chosen->Factor;
-			Result.ScaleReason = FString::Printf(TEXT("Scaled %gx: the mesh looks like it was made %s (%.3g of its units long, now %.0f cm)"),
-				Chosen->Factor, Chosen->Made, RawLength, RawLength * Chosen->Factor);
-		}
-		else
-		{
-			Result.bOutsideTypicalRange = true;
-			const bool bShort = RawLength < HoldMin;
-			Result.ScaleReason = FString::Printf(TEXT("Kept at 1.0x: %.0f cm is %s for a %s"), RawLength, bShort ? TEXT("short") : TEXT("long"), Hold.Name);
-
-			TArray<FString> Fitting;
-			int32 Nearest = 0;
-			double NearestDistance = TNumericLimits<double>::Max();
-			for (int32 H = 0; H < 8; ++H)
-			{
-				const FHoldInfo& Other = HoldInfo(static_cast<EMantleWeaponFitHold>(H));
-				if (RawLength >= Other.Min && RawLength <= Other.Max)
-				{
-					Fitting.Add(Other.Name);
-				}
-				const double Distance = FMath::Abs(FMath::Loge(RawLength / Other.Typical));
-				if (Distance < NearestDistance)
-				{
-					NearestDistance = Distance;
-					Nearest = H;
-				}
-			}
-			if (Fitting.Num() > 0)
-			{
-				Result.Suggestion = FString::Printf(TEXT("This is %s for a %s (%.0f cm). Try the %s preset."), bShort ? TEXT("short") : TEXT("long"), Hold.Name, RawLength, *JoinNames(Fitting));
-			}
-			else
-			{
-				Result.Suggestion = FString::Printf(TEXT("This is %s for a %s (%.0f cm) and for every gun preset. Check the mesh size; the closest preset is the %s."),
-					bShort ? TEXT("short") : TEXT("long"), Hold.Name, RawLength, HoldInfo(static_cast<EMantleWeaponFitHold>(Nearest)).Name);
-			}
-		}
-	}
+	// 5. Scale. A unit slip is a length no hold takes (see DecideScale); a length that fits another hold keeps its size and is
+	//    flagged with a message naming that hold.
+	const FScaleDecision Decision = DecideScale(In.Hold, RawLength);
+	const double Scale = Decision.Scale;
+	Result.ScaleReason = Decision.Reason;
+	Result.bOutsideTypicalRange = Decision.bOutsideRange;
+	Result.Suggestion = Decision.Suggestion;
 	Result.Scale = static_cast<float>(Scale);
 
 	// The final cloud: weapon-frame axes, scaled to centimetres.
