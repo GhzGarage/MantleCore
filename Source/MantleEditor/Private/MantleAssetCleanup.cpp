@@ -62,7 +62,7 @@ bool FMantleAssetCleanup::UnloadPackagesClean(const TArray<UPackage*>& Packages,
 			continue;
 		}
 		TArray<UObject*> Contained;
-		GetObjectsWithPackage(Package, Contained, false);
+		GetObjectsWithPackage(Package, Contained, EGetObjectsFlags::None);
 		for (UObject* Object : Contained)
 		{
 			MoveOne(Object);
