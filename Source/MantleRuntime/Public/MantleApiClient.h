@@ -594,6 +594,14 @@ public:
 	 * {"alive":[...]}: the players whose seat it refreshed.
 	 */
 	static void ServerSeatsHeartbeatAsync(const TArray<FString>& UserIds, FMantleApiCallback OnDone);
+	/**
+	 * Server-plan R7: POST /server/sessions/place-ready, once, when the hosted server's place is built (the
+	 * MANTLE_READY line). It tells the backend this session is joinable: until then an Edgegap session is held
+	 * back from players, because the container runs long before the place does. Answers 204; idempotent.
+	 * A 401 right after allocation means the backend has not bound this server's token to its session yet, so
+	 * the caller retries. Authenticated by the dedicated-server token.
+	 */
+	static void ServerPlaceReadyAsync(FMantleApiCallback OnDone);
 	static FString BuildServerSeatsHeartbeatBody(const TArray<FString>& UserIds);
 
 	/** Reads {"userId": "..."} out of a successful VerifyJoinCredentialAsync response. Empty
