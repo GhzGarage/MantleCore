@@ -996,6 +996,8 @@ declare extern type VehiclesService with
 	FuelChanged: Signal<(Entity, number, number)>
 	--- The car ran out of fuel and cannot accelerate until it is refuelled (Refuel).
 	FuelEmpty: Signal<(Entity)>
+	--- The car Vehicles:Spawn returned has been built and can be used: Seat, Lock, paint, livery, health, fuel and boost all work from here. The server builds spawned cars one per frame, so this fires a frame or more after Spawn (a burst of spawns takes that many frames). It fires once per spawn, also when the car was built at once. Connect before you Spawn or in the same script step; it only fires for a car you spawned with Vehicles:Spawn.
+	Ready: Signal<(Entity)>
 	--- Take amount of health off the car (never below 0) and return the health it has left. Fires Vehicles.Damaged, and Vehicles.Destroyed if it reaches 0. Turn health on first with SetHealthEnabled. (server only)
 	function Damage(self, vehicle: Entity, amount: number): number
 	--- Put the player back on foot beside the car they are driving. Returns false when they are not driving, the car is still moving, or there is nowhere beside it to stand. (server only)
@@ -1074,7 +1076,7 @@ declare extern type VehiclesService with
 	function SetMaxHealth(self, vehicle: Entity, max: number): ()
 	--- Paint the car: color is "#RRGGBB", the same format as Backpack:SetWeaponColor. Returns false when the entity is not a car. (server only)
 	function SetPaintColor(self, vehicle: Entity, color: string): boolean
-	--- Spawn a car at position and return it as an Entity. item is the library item id of a vehicle this place stores: the string Storage:Get returns for one of the place's storage names. Any other value errors -- an asset id, an object path, a built-in car's name, an item the place does not store, or a weapon. The car is a real replicated vehicle: every player sees it, walks up to it and can drive it. Read its Position, tag it, or Destroy it like any entity. (server only)
+	--- Spawn a car at position and return it as an Entity. item is the library item id of a vehicle this place stores: the string Storage:Get returns for one of the place's storage names. Any other value errors -- an asset id, an object path, a built-in car's name, an item the place does not store, or a weapon. The car is a real replicated vehicle: every player sees it, walks up to it and can drive it. Read its Position, tag it, or Destroy it like any entity. The server builds cars one per frame, so the Entity comes back at once but the car is not ready to use: connect to Vehicles.Ready, which fires with the car when it is built, before you Seat, paint or Lock it or touch its health, fuel or boost (those error until then). (server only)
 	function Spawn(self, item: string, position: Vector3): Entity
 	--- Unlock the car, so anyone can open it again. A locked car opens only for the last player who drove it: anyone else's vehicle key rattles the door, and holding the key breaks in -- the window on that side breaks, the car unlocks, and it must be hotwired before it starts. The lock stays when the driver gets out, and its driver can also lock and unlock it from the seat (L / D-pad left). Returns false when the entity is not a car. (server only)
 	function Unlock(self, vehicle: Entity): boolean
