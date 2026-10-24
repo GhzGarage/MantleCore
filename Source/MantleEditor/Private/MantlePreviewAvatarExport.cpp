@@ -650,9 +650,9 @@ TSharedPtr<FJsonObject> MantlePreviewAvatarExport::MakeLocalDraftItem(const FMan
 				&& (*NativeEye)->TryGetObjectField(TEXT("textureAssetIds"), TextureIds) && TextureIds)
 			{
 				const TSharedPtr<FJsonObject> Textures = MakeShared<FJsonObject>();
-				for (const TPair<FString, TSharedPtr<FJsonValue>>& Texture : (*TextureIds)->Values)
+				for (const auto& Texture : (*TextureIds)->Values)
 				{
-					if (!ToRef(Textures, Texture.Value.IsValid() ? Texture.Value->AsString() : FString(), Texture.Key))
+					if (!ToRef(Textures, Texture.Value.IsValid() ? Texture.Value->AsString() : FString(), FString(Texture.Key.ToView())))
 					{
 						return nullptr;
 					}
